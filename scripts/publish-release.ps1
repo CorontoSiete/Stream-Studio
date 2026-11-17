@@ -66,8 +66,11 @@ try {
     $marker = Get-ReleaseDraftMarker $GitHubRepository $Tag $Commit
     [IO.File]::WriteAllText($temporaryNotes, "$notes`n`n$marker`n", [Text.UTF8Encoding]::new($false))
     if ($null -eq $draft) {
+        # The tag already exists and its commit is verified independently. An
+        # explicit target is unused for existing tags, but GitHub still checks
+        # its workflow-edit permission when the default branch has advanced.
         Invoke-ReleaseGitHub @('release', 'create', $Tag, '--repo', $GitHubRepository, '--verify-tag',
-            '--target', $Commit, '--title', "Stream Studio $Tag", '--notes-file', $temporaryNotes, '--draft') | Out-Null
+            '--title', "Stream Studio $Tag", '--notes-file', $temporaryNotes, '--draft') | Out-Null
         $draft = Assert-ReleasePublicationState -Repository $GitHubRepository -Tag $Tag -Commit $Commit -Identity $identity
         if ($null -eq $draft) { throw "Created draft $Tag could not be found." }
     }

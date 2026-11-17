@@ -38,9 +38,17 @@ This ZIP test requires the target to be the current published release.
 `publish-release.ps1 -Repository` validates the signed release identity;
 `-GitHubRepository` selects the current GitHub destination for all API calls,
 uploads, and draft markers. The workflow passes `GITHUB_REPOSITORY` for that
-destination. Publication must avoid the old-address redirect: Actions integration
-tokens can read the redirected repository but fail release creation with HTTP 403.
-The optional destination defaults to `-Repository` for repositories without a rename.
+destination. The optional destination defaults to `-Repository` for repositories
+without a rename.
+
+Creation uses `--verify-tag` and independently resolves that existing tag to the
+reviewed commit before and after uploading. It omits the unused `--target` field:
+[GitHub checks workflow-edit permission for an explicit target commit](https://docs.github.com/en/rest/releases/releases#create-a-release)
+that differs in workflow files from the current default branch, even when the
+release tag already exists. The default branch may have advanced during a long
+release build. A draft can therefore retain the default branch's informational
+target label; its exact marker and the resolved tag remain authoritative. An
+explicitly different target SHA is still rejected.
 
 ## Retry an interrupted release
 
@@ -55,7 +63,7 @@ tagged notes, without rebuilding the app or accessing the signing key.
 
 Rerun the failed protected workflow for the same stable tag and source commit.
 The publication script recognizes its draft by an exact repository/tag/commit
-marker in the release notes and the draft's target commit. It reuses files with
+marker in the release notes and the verified remote tag commit. It reuses files with
 matching names, upload states, sizes, and SHA-256 digests, and replaces missing,
 unfinished, or changed uploads. A rebuilt file can have different bytes, so a
 full job rerun may need to replace more files than an interrupted upload alone.

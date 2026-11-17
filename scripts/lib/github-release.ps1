@@ -52,14 +52,17 @@ function Assert-ReleasePublicationState {
         $draft = $existing[0]
         $marker = Get-ReleaseDraftMarker $Repository $Tag $Commit
         if (-not [bool]$draft.draft -or [bool]$draft.prerelease -or
-            [string]$draft.target_commitish -cne $Commit -or
+            [string]::IsNullOrWhiteSpace([string]$draft.target_commitish) -or
+            ([string]$draft.target_commitish -match '^[0-9a-fA-F]{40}$' -and [string]$draft.target_commitish -cne $Commit) -or
             ([string]$draft.body -split '\r?\n') -cnotcontains $marker) {
             throw "Release $Tag is not a resumable workflow draft for commit $Commit. It was left unchanged."
         }
         if ([long]$draft.id -le 0) { throw 'GitHub returned an invalid draft ID.' }
     }
 
-    # The commits endpoint resolves both annotated and lightweight tags.
+    # An existing tag controls the release source; target_commitish can retain
+    # the default branch's informational name. Resolve the actual tag, including
+    # annotated tags, rather than treating that mutable branch label as its source.
     $remoteCommit = Invoke-ReleaseGitHub @('api', "repos/$Repository/commits/$Tag") | ConvertFrom-Json
     if ([string]$remoteCommit.sha -cne $Commit) {
         throw "Remote tag $Tag does not resolve to source commit $Commit."

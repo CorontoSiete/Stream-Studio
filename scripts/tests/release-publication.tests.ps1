@@ -86,6 +86,7 @@ function gh {
     switch ($arguments[1]) {
         'create' {
             Assert-Publication ($arguments -contains '--draft' -and $arguments -contains '--verify-tag') 'Release was created publicly or without tag verification.'
+            Assert-Publication ($arguments -notcontains '--target') 'Existing-tag publication unnecessarily requires workflow-edit permission.'
             $publicationScenario.Notes = [IO.File]::ReadAllText((Get-FakeOption $arguments '--notes-file'))
             if ($publicationScenario.LockNotes) {
                 $publicationScenario.NotesPath = Get-FakeOption $arguments '--notes-file'
@@ -94,7 +95,7 @@ function gh {
             }
             $publicationScenario.Releases += [pscustomobject]@{
                 id = 42; tag_name = $tag; draft = $true; prerelease = $false
-                target_commitish = Get-FakeOption $arguments '--target'; body = $publicationScenario.Notes
+                target_commitish = 'main'; body = $publicationScenario.Notes
             }
         }
         'upload' {
