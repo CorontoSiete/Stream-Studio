@@ -1,0 +1,45 @@
+name: Announce Discord release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag to announce (blank uses the latest published release)"
+        required: false
+        type: string
+      dry_run:
+        description: "Validate without posting to Discord"
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: discord-release-${{ github.event.release.id || inputs.release_tag || 'latest' }}
+  cancel-in-progress: false
+
+jobs:
+  announce:
+    name: Post release notes to Discord
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out the release announcement tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Test announcement formatting
+        run: python3 -m unittest discover -s scripts/tests -p test_discord_release.py
+
+      - name: Announce the published release
+        run: python3 scripts/announce-discord-release.py
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          DISCORD_RELEASE_WEBHOOK_URL: ${{ secrets.DISCORD_RELEASE_WEBHOOK_URL }}
+          DISCORD_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && 'true' || 'false' }}
