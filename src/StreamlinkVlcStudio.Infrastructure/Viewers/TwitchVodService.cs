@@ -10,6 +10,7 @@ using StreamlinkVlcStudio.Core.Settings;
 using StreamlinkVlcStudio.Core.Time;
 using StreamlinkVlcStudio.Infrastructure.Chat;
 using StreamlinkVlcStudio.Infrastructure.Http;
+using StreamlinkVlcStudio.Infrastructure.Threading;
 using StreamlinkVlcStudio.Infrastructure.Twitch;
 using static StreamlinkVlcStudio.Core.Json.JsonElementReader;
 using static StreamlinkVlcStudio.Core.Text.StringValues;
@@ -20,6 +21,7 @@ public sealed class TwitchVodService : ITwitchVodService
 {
     // Twitch rejects GraphQL requests with more than 15 root field aliases.
     private const int MaximumVodAccessAliasesPerRequest = 15;
+    private const int VodAccessRequestConcurrency = 4;
     private const string VideoMetadataQuery = """
         query StreamStudioVodMetadata($id: ID!) {
           video(id: $id) {
@@ -254,12 +256,19 @@ public sealed class TwitchVodService : ITwitchVodService
         CancellationToken cancellationToken)
     {
         var classified = new TwitchVodItem[videos.Length];
-        for (var start = 0; start < videos.Length; start += MaximumVodAccessAliasesPerRequest)
+        using var throttle = new AsyncOperationGate(VodAccessRequestConcurrency);
+        var batchCount = (videos.Length + MaximumVodAccessAliasesPerRequest - 1) / MaximumVodAccessAliasesPerRequest;
+        var loads = Enumerable.Range(0, batchCount).Select(async index =>
         {
+            using var lease = await throttle.EnterAsync(cancellationToken).ConfigureAwait(false);
+            var start = index * MaximumVodAccessAliasesPerRequest;
             var batch = videos[start..Math.Min(start + MaximumVodAccessAliasesPerRequest, videos.Length)];
             var result = await PopulateAccessBatchAsync(batch, cancellationToken).ConfigureAwait(false);
+            // Each request owns its original range, even when batches finish out of order.
             Array.Copy(result, 0, classified, start, result.Length);
-        }
+        });
+        // Observe every active and queued batch before releasing the throttle on cancellation.
+        await Task.WhenAll(loads).ConfigureAwait(false);
 
         return classified;
     }

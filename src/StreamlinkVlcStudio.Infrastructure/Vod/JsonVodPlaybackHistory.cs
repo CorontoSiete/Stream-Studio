@@ -24,6 +24,13 @@ public sealed class JsonVodPlaybackHistory(string path, IAppLogger logger) : IVo
     public async Task<VodPlaybackBookmark?> GetAsync(StreamTarget target, CancellationToken cancellationToken = default)
     {
         if (Key(target) is not { } key) return null;
+        cancellationToken.ThrowIfCancellationRequested();
+        // Once initialized, reads only need the in-memory snapshot. A slow save
+        // must not hold up resume or progress badges for unrelated videos.
+        lock (gate)
+        {
+            if (loaded) return entries.TryGetValue(key, out var cached) ? cached.Bookmark : null;
+        }
         await fileGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -39,14 +46,7 @@ public sealed class JsonVodPlaybackHistory(string path, IAppLogger logger) : IVo
         lock (gate)
         {
             entries.TryGetValue(key, out var previous);
-            if (previous is not null && previous.Bookmark.UpdatedAtUtc > bookmark.UpdatedAtUtc) return;
-            // Finishing a VOD remains visible on its card even while rewatching it.
-            // Completed only describes this playback pass, so resume still works on a rewatch.
-            bookmark = bookmark with
-            {
-                HasBeenWatched = bookmark.HasBeenWatched || bookmark.Completed ||
-                previous?.Bookmark.HasBeenWatched == true || previous?.Bookmark.Completed == true
-            };
+            bookmark = MergeBookmarks(previous?.Bookmark, bookmark);
             // A stationary clock still confirms a newer sample. Keep that timestamp so
             // a delayed sample cannot move the bookmark backwards, including after reload.
             if (previous?.Bookmark == bookmark) return;
@@ -106,14 +106,9 @@ public sealed class JsonVodPlaybackHistory(string path, IAppLogger logger) : IVo
 
                         // Remember can run before or during this first read. Keep the newest
                         // position while carrying completion forward from either history.
-                        var latest = current.Bookmark.UpdatedAtUtc >= entry.Bookmark.UpdatedAtUtc ? current : entry;
-                        var merged = latest with
+                        var merged = current with
                         {
-                            Bookmark = latest.Bookmark with
-                            {
-                                HasBeenWatched = current.Bookmark.HasBeenWatched || current.Bookmark.Completed ||
-                                    entry.Bookmark.HasBeenWatched || entry.Bookmark.Completed
-                            }
+                            Bookmark = MergeBookmarks(entry.Bookmark, current.Bookmark)
                         };
                         if (merged != current)
                         {
@@ -131,7 +126,7 @@ public sealed class JsonVodPlaybackHistory(string path, IAppLogger logger) : IVo
             File.Move(path, $"{path}.invalid-{Guid.NewGuid():N}");
             logger.WriteSafely(AppLogLevel.Warning, "VOD resume", "Invalid VOD history was backed up; starting a new history.", ex);
         }
-        loaded = true;
+        lock (gate) loaded = true;
     }
 
     private void TrimCore()
@@ -139,6 +134,18 @@ public sealed class JsonVodPlaybackHistory(string path, IAppLogger logger) : IVo
         if (entries.Count <= MaximumEntries) return;
         foreach (var key in entries.OrderByDescending(pair => pair.Value.Bookmark.UpdatedAtUtc)
                      .Skip(MaximumEntries).Select(pair => pair.Key).ToArray()) entries.Remove(key);
+    }
+
+    private static VodPlaybackBookmark MergeBookmarks(VodPlaybackBookmark? previous, VodPlaybackBookmark incoming)
+    {
+        var latest = previous is not null && previous.UpdatedAtUtc > incoming.UpdatedAtUtc ? previous : incoming;
+        // Completion is historical even when its notification arrives late. Keep the
+        // newest playback pass's position and Completed flag so a rewatch still resumes.
+        return latest with
+        {
+            HasBeenWatched = incoming.HasBeenWatched || incoming.Completed ||
+                previous?.HasBeenWatched == true || previous?.Completed == true
+        };
     }
 
     private static string? Key(StreamTarget target) => target.IsExplicitVod && ValidMediaId(target.MediaId)

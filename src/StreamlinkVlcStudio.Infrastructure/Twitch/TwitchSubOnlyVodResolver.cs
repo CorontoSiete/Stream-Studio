@@ -133,7 +133,8 @@ public sealed partial class TwitchSubOnlyVodResolver : ITwitchSubOnlyVodResolver
             $"Resolved sub-only VOD via direct CloudFront playlist ({selectedKey}).",
             metadata.MediaDuration,
             metadata.OwnerLogin,
-            metadata.CreatedAtUtc);
+            metadata.CreatedAtUtc,
+            playlist.Uri);
     }
 
     private async Task<TwitchVideoMetadata> FetchVideoMetadataAsync(string vodId, CancellationToken cancellationToken)

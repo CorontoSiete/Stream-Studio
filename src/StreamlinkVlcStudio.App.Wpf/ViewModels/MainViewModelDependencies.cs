@@ -27,6 +27,7 @@ internal sealed record MainViewModelDependencies
     public IVodChatProvider? VodChatProvider { get; init; }
     public IVodPlaybackHistory? VodPlaybackHistory { get; init; }
     public IVodDownloadService? VodDownloadService { get; init; }
+    public TimeSpan? AutoVodDownloadRefreshInterval { get; init; }
     public Func<VodDownloadItem, bool>? ConfirmDeleteVodDownload { get; init; }
     public TimeSpan? RecentThumbnailRefreshInterval { get; init; }
     public TimeSpan? StreamSearchDebounceInterval { get; init; }

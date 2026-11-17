@@ -191,11 +191,8 @@ jobs:
             --self-contained true `
             --no-restore `
             -p:PublishSingleFile=true `
-            -p:IncludeNativeLibrariesForSelfExtract=true `
-            -p:IncludeAllContentForSelfExtract=true `
             -p:PublishTrimmed=false `
             -p:RequireBundledVlcOverlay=true `
-            -p:EnableCompressionInSingleFile=true `
             -p:DebugType=none `
             -p:DebugSymbols=false `
             -p:Version=$env:RELEASE_VERSION `
@@ -213,7 +210,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           .\scripts\test-packaged-updater.ps1 `
             -ExecutablePath artifacts\publish\StreamStudio\StreamStudio.exe `
-            -ProbePath tests\StreamlinkVlcStudio.UpdateProbe\bin\Release\net10.0\StreamlinkVlcStudio.UpdateProbe.dll
+            -ProbePath tests\StreamlinkVlcStudio.UpdateProbe\bin\Release\net10.0\StreamlinkVlcStudio.UpdateProbe.dll `
+            -VerifyBundleLayout
 
       - name: Inspect pinned publish runtime
         shell: pwsh
@@ -333,7 +331,9 @@ jobs:
       NUGET_PACKAGES: ${{ github.workspace }}\.nuget\packages
       RELEASE_TAG: ${{ github.ref_name }}
       RELEASE_COMMIT: ${{ github.sha }}
-      RELEASE_REPOSITORY: ${{ github.repository }}
+      # Existing installed updaters pin this signed identity. GitHub redirects it
+      # to Stream-Studio after the repository rename; preserve upgrade compatibility.
+      RELEASE_REPOSITORY: CorontoSiete/streamlink-vlc-studio
 
     steps:
       - name: Check out exact stable tag
@@ -433,11 +433,8 @@ jobs:
             --self-contained true `
             --no-restore `
             -p:PublishSingleFile=true `
-            -p:IncludeNativeLibrariesForSelfExtract=true `
-            -p:IncludeAllContentForSelfExtract=true `
             -p:PublishTrimmed=false `
             -p:RequireBundledVlcOverlay=true `
-            -p:EnableCompressionInSingleFile=true `
             -p:DebugType=none `
             -p:DebugSymbols=false `
             -p:Version=$env:RELEASE_VERSION `
@@ -455,7 +452,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           .\scripts\test-packaged-updater.ps1 `
             -ExecutablePath artifacts\publish\StreamStudio\StreamStudio.exe `
-            -ProbePath tests\StreamlinkVlcStudio.UpdateProbe\bin\Release\net10.0\StreamlinkVlcStudio.UpdateProbe.dll
+            -ProbePath tests\StreamlinkVlcStudio.UpdateProbe\bin\Release\net10.0\StreamlinkVlcStudio.UpdateProbe.dll `
+            -VerifyBundleLayout
 
       - name: Build final ZIP, internal MSI, and Setup bundle
         shell: pwsh

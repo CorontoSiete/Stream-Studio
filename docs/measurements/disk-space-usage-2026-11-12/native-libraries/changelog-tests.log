@@ -1,0 +1,22 @@
+Using .NET SDK 10.0.403 at C:\Users\ComputerGuy\Documents\streamlink3\streamlink test2\streamlink-vlc-studio\.dotnet-sdk\dotnet.exe
+Reusing existing Release output (-NoBuild); source changes are not rebuilt.
+Running filter 'changelog:' (headless-safe; maximum skips: 0).
+dotnet test tests\StreamlinkVlcStudio.Tests\StreamlinkVlcStudio.Tests.csproj --configuration Release --no-restore --no-build
+  PASS changelog: bundled installed and historical notes match the release publication source
+  PASS changelog: release builds reject missing empty and whitespace notes and accept authored changes
+  PASS changelog: upgrades and skipped versions open once while restarts and downgrades stay quiet
+  PASS changelog: fresh setup establishes a baseline and existing users see the first changelog
+  PASS changelog: failed canceled reboot and stale update results select the correct installed version
+  PASS changelog: pending repairs survive consumed completion records and clear after success
+  PASS changelog: missing current notes never substitute an earlier or future version
+  PASS changelog: startup waits for the installation result even with update checks disabled
+  PASS changelog: unreadable update results still allow offline version detection
+  PASS changelog: closing before presentation keeps the update pending for the next launch
+  PASS changelog: formatted notes preserve headings lists paths code and safe links
+  PASS changelog: history controls respect release boundaries and return to the installed version
+  PASS changelog: update instructions stay separate without losing notes or splitting code samples
+  PASS changelog: page fits wide and compact layouts and browses history in every theme
+  PASS changelog: actual page presentation saves the version and suppresses the next startup
+  PASS changelog: manual access returns to the same studio destination
+  All 16 tests passed; 0 skipped.
+Test completed successfully.

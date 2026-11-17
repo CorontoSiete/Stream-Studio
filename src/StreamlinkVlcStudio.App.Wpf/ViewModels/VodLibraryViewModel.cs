@@ -62,6 +62,7 @@ internal sealed partial class VodLibraryViewModel : HomeFeatureViewModel
     private int activeTwitchVodSearchGeneration;
     private (PlatformKind Platform, string Query, TwitchVodTypeFilter Type) activeTwitchVodSearch;
     private bool hasTwitchVodSearchCompleted;
+    private bool retryVodWatchProgress;
     private TwitchVodTypeFilter selectedTwitchVodType = TwitchVodTypeFilter.Archive;
     private PlatformKind selectedVodPlatform = PlatformKind.Twitch;
     private string twitchVodNextCursor = "";
@@ -345,6 +346,7 @@ internal sealed partial class VodLibraryViewModel : HomeFeatureViewModel
         var type = request.Type;
         var cursor = request.Cursor;
         var searchCancellation = ReplaceTwitchVodSearchCancellation();
+        var progressStartIndex = reset || retryVodWatchProgress ? 0 : TwitchVods.Count;
         if (reset)
         {
             // Query/platform/filter changes clear at their navigation boundary. Refresh
@@ -394,7 +396,9 @@ internal sealed partial class VodLibraryViewModel : HomeFeatureViewModel
                 message = result.Message;
             }
 
-            await LoadVodWatchProgressAsync(searchCancellation.Token);
+            // Earlier cards keep receiving bookmark events. Hydrate new cards,
+            // retry failed history reads, and reload the whole page on refresh.
+            await LoadVodWatchProgressAsync(searchCancellation.Token, progressStartIndex);
             if (!IsCurrentTwitchVodSearch(searchGeneration, query, type, platform)) return;
 
             HasTwitchVodSearchCompleted = true;
@@ -427,21 +431,23 @@ internal sealed partial class VodLibraryViewModel : HomeFeatureViewModel
         }
     }
 
-    internal async Task LoadVodWatchProgressAsync(CancellationToken cancellationToken)
+    internal async Task LoadVodWatchProgressAsync(CancellationToken cancellationToken, int startIndex = 0)
     {
         if (vodPlaybackHistory is null) return;
         try
         {
-            foreach (var card in TwitchVods.ToArray())
+            foreach (var card in TwitchVods.Skip(startIndex).ToArray())
             {
                 var bookmark = await vodPlaybackHistory.GetAsync(card.Target, cancellationToken);
                 if (disposed || cancellationToken.IsCancellationRequested) return;
                 card.UpdateWatchProgress(bookmark);
             }
+            if (!disposed && !cancellationToken.IsCancellationRequested) retryVodWatchProgress = false;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
         catch (Exception ex)
         {
+            if (!disposed && !cancellationToken.IsCancellationRequested) retryVodWatchProgress = true;
             logger.Write(AppLogLevel.Warning, "VODs", "Could not load VOD watch progress.", ex);
         }
     }

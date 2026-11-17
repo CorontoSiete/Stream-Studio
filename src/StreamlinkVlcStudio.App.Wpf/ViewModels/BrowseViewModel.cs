@@ -912,6 +912,15 @@ internal sealed class BrowseViewModel : HomeFeatureViewModel
             return;
         }
 
+        if (IsBrowseStreamsPageVisible && SelectedBrowseCategory?.Id == category.Id &&
+            (IsBrowseStreamsLoading || HasBrowseStreamSearchCompleted))
+        {
+            // A repeated activation keeps cards, pagination and navigation state intact.
+            // Explicit Refresh still reloads the category, including an empty result.
+            if (activeBrowseStreamTask is { IsCompleted: false } active) await active;
+            return;
+        }
+
         CancelBrowseCategorySearchDebounce();
         // Opening an early card keeps that page's enrichment alive, so returning
         // to categories has complete counts and pagination without another fetch.

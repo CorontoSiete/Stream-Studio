@@ -1,0 +1,4 @@
+PASS workflow: invalid tags remain data and fail before expression evaluation
+PASS workflow: quoted branches remain data and preserve the build version
+PASS workflow: stable tags produce exact versioned build metadata
+PASS workflow: embedded PowerShell parses and receives GitHub metadata through environment variables

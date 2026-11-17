@@ -7,6 +7,7 @@ internal static class DependencyFreeTestRunner
         new Dictionary<string, TimeSpan>(StringComparer.Ordinal)
         {
             ["local web: overlay chat stays usable over video in small players and fullscreen"] = TimeSpan.FromSeconds(90),
+            ["local web: full live archive browser decodes earlier history, grows and returns live"] = TimeSpan.FromSeconds(90),
             [LocalWebTestCatalog.BrowserVolumeTestName] = TimeSpan.FromSeconds(90),
             ["local web: Twitch and Kick VOD chat follows playback across pages, pauses and seeks"] = TimeSpan.FromSeconds(90),
             ["local web: opt-in public VOD plays with synchronized archived chat"] = TimeSpan.FromSeconds(120),

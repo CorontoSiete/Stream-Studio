@@ -7,6 +7,7 @@
   const state = { csrf: '', sessionVersion: 0, page: 'following', players: [], selected: null, grid: false, settings: null, cursor: '', category: null, generation: 0, polling: false, authenticated: false, items: [], followed: [], cardType: 'following', filter: 'all', busy: false };
   const navigationHistory = [];
   const completedCursors = new Set();
+  let pageLoadAbort = null;
   const categoryLanguages = new Map();
   let browseDirectoryLanguage = '';
   const search = { timer: null, abort: null, version: 0, items: [], active: -1, signature: '', status: '', message: '', mode: '', composing: false };
@@ -284,7 +285,7 @@
   }
   async function request(action, input = {}, method = 'POST', signal, busyRetries = 0) {
     const version = state.sessionVersion;
-    if (signal?.aborted) throw new DOMException('Chat request canceled.', 'AbortError');
+    if (signal?.aborted) throw new DOMException('Request canceled.', 'AbortError');
     const response = await fetch('/api/' + action, {
       method, credentials: 'same-origin', cache: 'no-store', signal,
       keepalive: action === 'chat/layout' || action === 'settings/save' || action === 'volume/save' || action === 'progress',
@@ -354,6 +355,7 @@
     return [Math.floor(value / 3600), Math.floor(value / 60) % 60, value % 60].map((n, i) => i ? String(n).padStart(2, '0') : String(n)).join(':');
   }
   function resetSessionWork() {
+    cancelPageLoad();
     ++state.sessionVersion; queue = Promise.resolve();
     state.polling = false; pendingPlayers.clear(); completedCursors.clear(); navigationHistory.length = 0;
     return state.sessionVersion;
@@ -493,6 +495,10 @@
   }
   async function showPage(page, view = null, record = true) {
     if (!pages[page]) return;
+    // Selecting the current directory keeps its query, filters, cards and scroll.
+    // Refresh remains the explicit way to request new data for this view.
+    if (record && !view && $('#studio').dataset.page === page && !state.category &&
+      !$('#studio').classList.contains('watching') && (state.items.length || state.busy)) return;
     if (record && (page !== state.page || state.category || $('#studio').classList.contains('watching') ||
       view?.query !== undefined && view.query !== $('#query').value || view?.platform !== undefined && view.platform !== platform())) rememberNavigation();
     closeSearch();
@@ -551,8 +557,12 @@
     if (action) { const b = button(actionText, action); b.className = 'primary'; box.append(b); }
     box.hidden = false;
   }
+  function cancelPageLoad() {
+    pageLoadAbort?.abort(); pageLoadAbort = null;
+  }
   async function load(append = false) {
     const generation = ++state.generation;
+    cancelPageLoad();
     cancelCategoryViewerCounts();
     cancelFollowingHistory();
     const page = state.page;
@@ -567,20 +577,22 @@
     }
     setBusy(true); $('#result-count').textContent = 'Loading…';
     if (!state.items.length) skeletons();
+    const controller = new AbortController(); pageLoadAbort = controller;
+    const read = (action, input = {}) => api(action, input, controller.signal);
     try {
       let result;
-      if (page === 'following') result = await api('following');
-      else if (page === 'recent') result = await api('recent');
-      else if (page === 'downloads') result = await api('downloads');
+      if (page === 'following') result = await read('following');
+      else if (page === 'recent') result = await read('recent');
+      else if (page === 'downloads') result = await read('downloads');
       else if (page === 'discover') {
         if (state.category) categoryLanguages.set(categoryLanguageKey(), $('#discover-language').value);
         result = state.category
-          ? await api('streams', { platform: platform(), categoryId: state.category.id, categoryName: state.category.name, cursor, language: $('#discover-language').value })
-          : await api('categories', { platform: platform(), query: $('#query').value.trim(), cursor });
+          ? await read('streams', { platform: platform(), categoryId: state.category.id, categoryName: state.category.name, cursor, language: $('#discover-language').value })
+          : await read('categories', { platform: platform(), query: $('#query').value.trim(), cursor });
       } else if (page === 'vods') {
-        result = await api('vods', { platform: platform(), channel: $('#query').value.trim(), type: $('#vod-type').value, cursor });
+        result = await read('vods', { platform: platform(), channel: $('#query').value.trim(), type: $('#vod-type').value, cursor });
       }
-      if (generation !== state.generation || !state.authenticated) return;
+      if (controller.signal.aborted || generation !== state.generation || !state.authenticated) return;
       const seen = new Set(append ? state.items.map(item => item.id || item.key) : []);
       const items = [...(result.items || []), ...(result.offline || [])].filter(item => {
         const key = item.id || item.key;
@@ -600,13 +612,14 @@
       if (type === 'categories' && platform() === 'twitch') loadCategoryViewerCounts(generation);
       if (page === 'following' && result.offline?.length) loadFollowingHistory(generation);
     } catch (error) {
-      if (generation !== state.generation || !state.authenticated) return;
+      if (controller.signal.aborted || error.name === 'AbortError' || generation !== state.generation || !state.authenticated) return;
       if (!state.items.length) {
         $('#cards').replaceChildren();
         empty('Couldn’t load this page.', error.message, 'refresh', 'Try again', () => load());
       }
       notice(error.message, true);
     } finally {
+      if (pageLoadAbort === controller) pageLoadAbort = null;
       if (generation === state.generation) { setBusy(false); $('#more').hidden = !state.cursor; }
     }
   }
@@ -626,9 +639,15 @@
         if (item.state === 'Offline' && update) item.lastLiveAtUtc = update.lastLiveAtUtc;
       }
       // Update the existing text nodes so focused cards, filters and artwork stay in place.
+      const followedByKey = new Map(state.followed.map(item => [channelKey(item), item]));
       for (const element of $$('.last-live')) {
         const item = updates.get(element.dataset.channelKey);
-        if (item) renderLastLive(element, item);
+        if (item) {
+          renderLastLive(element, item);
+          const card = element.closest('.card');
+          const followed = card && followedByKey.get(element.dataset.channelKey);
+          if (followed) cardContent.set(card, cardSignature(followed, state.cardType));
+        }
       }
     } catch { /* Cached times remain visible when optional history is unavailable. */ }
     finally { if (followingHistoryAbort === controller) followingHistoryAbort = null; }
@@ -678,7 +697,10 @@
         if (count != null) item.viewerCount = count;
         const card = $$('#cards .card').find(card => card.dataset.key === item.id);
         const media = card && $('.card-media', card);
-        if (media) renderMediaMeta(media, count == null ? 'Viewers unavailable' : count.toLocaleString() + ' viewers', count != null);
+        if (media) {
+          renderMediaMeta(media, count == null ? 'Viewers unavailable' : count.toLocaleString() + ' viewers', count != null);
+          cardContent.set(card, cardSignature(item, state.cardType));
+        }
       }
     };
     try { await Promise.all(Array.from({ length: Math.min(4, pending.length) }, worker)); }
@@ -805,84 +827,116 @@
     else if (state.page === 'discover' && state.category && $('#discover-language').value) empty('No streams in this language.', 'Try another language or browse all languages in this category.', 'compass', 'Show all languages', () => { $('#discover-language').value = ''; return load(); });
     else empty('Nothing here just yet.', 'Try another category or a different search.', 'compass', 'Browse all categories', () => browseCategory(null, ''));
   }
+  const cardContent = new WeakMap();
+  function cardSignature(item, type) { return JSON.stringify([type, platform(), item]); }
   function renderCards(items, type) {
-    const cards = $('#cards'); cards.replaceChildren(); cards.classList.toggle('categories', type === 'categories');
-    for (const item of items) {
-      const card = node('article', undefined, 'card');
-      card.dataset.key = item.id || item.key || ''; card.dataset.provider = item.platform?.toLowerCase() || platform();
-      const offline = ['Offline', 'Unavailable'].includes(item.state); card.classList.toggle('is-offline', offline);
-      const display = item.displayName || item.name || item.title || item.channel || 'Untitled';
-      const liveCategory = type === 'following' && item.state === 'Live' ? item.categoryName?.trim() || '' : null;
-      const main = button('', async () => {
-        if (type === 'categories') {
-          await browseCategory(item);
-        } else if (type === 'downloads') await openPlayer({ downloadId: item.id });
-        else if (offline) await browseVideos(item);
-        else await openPlayer({ key: item.key });
-      });
-      main.className = 'card-main';
-      main.setAttribute('aria-label', (type === 'categories' ? 'Browse ' : offline ? 'Browse videos from ' : type === 'downloads' ? 'Play downloaded video: ' : 'Watch ') + display
-        + (item.platform ? ' on ' + item.platform : '')
-        + (liveCategory === null ? '' : liveCategory ? ', streaming ' + liveCategory : ', category unavailable'));
-      const media = node('div', undefined, 'card-media');
-      const placeholder = unavailable => {
-        const element = node('div', undefined, 'card-placeholder'); element.append(node('span', initials(display)));
-        if (unavailable && type === 'categories') { element.classList.add('artwork-unavailable'); element.append(node('span', 'Artwork unavailable', 'artwork-unavailable-label')); }
-        return element;
-      };
-      media.append(placeholder(false));
+    const cards = $('#cards'), focused = document.activeElement;
+    cards.classList.toggle('categories', type === 'categories');
+    const existing = new Map(Array.from(cards.children, card => [card.dataset.key, card]));
+    const next = items.map(item => {
+      const key = item.id || item.key || '';
+      const content = cardSignature(item, type);
+      const previous = existing.get(key);
+      const retained = previous && cardContent.get(previous);
+      if (retained?.signature === content) { retained.retryArtwork(); return previous; }
+      return createCard(item, type, content);
+    });
+    const retained = new Set(next);
+    for (const card of [...cards.children]) if (!retained.has(card)) card.remove();
+    // Appending a page leaves existing controls and decoded artwork attached.
+    // Sorting moves only the cards whose positions actually changed.
+    next.forEach((card, index) => {
+      if (cards.children[index] !== card) cards.insertBefore(card, cards.children[index] || null);
+    });
+    if (focused && cards.contains(focused) && document.activeElement !== focused) focused.focus({ preventScroll: true });
+  }
+  function createCard(item, type, signature) {
+    const card = node('article', undefined, 'card');
+    card.dataset.key = item.id || item.key || ''; card.dataset.provider = item.platform?.toLowerCase() || platform();
+    const offline = ['Offline', 'Unavailable'].includes(item.state); card.classList.toggle('is-offline', offline);
+    const display = item.displayName || item.name || item.title || item.channel || 'Untitled';
+    const liveCategory = type === 'following' && item.state === 'Live' ? item.categoryName?.trim() || '' : null;
+    const main = button('', async () => {
+      if (type === 'categories') {
+        await browseCategory(item);
+      } else if (type === 'downloads') await openPlayer({ downloadId: item.id });
+      else if (offline) await browseVideos(item);
+      else await openPlayer({ key: item.key });
+    });
+    main.className = 'card-main';
+    main.setAttribute('aria-label', (type === 'categories' ? 'Browse ' : offline ? 'Browse videos from ' : type === 'downloads' ? 'Play downloaded video: ' : 'Watch ') + display
+      + (item.platform ? ' on ' + item.platform : '')
+      + (liveCategory === null ? '' : liveCategory ? ', streaming ' + liveCategory : ', category unavailable'));
+    const media = node('div', undefined, 'card-media');
+    const placeholder = () => {
+      const element = node('div', undefined, 'card-placeholder'); element.append(node('span', initials(display)));
+      if (type === 'categories') { element.classList.add('artwork-unavailable'); element.append(node('span', 'Artwork unavailable', 'artwork-unavailable-label')); }
+      return element;
+    };
+    let artworkFailed = false, artworkPlaceholder = null;
+    const renderArtwork = () => {
+      artworkFailed = false; artworkPlaceholder?.remove(); artworkPlaceholder = null;
       const img = image(item.thumbnailUrl, '');
-      if (img) { media.replaceChildren(img); img.addEventListener('error', () => media.prepend(placeholder(true)), { once: true }); }
-      else media.replaceChildren(placeholder(true));
-      if (item.state === 'Live') media.append(node('span', 'LIVE', 'on-air media-badge'));
-      else if (item.watched) media.append(node('span', 'Watched', 'badge media-badge'));
-      else if (offline) media.append(node('span', item.state === 'Unavailable' ? 'Unavailable' : 'Offline', 'badge media-badge'));
-      const viewers = item.viewers ?? item.viewerCount;
-      const mediaText = viewers != null ? Number(viewers).toLocaleString() + ' viewers' : item.duration ? duration(item.duration) : type === 'categories' && platform() === 'twitch' ? 'Loading viewers…' : '';
-      renderMediaMeta(media, mediaText, viewers != null);
-      const play = node('span', undefined, 'play-affordance'); play.append(icon(offline || type === 'categories' ? 'arrow-right' : 'play')); media.append(play);
-      if (item.resume > 0 && item.duration > 0) { const track = node('div', undefined, 'resume-bar'); const progress = node('progress'); progress.max = item.duration; progress.value = item.resume; progress.setAttribute('aria-label', 'Watched progress'); track.append(progress); media.append(track); }
-      const body = node('div', undefined, 'card-body'); const copy = node('div', undefined, 'card-copy');
-      const heading = node('h3', display); heading.title = display; copy.append(heading);
-      if (item.state === 'Offline') { const history = node('p', undefined, 'card-description last-live'); renderLastLive(history, item); copy.append(history); }
-      const description = item.state === 'Offline' ? '' : offline ? 'Unavailable now · Browse past videos' : item.title && item.title !== display ? item.title : type === 'vods' ? item.channel : '';
-      if (description) copy.append(node('p', description, 'card-description'));
-      if (liveCategory !== null) copy.append(node('p', liveCategory ? 'Category: ' + liveCategory : 'Category unavailable', 'card-category'));
-      const meta = node('div', undefined, 'card-meta');
-      if (item.platform) { const provider = node('span', undefined, 'provider-label'); provider.append(providerLogo(item.platform)); meta.append(provider); }
-      if (item.resume > 0) meta.append(node('span', 'Resume ' + duration(item.resume)));
-      if (item.format) meta.append(node('span', item.format));
-      if (type === 'downloads') meta.append(node('span', item.state.replace(/([a-z])([A-Z])/g, '$1 $2')));
-      copy.append(meta);
-      if (type === 'vods' || type === 'downloads') {
-        const date = item.published ? new Date(item.published) : null;
-        const published = node('p', undefined, 'card-published');
-        if (date && !Number.isNaN(date.getTime())) {
-          const time = node('time', 'Published ' + date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }));
-          time.dateTime = date.toISOString(); time.title = 'Published ' + date.toLocaleString(); published.append(time);
-        } else published.textContent = 'Publication date unavailable';
-        copy.append(published);
-      }
-      if (type !== 'categories') body.append(avatar(item, item.displayName || item.channel || display));
-      body.append(copy); main.append(media, body); card.append(main);
-      if (type === 'downloads') {
-        const progressBox = node('div', undefined, 'download-progress'); const progress = node('progress');
-        progress.max = Math.max(1, item.totalSegments || 0); progress.value = item.completedSegments || 0; progress.setAttribute('aria-label', 'Download progress');
-        progressBox.append(progress, node('p', (item.totalSegments > 0 ? Math.round(item.completedSegments / item.totalSegments * 100) + '% · ' : '') + ((item.bytesDownloaded || 0) / 1000000).toFixed(1) + ' MB'));
-        if (item.error) progressBox.append(node('p', item.error));
-        card.append(progressBox); main.disabled = !['Completed', 'ConversionQueued', 'Converting'].includes(item.state);
-      }
-      const actions = node('div', undefined, 'card-actions');
-      if (type === 'vods') actions.append(button('Download', async () => { await api('downloads/add', { key: item.key, quality: state.settings.defaultQuality }); notice('Download queued. Follow its progress in Downloads.'); }));
-      if (type === 'recent') actions.append(button('Remove', async () => { await api('recent/remove', { key: item.key }); await load(); }));
-      if (item.channel && type !== 'vods' && type !== 'downloads') actions.append(button('Videos', () => browseVideos(item)));
-      if (type === 'downloads') {
-        if (['Failed', 'Canceled', 'Interrupted'].includes(item.state)) actions.append(button('Retry', async () => { await api('downloads/retry', { id: item.id }); await load(); }));
-        if (['Queued', 'Resolving', 'Downloading', 'ConversionQueued', 'Converting'].includes(item.state)) actions.append(button('Cancel', async () => { await api('downloads/cancel', { id: item.id }); await load(); }));
-        const remove = button('Delete', async () => { if (confirm('Permanently delete “' + item.title + '” and its downloaded media on the desktop?')) { await api('downloads/remove', { id: item.id }); await load(); } }); remove.className = 'danger'; actions.append(remove);
-      }
-      if (actions.childElementCount) card.append(actions); cards.append(card);
+      if (img) {
+        media.prepend(img);
+        img.addEventListener('error', () => {
+          artworkFailed = true; artworkPlaceholder = placeholder(); media.prepend(artworkPlaceholder);
+        }, { once: true });
+      } else { artworkPlaceholder = placeholder(); media.prepend(artworkPlaceholder); }
+    };
+    renderArtwork();
+    // Keep controls, focus and decoded images on refresh, but allow a failed URL
+    // to recover after the server's short negative-cache lifetime has elapsed.
+    cardContent.set(card, { signature, retryArtwork: () => { if (artworkFailed) renderArtwork(); } });
+    if (item.state === 'Live') media.append(node('span', 'LIVE', 'on-air media-badge'));
+    else if (item.watched) media.append(node('span', 'Watched', 'badge media-badge'));
+    else if (offline) media.append(node('span', item.state === 'Unavailable' ? 'Unavailable' : 'Offline', 'badge media-badge'));
+    const viewers = item.viewers ?? item.viewerCount;
+    const mediaText = viewers != null ? Number(viewers).toLocaleString() + ' viewers' : item.duration ? duration(item.duration) : type === 'categories' && platform() === 'twitch' ? 'Loading viewers…' : '';
+    renderMediaMeta(media, mediaText, viewers != null);
+    const play = node('span', undefined, 'play-affordance'); play.append(icon(offline || type === 'categories' ? 'arrow-right' : 'play')); media.append(play);
+    if (item.resume > 0 && item.duration > 0) { const track = node('div', undefined, 'resume-bar'); const progress = node('progress'); progress.max = item.duration; progress.value = item.resume; progress.setAttribute('aria-label', 'Watched progress'); track.append(progress); media.append(track); }
+    const body = node('div', undefined, 'card-body'); const copy = node('div', undefined, 'card-copy');
+    const heading = node('h3', display); heading.title = display; copy.append(heading);
+    if (item.state === 'Offline') { const history = node('p', undefined, 'card-description last-live'); renderLastLive(history, item); copy.append(history); }
+    const description = item.state === 'Offline' ? '' : offline ? 'Unavailable now · Browse past videos' : item.title && item.title !== display ? item.title : type === 'vods' ? item.channel : '';
+    if (description) copy.append(node('p', description, 'card-description'));
+    if (liveCategory !== null) copy.append(node('p', liveCategory ? 'Category: ' + liveCategory : 'Category unavailable', 'card-category'));
+    const meta = node('div', undefined, 'card-meta');
+    if (item.platform) { const provider = node('span', undefined, 'provider-label'); provider.append(providerLogo(item.platform)); meta.append(provider); }
+    if (item.resume > 0) meta.append(node('span', 'Resume ' + duration(item.resume)));
+    if (item.format) meta.append(node('span', item.format));
+    if (type === 'downloads') meta.append(node('span', item.state.replace(/([a-z])([A-Z])/g, '$1 $2')));
+    copy.append(meta);
+    if (type === 'vods' || type === 'downloads') {
+      const date = item.published ? new Date(item.published) : null;
+      const published = node('p', undefined, 'card-published');
+      if (date && !Number.isNaN(date.getTime())) {
+        const time = node('time', 'Published ' + date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }));
+        time.dateTime = date.toISOString(); time.title = 'Published ' + date.toLocaleString(); published.append(time);
+      } else published.textContent = 'Publication date unavailable';
+      copy.append(published);
     }
+    if (type !== 'categories') body.append(avatar(item, item.displayName || item.channel || display));
+    body.append(copy); main.append(media, body); card.append(main);
+    if (type === 'downloads') {
+      const progressBox = node('div', undefined, 'download-progress'); const progress = node('progress');
+      progress.max = Math.max(1, item.totalSegments || 0); progress.value = item.completedSegments || 0; progress.setAttribute('aria-label', 'Download progress');
+      progressBox.append(progress, node('p', (item.totalSegments > 0 ? Math.round(item.completedSegments / item.totalSegments * 100) + '% · ' : '') + ((item.bytesDownloaded || 0) / 1000000).toFixed(1) + ' MB'));
+      if (item.error) progressBox.append(node('p', item.error));
+      card.append(progressBox); main.disabled = !['Completed', 'ConversionQueued', 'Converting'].includes(item.state);
+    }
+    const actions = node('div', undefined, 'card-actions');
+    if (type === 'vods') actions.append(button('Download', async () => { await api('downloads/add', { key: item.key, quality: state.settings.defaultQuality }); notice('Download queued. Follow its progress in Downloads.'); }));
+    if (type === 'recent') actions.append(button('Remove', async () => { await api('recent/remove', { key: item.key }); await load(); }));
+    if (item.channel && type !== 'vods' && type !== 'downloads') actions.append(button('Videos', () => browseVideos(item)));
+    if (type === 'downloads') {
+      if (['Failed', 'Canceled', 'Interrupted'].includes(item.state)) actions.append(button('Retry', async () => { await api('downloads/retry', { id: item.id }); await load(); }));
+      if (['Queued', 'Resolving', 'Downloading', 'ConversionQueued', 'Converting'].includes(item.state)) actions.append(button('Cancel', async () => { await api('downloads/cancel', { id: item.id }); await load(); }));
+      const remove = button('Delete', async () => { if (confirm('Permanently delete “' + item.title + '” and its downloaded media on the desktop?')) { await api('downloads/remove', { id: item.id }); await load(); } }); remove.className = 'danger'; actions.append(remove);
+    }
+    if (actions.childElementCount) card.append(actions);
+    return card;
   }
   async function browseVideos(item) { await showPage('vods', { platform: item.platform.toLowerCase(), query: item.channel }); }
   function closeSearch() {
@@ -1215,24 +1269,274 @@
     const start = Date.parse(p.profile?.startedAt || '');
     $('.channel-uptime', p.element).textContent = !p.isVod && Number.isFinite(start) ? duration(Math.max(0, (Date.now() - start) / 1000)) : '';
   }
+  function videoSeekRanges(p, useArchive = true) {
+    if (p.closed || p.stopped) return [];
+    const video = p.video;
+    if (useArchive && !p.isVod && p.archive?.available) return [{ start: 0, end: p.archive.duration }];
+    if (p.isVod && Number.isFinite(video.duration) && video.duration > 0) return [{ start: 0, end: video.duration }];
+    const ranges = [], details = p.hls?.latestLevelDetails;
+    const add = (start, end) => {
+      if (Number.isFinite(start) && Number.isFinite(end) && end > Math.max(0, start)) ranges.push({ start: Math.max(0, start), end });
+    };
+    if (details?.live) {
+      // MSE may report a seekable range starting at zero after those segments
+      // have expired. Only the current playlist and retained buffers are usable.
+      add(details.fragmentStart, details.edge);
+      for (let i = 0; i < video.buffered.length; i++) add(video.buffered.start(i), video.buffered.end(i));
+    } else {
+      for (let i = 0; i < video.seekable.length; i++) add(video.seekable.start(i), video.seekable.end(i));
+    }
+    ranges.sort((a, b) => a.start - b.start);
+    return ranges.reduce((merged, range) => {
+      const previous = merged[merged.length - 1];
+      if (previous && range.start <= previous.end) previous.end = Math.max(previous.end, range.end);
+      else merged.push(range);
+      return merged;
+    }, []);
+  }
+  function liveSeekPosition(p, ranges) {
+    const last = ranges[ranges.length - 1], sync = p.hls?.liveSyncPosition;
+    if (p.isLiveArchive) return Math.max(last.start, last.end - 0.05);
+    return Number.isFinite(sync) && sync >= last.start && sync < last.end ? sync : Math.max(last.start, last.end - Math.min(2, (last.end - last.start) / 2));
+  }
+  function videoSeekTarget(p, position) {
+    if (!Number.isFinite(position)) return null;
+    const ranges = videoSeekRanges(p);
+    if (!ranges.length) return null;
+    if (!p.isVod && p.archive?.available) return Math.max(0, Math.min(p.archive.duration, position));
+    const last = ranges[ranges.length - 1];
+    if ((!p.isVod || !Number.isFinite(p.video.duration)) && position >= last.end) position = liveSeekPosition(p, ranges);
+    let target = ranges[0].start, distance = Infinity;
+    for (const range of ranges) {
+      // The end of a live/buffered range is exclusive. Avoid stalling on a
+      // missing segment at a gap; finite VODs may seek to their actual end.
+      const end = p.isVod && Number.isFinite(p.video.duration) ? range.end : Math.max(range.start, range.end - 0.05);
+      const candidate = Math.max(range.start, Math.min(end, position));
+      if (Math.abs(candidate - position) < distance) { target = candidate; distance = Math.abs(candidate - position); }
+    }
+    return target;
+  }
+  function seekVideo(p, position) {
+    const target = videoSeekTarget(p, position);
+    if (target === null) return;
+    if (!p.isVod && p.archive?.available) {
+      p.archiveSeek = target;
+      $('.video-seek', p.element).value = target;
+      return;
+    }
+    p.video.currentTime = target;
+    updateVideoControls(p);
+  }
+  function cancelSeekPreviewCapture(preview) {
+    clearTimeout(preview.retry); preview.retry = null;
+    if (preview.frameCallback != null) preview.video?.cancelVideoFrameCallback(preview.frameCallback);
+    preview.frameCallback = null;
+  }
+  function releaseSeekPreviewMedia(p) {
+    const preview = p.seekPreview;
+    if (!preview) return;
+    clearTimeout(preview.timer); clearTimeout(preview.timeout); cancelSeekPreviewCapture(preview);
+    const video = preview.video;
+    preview.video = null;
+    preview.hls?.destroy(); preview.hls = null;
+    if (video) { video.pause(); video.removeAttribute('src'); video.load(); }
+  }
+  function hideSeekPreview(p) {
+    const preview = p.seekPreview;
+    if (!preview) return;
+    preview.active = false; preview.time = null;
+    preview.element.hidden = true;
+    releaseSeekPreviewMedia(p);
+  }
+  function loadSeekPreviewFrame(p) {
+    const preview = p.seekPreview;
+    if (!preview?.active || p.closed || p.closing || p.stopped) return;
+    const fail = () => {
+      preview.canvas.hidden = true; preview.status.hidden = false;
+      preview.status.textContent = 'Preview unavailable';
+      releaseSeekPreviewMedia(p);
+    };
+    // The archive has its own timeline and player-scoped media URL. Never use
+    // the live playlist to decode an absolute broadcast-history timestamp.
+    if (!preview.url) { fail(); return; }
+    const waitForFrame = () => {
+      const video = preview.video;
+      if (!video?.requestVideoFrameCallback || preview.frameCallback != null) return;
+      const callback = video.requestVideoFrameCallback(() => {
+        if (preview.video !== video || preview.frameCallback !== callback) return;
+        // Paused decoders can present their only new frame before seeked. Retain
+        // that signal; drawFrame also waits for the seek and media readiness.
+        preview.frameCallback = null; preview.framePresented = true;
+        drawFrame();
+      });
+      preview.frameCallback = callback;
+    };
+    const seekFrame = () => {
+      const video = preview.video;
+      if (!preview.active || !video || video.readyState < 1) return;
+      const end = Number.isFinite(video.duration) ? video.duration : Infinity;
+      const target = Math.max(0, Math.min(preview.time, end - 0.1));
+      try {
+        preview.target = target;
+        if (Math.abs(video.currentTime - target) > 0.04) {
+          cancelSeekPreviewCapture(preview); preview.framePresented = false;
+          video.currentTime = target;
+        }
+        // Register after moving the decoder, once for every new seek. A frame
+        // captured at an earlier timestamp cannot establish this seek's readiness.
+        if (!preview.framePresented) waitForFrame();
+        drawFrame();
+      } catch { fail(); }
+    };
+    const drawFrame = () => {
+      const video = preview.video;
+      if (!preview.canvas.hidden && preview.canvas.dataset.time === String(preview.time)) return;
+      if (!preview.active || !video || video.seeking || video.readyState < 2 || !video.videoWidth ||
+          !Number.isFinite(preview.target) || Math.abs(video.currentTime - preview.target) > 0.1) return;
+      if (video.requestVideoFrameCallback && !preview.framePresented) { waitForFrame(); return; }
+      try {
+        const canvas = preview.canvas, context = canvas.getContext('2d', { willReadFrequently: true });
+        // Readiness and seek events can precede the first drawable frame. Clear
+        // the old image so a no-op draw cannot publish an empty or stale preview.
+        context.clearRect(0, 0, canvas.width, canvas.height);
+        context.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+        if (!pixels.some((value, index) => index % 4 === 3 && value > 0)) {
+          if (preview.retry == null) {
+            const time = preview.time;
+            const retry = () => {
+              if (preview.active && preview.video === video && preview.time === time) drawFrame();
+            };
+            // Prefer frame presentation, with a bounded polling fallback for
+            // paused/detached videos and browsers without frame callbacks.
+            waitForFrame();
+            preview.retry = setTimeout(() => { preview.retry = null; retry(); }, 50);
+          }
+          return;
+        }
+        cancelSeekPreviewCapture(preview);
+        preview.canvas.dataset.time = String(preview.time);
+        preview.canvas.hidden = false; preview.status.hidden = true;
+        clearTimeout(preview.timeout);
+        preview.hls?.stopLoad();
+      } catch { fail(); }
+    };
+    clearTimeout(preview.timeout);
+    preview.timeout = setTimeout(fail, 8000);
+    if (preview.video) {
+      seekFrame();
+      if (preview.canvas.hidden) preview.hls?.startLoad(preview.target ?? preview.time);
+      return;
+    }
+    // Decode a muted, paused, off-screen video. It never enters the player/audio
+    // registry, updates watch progress, or changes the main video's position.
+    const video = document.createElement('video');
+    preview.video = video; preview.framePresented = false;
+    video.muted = true; video.defaultMuted = true; video.playsInline = true; video.preload = 'metadata';
+    for (const event of ['loadedmetadata', 'durationchange']) video.addEventListener(event, () => { if (preview.video === video) seekFrame(); });
+    for (const event of ['loadeddata', 'seeked', 'canplay']) video.addEventListener(event, () => { if (preview.video === video) { seekFrame(); drawFrame(); } });
+    video.addEventListener('error', () => { if (preview.video === video) fail(); });
+    if (p.hls && window.Hls && Hls.isSupported()) {
+      const hls = preview.hls = new Hls({ enableWorker: true, autoStartLoad: false, startLevel: 0, maxBufferLength: 2, maxMaxBufferLength: 4, backBufferLength: 0, lowLatencyMode: false, xhrSetup: xhr => { xhr.withCredentials = true; } });
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        if (preview.video !== video) return;
+        const level = Math.max(0, hls.levels.findIndex(level => level.height > 0 || level.videoCodec));
+        hls.startLevel = hls.autoLevelCapping = level;
+        hls.startLoad(preview.time);
+      });
+      hls.on(Hls.Events.ERROR, (_, data) => { if (preview.video === video && data.fatal) fail(); });
+      hls.loadSource(preview.url); hls.attachMedia(video);
+    } else { video.src = preview.url; video.load(); }
+  }
+  function showSeekPreview(p, position) {
+    const preview = p.seekPreview, seek = $('.video-seek', p.element);
+    const target = videoSeekTarget(p, position);
+    if (!preview || target === null || p.closing) { hideSeekPreview(p); return; }
+    const rect = seek.getBoundingClientRect(), span = Number(seek.max) - Number(seek.min);
+    const fraction = span > 0 ? Math.max(0, Math.min(1, (target - Number(seek.min)) / span)) : 0;
+    preview.element.hidden = false;
+    const half = preview.element.getBoundingClientRect().width / 2;
+    preview.element.style.left = Math.max(half, Math.min(rect.width - half, 7 + fraction * (rect.width - 14))) + 'px';
+    const ranges = videoSeekRanges(p), absolute = p.isVod || p.archive?.available;
+    const behind = !absolute && ranges.length ? Math.max(0, liveSeekPosition(p, ranges) - target) : 0;
+    preview.label.textContent = absolute ? duration(target) : behind > 2 ? '−' + duration(behind) : 'LIVE';
+    const url = !p.isVod && p.archive?.available ? p.archive.url : p.url;
+    if (preview.active && preview.time === target && preview.url === url) return;
+    if (preview.url !== url) releaseSeekPreviewMedia(p);
+    preview.url = url;
+    preview.active = true; preview.time = target; preview.target = null;
+    preview.canvas.hidden = true; preview.status.hidden = false; preview.status.textContent = 'Loading preview…';
+    // Discard superseded loads while scrubbing. Only a settled hover requests media.
+    clearTimeout(preview.timer); clearTimeout(preview.timeout); cancelSeekPreviewCapture(preview); preview.hls?.stopLoad();
+    preview.timer = setTimeout(() => loadSeekPreviewFrame(p), 160);
+  }
+  async function commitArchiveSeek(p) {
+    const position = p.archiveSeek;
+    p.archiveSeek = null;
+    if (!Number.isFinite(position) || !p.archive?.available || p.closed || p.closing || p.stopped || p.reloading) return;
+    // The archive has its own verified timeline. Do not invent a time offset
+    // between a live playlist and a separately published VOD.
+    if (position >= p.archive.duration) { updateVideoControls(p); return; }
+    await openPlayer({ key: p.archive.key, quality: p.quality, liveArchive: true, startPosition: position }, p);
+  }
+  async function loadLiveArchive(p) {
+    if (p.isVod || p.closed || p.closing || p.stopped || p.archiveLoading || Date.now() < (p.archiveRetryAt || 0)) return;
+    p.archiveLoading = true;
+    p.archiveAbort = new AbortController();
+    try {
+      const archive = await api('live/archive', { player: p.id }, p.archiveAbort.signal);
+      if (p.closed || p.closing || p.stopped) return;
+      if (archive.available && Number.isFinite(archive.duration) && archive.duration > 0 && archive.key) {
+        if (p.archive?.url !== archive.url) hideSeekPreview(p);
+        p.archive = archive;
+      }
+      p.archiveMessage = archive.pending ? 'Loading full broadcast history…' : archive.message || '';
+      p.archiveRetryAt = Date.now() + (archive.pending ? 1000 : 30000);
+      updateVideoControls(p);
+    } catch (error) {
+      if (error.name !== 'AbortError') {
+        p.archiveMessage = 'Could not load full broadcast history. Retrying automatically.';
+        p.archiveRetryAt = Date.now() + 30000;
+      }
+    } finally { p.archiveLoading = false; }
+  }
   function updateVideoControls(p) {
+    if (p.closed) return;
     const root = p.element, video = p.video;
-    const play = $('[data-action=play]', root); play.replaceChildren(icon(video.paused ? 'play' : 'pause'));
+    const play = $('[data-action=play]', root), playIcon = video.paused ? 'play' : 'pause';
+    if (play.dataset.icon !== playIcon) { play.replaceChildren(icon(playIcon)); play.dataset.icon = playIcon; }
     play.title = video.paused ? 'Play' : 'Pause'; play.setAttribute('aria-label', play.title);
-    const mute = $('[data-action=mute]', root); mute.replaceChildren(icon(video.muted || video.volume === 0 ? 'muted' : 'volume'));
+    const mute = $('[data-action=mute]', root), muteIcon = video.muted || video.volume === 0 ? 'muted' : 'volume';
+    if (mute.dataset.icon !== muteIcon) { mute.replaceChildren(icon(muteIcon)); mute.dataset.icon = muteIcon; }
     mute.title = video.muted ? 'Unmute' : 'Mute'; mute.setAttribute('aria-label', mute.title);
     $('.video-volume', root).value = video.muted ? 0 : video.volume;
-    const seek = $('.video-seek', root); seek.hidden = !p.isVod;
-    seek.max = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 1;
-    seek.value = video.currentTime;
-    $('.video-time', root).textContent = p.isVod ? duration(video.currentTime) + ' / ' + duration(video.duration) : '';
+    const ranges = videoSeekRanges(p), seek = $('.video-seek', root);
+    seek.hidden = false; seek.disabled = !ranges.length;
+    if (!p.seekDragging) {
+      seek.min = ranges[0]?.start || 0;
+      seek.max = ranges.length ? ranges[ranges.length - 1].end : 1;
+      seek.value = !p.isVod && p.archive?.available ? p.archiveSeek ?? p.archive.duration : video.currentTime;
+    }
+    const finiteVod = p.isVod && Number.isFinite(video.duration) && video.duration > 0;
+    const total = p.isLiveArchive && ranges.length ? ranges[ranges.length - 1].end : finiteVod ? video.duration : p.isVod && Number.isFinite(p.duration) && p.duration > 0 ? p.duration : null;
+    const current = Number.isFinite(video.currentTime) ? Math.max(0, video.currentTime) : 0;
+    const archiveLive = !p.isVod && p.archive?.available;
+    const behindLive = !archiveLive && ranges.length ? Math.max(0, liveSeekPosition(p, ranges) - video.currentTime) : 0;
+    // The hover card supplies its own timestamp; a native title would obscure it.
+    seek.removeAttribute('title');
+    seek.setAttribute('aria-label', archiveLive || p.isLiveArchive ? 'Seek through broadcast archive' : p.isVod ? 'Seek through video' : 'Seek through available live video');
+    seek.setAttribute('aria-valuetext', p.isVod || archiveLive ? duration(Number(seek.value)) + (total !== null ? ' of ' + duration(total) : '') : behindLive > 2 ? duration(behindLive) + ' behind live' : 'Live');
+    $('.video-time', root).textContent = p.isVod ? duration(current) + ' / ' + (total !== null ? duration(total) : '--:--:--') : behindLive > 2 ? '−' + duration(behindLive) : '';
+    const span = Number(seek.max) - Number(seek.min);
+    seek.style.setProperty('--seek-progress', (span > 0 ? Math.max(0, Math.min(100, (Number(seek.value) - Number(seek.min)) / span * 100)) : 0) + '%');
+    if (seek.disabled) hideSeekPreview(p);
     $('[data-action=live]', root).hidden = p.isVod && !p.liveSource;
     updateChannelClock(p);
   }
   function setupVideoControls(p) {
     const root = p.element, video = p.video, surface = $('.video-surface', root);
     video.controls = false;
-    for (const name of ['play', 'pause', 'timeupdate', 'volumechange', 'loadedmetadata', 'durationchange']) video.addEventListener(name, () => updateVideoControls(p));
+    for (const name of ['play', 'pause', 'timeupdate', 'volumechange', 'loadedmetadata', 'durationchange', 'progress', 'emptied', 'seeked']) video.addEventListener(name, () => updateVideoControls(p));
     const volume = $('.video-volume', root);
     const setVolume = value => { video.volume = value; p.manualMuted = false; applyAudio(); updateVideoControls(p); };
     volume.addEventListener('input', event => setVolume(Number(event.target.value)));
@@ -1242,7 +1546,23 @@
       const direction = event.deltaY < 0 ? 1 : -1;
       setVolume(Math.max(0, Math.min(100, Math.round(video.volume * 100) + direction * 5)) / 100);
     }, { passive: false });
-    $('.video-seek', root).addEventListener('input', event => { if (Number.isFinite(video.duration)) video.currentTime = Number(event.target.value); });
+    const seek = $('.video-seek', root);
+    p.seekPreview = { element: $('.seek-preview', root), canvas: $('.seek-preview-frame', root), status: $('.seek-preview-status', root), label: $('.seek-preview-time', root), active: false };
+    const hoverSeek = event => {
+      if (seek.disabled || !Number.isFinite(event.clientX)) return;
+      const rect = seek.getBoundingClientRect();
+      if (rect.width <= 14) return;
+      const fraction = Math.max(0, Math.min(1, (event.clientX - rect.left - 7) / (rect.width - 14)));
+      showSeekPreview(p, Math.round((Number(seek.min) + fraction * (Number(seek.max) - Number(seek.min))) * 10) / 10);
+    };
+    for (const name of ['pointerenter', 'pointermove']) seek.addEventListener(name, hoverSeek);
+    seek.addEventListener('pointerleave', () => { if (!p.seekDragging) hideSeekPreview(p); });
+    seek.addEventListener('focus', () => { if (!seek.disabled) showSeekPreview(p, Number(seek.value)); });
+    seek.addEventListener('pointerdown', event => { if (seek.disabled) return; p.seekDragging = true; seek.setPointerCapture?.(event.pointerId); hoverSeek(event); });
+    for (const name of ['change', 'pointerup', 'blur']) seek.addEventListener(name, () => { p.seekDragging = false; hideSeekPreview(p); run(() => commitArchiveSeek(p)); updateVideoControls(p); });
+    for (const name of ['pointercancel', 'lostpointercapture']) seek.addEventListener(name, () => { p.seekDragging = false; p.archiveSeek = null; hideSeekPreview(p); updateVideoControls(p); });
+    seek.addEventListener('keydown', event => { if (event.key === 'Escape') hideSeekPreview(p); });
+    seek.addEventListener('input', event => { seekVideo(p, Number(event.target.value)); showSeekPreview(p, Number(event.target.value)); });
     video.addEventListener('dblclick', () => run(() => playerAction(p, 'fullscreen')));
     video.addEventListener('keydown', event => {
       if (event.defaultPrevented || event.isComposing || event.repeat || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
@@ -1314,6 +1634,7 @@
       return null;
     }
     const element = $('#player-template').content.firstElementChild.cloneNode(true);
+    if (Number.isFinite(source.startPosition) && source.startPosition >= 0) result.resume = source.startPosition;
     const menuFullscreen = node('button', 'Fullscreen'); menuFullscreen.dataset.action = 'fullscreen-menu';
     $('.stream-actions', element).append(menuFullscreen);
     hydrateIcons(element);
@@ -1349,7 +1670,7 @@
     $('.speed', element).value = String(video.playbackRate);
     $('.speed', element).addEventListener('change', event => { video.defaultPlaybackRate = video.playbackRate = Number(event.target.value); });
     $('.multistream-toggle', element).addEventListener('change', event => run(() => setGrid(event.target.checked)));
-    quality.addEventListener('change', () => run(() => openPlayer({ ...p.source, quality: quality.value }, p)));
+    quality.addEventListener('change', () => run(() => openPlayer({ ...p.source, quality: quality.value, ...(p.isLiveArchive ? { startPosition: p.video.currentTime } : {}) }, p)));
     $('.rename', element).addEventListener('change', event => { p.name = event.target.value || p.title; renderPlayers(); });
     $('.never-mute', element).addEventListener('change', event => setKeepAudio(p, event.target.checked));
     $('.never-mute', element).checked = p.neverMute;
@@ -1370,7 +1691,7 @@
     menuFullscreen.hidden = !pageFullscreen;
     if (pageFullscreen) video.setAttribute('controlslist', 'nofullscreen');
     $('[data-action=predictions]', element).hidden = p.platform !== 'Twitch' || p.isVod;
-    video.addEventListener('loadedmetadata', () => { if (p.resume > 0 && p.resume < video.duration) video.currentTime = p.resume; });
+    video.addEventListener('loadedmetadata', () => { if ((p.resume > 0 || p.isLiveArchive) && p.resume < video.duration) video.currentTime = p.resume; });
     video.addEventListener('playing', () => {
       $('.player-status', element).textContent = '';
       if (!p.startedSent && !p.closed) { p.startedSent = true; run(() => api('started', { player: p.id })); }
@@ -1394,7 +1715,8 @@
     // Keep its playback on the native HLS media stack.
     else if (appleMobile && nativeHls) video.src = result.url;
     else if (window.Hls && Hls.isSupported()) {
-      p.hls = new Hls({ enableWorker: true, lowLatencyMode: state.settings.lowLatency, backBufferLength: 90, maxBufferLength: 30, xhrSetup: xhr => { xhr.withCredentials = true; } });
+      p.hls = new Hls({ enableWorker: true, lowLatencyMode: p.isLiveArchive ? false : state.settings.lowLatency, liveDurationInfinity: !p.isVod || p.isLiveArchive, startPosition: p.isLiveArchive ? p.resume : -1, backBufferLength: 90, maxBufferLength: 30, xhrSetup: xhr => { xhr.withCredentials = true; } });
+      for (const event of [Hls.Events.LEVEL_UPDATED, Hls.Events.BUFFER_APPENDED, Hls.Events.BUFFER_FLUSHED]) p.hls.on(event, () => updateVideoControls(p));
       p.hls.loadSource(result.url); p.hls.attachMedia(video);
       p.hls.on(Hls.Events.ERROR, (_, data) => { if (data.fatal) $('.player-status', element).textContent = 'Playback stopped. Reload the quality or reopen this stream.'; });
     } else if (nativeHls) video.src = result.url;
@@ -1411,14 +1733,16 @@
     loadChannelProfile(p);
     loadFollowStatus(p);
     scheduleChatPoll(p);
+    loadLiveArchive(p);
     return p;
   }
   function releasePlayerMedia(p) {
+    hideSeekPreview(p);
     p.hls?.destroy(); p.hls = null;
     p.video.pause(); p.video.removeAttribute('src'); p.video.load();
   }
   function disposePlayer(p) {
-    p.closed = true; p.followStatusAbort?.abort(); p.chatAbort?.abort(); p.cancelChatGesture?.();
+    p.closed = true; p.followStatusAbort?.abort(); p.chatAbort?.abort(); p.archiveAbort?.abort(); p.cancelChatGesture?.();
     cancelVolumeSave(p);
     p.chatResizeObserver?.disconnect(); p.panelsObserver?.disconnect();
     releasePlayerMedia(p); clearTimeout(p.controlsHideTimer);
@@ -1427,7 +1751,7 @@
   }
   async function closePlayer(p, remoteClosed = false) {
     if (p.closed || p.closing) return;
-    p.closing = true; p.followStatusAbort?.abort(); p.chatAbort?.abort();
+    p.closing = true; p.followStatusAbort?.abort(); p.chatAbort?.abort(); p.archiveAbort?.abort();
     let failure;
     if (!remoteClosed) {
       try { await savePlayerState(p); } catch (error) { failure = error; }
@@ -1489,6 +1813,7 @@
       p.element.id = 'player-' + p.id;
       $('.player-title', p.element).textContent = p.name;
       p.element.hidden = !grid && p.id !== state.selected;
+      if (p.element.hidden) hideSeekPreview(p);
       $('.multistream-toggle', p.element).checked = grid;
       const pause = !grid && p.id !== state.selected && !p.neverMute && document.pictureInPictureElement !== p.video &&
         (p.isVod ? preferences.pauseInactiveVod : !preferences.keepInactive);
@@ -1603,11 +1928,11 @@
         if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(p.channelUrl); notice('Channel link copied.'); }
         else notice(p.channelUrl);
         break;
-      case 'back': video.currentTime = Math.max(video.seekable.length ? video.seekable.start(0) : 0, video.currentTime - 30); break;
-      case 'reload': await openPlayer({ ...p.source, quality: p.quality }, p); break;
+      case 'back': seekVideo(p, !p.isVod && p.archive?.available ? p.archive.duration - 30 : video.currentTime - 30); await commitArchiveSeek(p); break;
+      case 'reload': await openPlayer({ ...p.source, quality: p.quality, ...(p.isLiveArchive ? { startPosition: video.currentTime } : {}) }, p); break;
       case 'stop': {
         p.reloadCanceled = true;
-        p.followStatusAbort?.abort(); p.chatAbort?.abort();
+        p.followStatusAbort?.abort(); p.chatAbort?.abort(); p.archiveAbort?.abort();
         let failure;
         const saving = savePlayerState(p);
         p.stopped = true; releasePlayerMedia(p);
@@ -1619,13 +1944,18 @@
         if (failure) throw failure;
         break;
       }
-      case 'forward': video.currentTime = Math.min(video.duration || Infinity, video.currentTime + 30); break;
+      case 'forward': if (p.isVod || !p.archive?.available) seekVideo(p, video.currentTime + 30); break;
       case 'live':
         if (p.isVod && p.liveSource) await openPlayer(p.liveSource, p);
-        else if (p.hls?.liveSyncPosition) video.currentTime = p.hls.liveSyncPosition;
-        else if (video.seekable.length) video.currentTime = Math.max(0, video.seekable.end(video.seekable.length - 1) - 2);
+        else {
+          p.archiveSeek = null;
+          const ranges = videoSeekRanges(p, false);
+          if (ranges.length) video.currentTime = liveSeekPosition(p, ranges);
+          updateVideoControls(p);
+        }
         break;
       case 'replay': {
+        if (p.archive?.available) { p.archiveSeek = 0; await commitArchiveSeek(p); break; }
         const replay = await api('replay', { player: p.id });
         if (replacementCanceled(p) || p.stopped) return;
         if (!replay.available) { notice(replay.message); break; }
@@ -2038,7 +2368,7 @@
   });
   let lastDownloadRefresh = 0;
   setInterval(() => {
-    for (const p of state.players) { pumpVodChat(p); scheduleChatPoll(p); }
+    for (const p of state.players) { pumpVodChat(p); scheduleChatPoll(p); loadLiveArchive(p); }
   }, 250);
   setInterval(async () => {
     if (!state.authenticated || state.polling) return;

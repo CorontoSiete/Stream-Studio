@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
-    [ValidatePattern('^v\d+\.\d+\.\d+$')][string]$SourceTag = 'v1.8.10',
-    [ValidatePattern('^v\d+\.\d+\.\d+$')][string]$TargetTag = 'v1.8.11',
+    [ValidatePattern('^v\d+\.\d+\.\d+$')][string]$SourceTag = 'v1.8.11',
+    [ValidatePattern('^v\d+\.\d+\.\d+$')][string]$TargetTag = 'v1.8.12',
     [ValidateSet('source', 'target')][string]$HelperSource = 'source',
     [string]$TargetReleaseDirectory
 )
@@ -9,7 +9,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_OS -ne 'Windows' -or
-    $env:GITHUB_REPOSITORY -ne 'CorontoSiete/streamlink-vlc-studio') {
+    $env:GITHUB_REPOSITORY -notin @('CorontoSiete/streamlink-vlc-studio', 'CorontoSiete/Stream-Studio')) {
     throw 'This installation test is restricted to the repository disposable Windows Actions runner.'
 }
 . "$PSScriptRoot/lib/release-contract.ps1"

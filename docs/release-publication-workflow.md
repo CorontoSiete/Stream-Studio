@@ -7,6 +7,14 @@ the release as a draft until all seven uploaded assets match the local release
 set. Normal users and the in-app updater receive the release only after this
 verification succeeds.
 
+The repository is now named `CorontoSiete/Stream-Studio`. Protocol 1 installed
+updaters pin `CorontoSiete/streamlink-vlc-studio` in the signed manifest, so the
+stable release job retains that release identity and uses GitHub's redirect to
+the renamed repository. Do not replace `RELEASE_REPOSITORY` with the current
+workflow repository name: existing clients would reject the signed manifest.
+The disposable installer verification accepts both names, while still requiring
+Windows GitHub Actions. Workflow regressions enforce both compatibility rules.
+
 The stable-release smoke test upgrades the published 1.8.0 installer using that
 release's own update helper. It verifies the new installed version, retained user
 data, the restarted application's managed updater, and quiet repair before the

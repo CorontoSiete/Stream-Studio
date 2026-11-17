@@ -13,7 +13,7 @@ using StreamlinkVlcStudio.Infrastructure.Threading;
 
 namespace StreamlinkVlcStudio.Infrastructure.Vod;
 
-public sealed partial class VodDownloadService : IVodDownloadService
+public sealed partial class VodDownloadService : IVodDownloadService, IVodDownloadCompletionProbe
 {
     private readonly IStreamlinkService streamlink;
     private readonly ITwitchSubOnlyVodResolver? twitchFallback;
@@ -155,7 +155,7 @@ public sealed partial class VodDownloadService : IVodDownloadService
                 candidate.Quality.Equals(quality, StringComparison.OrdinalIgnoreCase) &&
                 (candidate.IsActive || candidate.State == VodDownloadState.Completed));
             if (existing is not null) return existing;
-            item = new VodDownloadItem(Guid.NewGuid(), target, quality, DateTimeOffset.UtcNow);
+            item = new VodDownloadItem(Guid.NewGuid(), target, quality, DateTimeOffset.UtcNow, IsAutomatic: request.IsAutomatic);
             itemRoots.Add(item.Id, DownloadDirectory);
             try { await SaveCoreAsync(item, cancellationToken).ConfigureAwait(false); }
             catch
@@ -466,44 +466,23 @@ public sealed partial class VodDownloadService : IVodDownloadService
         finally { gate.Release(); }
         Publish(item);
         var token = job.Cancellation.Token;
-        if (Uri.TryCreate(job.Target.Url, UriKind.Absolute, out var source) && source.AbsolutePath.EndsWith(".m3u8", StringComparison.OrdinalIgnoreCase))
-            await validator.ValidateAsync(source, job.Target.Platform, token).ConfigureAwait(false);
-        else
+        var source = await ResolveVodSourceAsync(job.Target, item.Target, item.Quality, job.Options, token).ConfigureAwait(false);
+        if (source.RefreshedTarget is { } refreshedTarget)
         {
-            var page = VodDownloadUrlParser.Parse(job.Target.Url);
-            if (page.Platform != item.Target.Platform || !page.MediaId.Equals(item.Target.MediaId, StringComparison.OrdinalIgnoreCase))
-                throw new InvalidDataException("The VOD URL does not match the selected video.");
-        }
-        var request = new StreamTransportRequest(job.Target, item.Quality, job.Options.StreamlinkPath, false, job.Options.CustomArguments);
-        Uri playlistUri;
-        var allowLocalPlaylist = false;
-        try
-        {
-            playlistUri = job.Target.IsExplicitKickVod && resolveKick is not null
-                ? await ResolveKickPlaylistAsync(job, item.Target, request, token).ConfigureAwait(false)
-                : (await streamlink.ResolveStreamUrlAsync(request, token).ConfigureAwait(false)).StreamUri;
-        }
-        catch (Exception exception) when (exception is not OperationCanceledException && job.Target.IsExplicitTwitchVod && twitchFallback is not null)
-        {
+            await gate.WaitAsync(token).ConfigureAwait(false);
             try
             {
-                var fallback = await twitchFallback.ResolveAsync(new TwitchSubOnlyVodRequest(item.Target.MediaId, item.Quality), token).ConfigureAwait(false);
-                playlistUri = fallback.PlaybackUri;
-                allowLocalPlaylist = playlistUri.IsFile && !playlistUri.IsUnc;
+                item = GetItemCore(job.Id);
+                item = item with { Target = CanonicalTarget(refreshedTarget), Revision = item.Revision + 1 };
+                await SaveCoreAsync(item, token).ConfigureAwait(false);
+                items[job.Id] = item;
             }
-            catch (Exception fallbackException) when (fallbackException is not OperationCanceledException)
-            {
-                throw new InvalidOperationException($"Twitch VOD resolution failed: {exception.Message} Fallback: {fallbackException.Message}", fallbackException);
-            }
-        }
-        catch (Exception exception) when (exception is not OperationCanceledException && resolveKick is null &&
-            job.Target.IsExplicitKickVod && job.Target.Url != item.Target.Url)
-        {
-            playlistUri = (await streamlink.ResolveStreamUrlAsync(request with { Target = item.Target }, token).ConfigureAwait(false)).StreamUri;
+            finally { gate.Release(); }
+            Publish(item);
         }
         var downloader = new HlsVodDownloader(client, validator, bandwidthLimiter);
-        var package = await downloader.DownloadAsync(playlistUri, item.Target.Platform, partialDirectory,
-            update => UpdateProgressAsync(job, update), token, allowLocalPlaylist).ConfigureAwait(false);
+        var package = await downloader.DownloadAsync(source.PlaylistUri, item.Target.Platform, partialDirectory,
+            update => UpdateProgressAsync(job, update), token, source.AllowLocalPlaylist).ConfigureAwait(false);
         StreamTarget profileTarget;
         await gate.WaitAsync(token).ConfigureAwait(false);
         try { profileTarget = GetItemCore(job.Id).Target; }
@@ -532,48 +511,6 @@ public sealed partial class VodDownloadService : IVodDownloadService
         Publish(item);
         logger.WriteSafely(AppLogLevel.Info, "VOD downloads", $"Downloaded {item.Target.Platform} VOD {item.Target.MediaId}: {item.CompletedSegments} segments, {item.BytesDownloaded} bytes.");
         if (job.IsConversion) await RunConversionJobAsync(job).ConfigureAwait(false);
-    }
-
-    private async Task<Uri> ResolveKickPlaylistAsync(Job job, StreamTarget canonicalTarget,
-        StreamTransportRequest request, CancellationToken cancellationToken)
-    {
-        if (job.Target.Url != canonicalTarget.Url)
-        {
-            try { return (await streamlink.ResolveStreamUrlAsync(request, cancellationToken).ConfigureAwait(false)).StreamUri; }
-            catch (Exception exception) when (exception is not OperationCanceledException)
-            {
-                logger.WriteSafely(AppLogLevel.Info, "VOD downloads", "Refreshing the Kick VOD source after resolution failed: " + ErrorText(exception, job.Options));
-            }
-        }
-        StreamTarget resolvedTarget;
-        StreamlinkResolvedUrl result;
-        try
-        {
-            resolvedTarget = await resolveKick!(canonicalTarget, cancellationToken).ConfigureAwait(false);
-            await validator.ValidateAsync(new Uri(resolvedTarget.Url), PlatformKind.Kick, cancellationToken).ConfigureAwait(false);
-            result = await streamlink.ResolveStreamUrlAsync(request with { Target = resolvedTarget }, cancellationToken).ConfigureAwait(false);
-        }
-        catch (Exception exception) when (exception is not OperationCanceledException)
-        {
-            logger.WriteSafely(AppLogLevel.Info, "VOD downloads", "Kick website resolution failed; trying the configured Streamlink Kick plugin: " + ErrorText(exception, job.Options));
-            try { return (await streamlink.ResolveStreamUrlAsync(request with { Target = canonicalTarget }, cancellationToken).ConfigureAwait(false)).StreamUri; }
-            catch (Exception fallbackException) when (fallbackException is not OperationCanceledException)
-            {
-                throw new InvalidOperationException($"Kick VOD resolution failed: {exception.Message} Streamlink: {fallbackException.Message}", fallbackException);
-            }
-        }
-        VodDownloadItem changed;
-        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            var item = GetItemCore(job.Id);
-            changed = item with { Target = CanonicalTarget(resolvedTarget), Revision = item.Revision + 1 };
-            await SaveCoreAsync(changed, cancellationToken).ConfigureAwait(false);
-            items[job.Id] = changed;
-        }
-        finally { gate.Release(); }
-        Publish(changed);
-        return result.StreamUri;
     }
 
     private async Task UpdateProgressAsync(Job job, VodDownloadProgress progress)

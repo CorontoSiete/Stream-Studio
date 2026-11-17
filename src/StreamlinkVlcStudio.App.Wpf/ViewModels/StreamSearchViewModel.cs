@@ -194,9 +194,12 @@ internal sealed class StreamSearchViewModel : HomeFeatureViewModel
                 return;
             }
 
-            var enrichedProbes = await LoadStreamSearchResultMetadataAsync(
-                probes,
-                searchCancellation.Token);
+            // VOD lookup validates availability. Live channel artwork and titles are
+            // optional, so make the playable results usable before that lookup ends.
+            var metadataRequired = probes.Any(probe => probe.Target.IsExplicitTwitchVod);
+            var enrichedProbes = metadataRequired
+                ? await LoadStreamSearchResultMetadataAsync(probes, searchCancellation.Token)
+                : probes;
             if (!IsCurrentStreamSearch(searchGeneration, query))
             {
                 return;
@@ -209,21 +212,27 @@ internal sealed class StreamSearchViewModel : HomeFeatureViewModel
             StatusMessage = StreamSearchStatus;
             IsStreamSearchRunning = false;
 
-            var viewerCountProbes = await LoadStreamSearchResultViewerCountsAsync(
-                enrichedProbes,
-                searchCancellation.Token);
-            if (!IsCurrentStreamSearch(searchGeneration, query))
-            {
-                return;
-            }
+            // Optional details are independent: a slow artwork provider must not
+            // hold back another channel's artwork or the viewer-count requests.
+            var metadataTask = metadataRequired ? Task.CompletedTask : LoadStreamSearchResultMetadataAsync(
+                probes, searchCancellation.Token, probe =>
+                {
+                    if (!IsCurrentStreamSearch(searchGeneration, query)) return;
+                    var row = StreamSearchResults.FirstOrDefault(result => string.Equals(
+                        result.Target.TabIdentityKey, probe.Target.TabIdentityKey, StringComparison.OrdinalIgnoreCase));
+                    row?.UpdateMetadata(probe.Metadata);
+                });
 
-            if (!viewerCountProbes.SequenceEqual(enrichedProbes))
-            {
-                displayProbes = OrderStreamSearchProbesForDisplay(viewerCountProbes);
-                UpdateStreamSearchViewerCounts(displayProbes);
-                StreamSearchStatus = FormatStreamSearchResult(query, displayProbes);
-                StatusMessage = StreamSearchStatus;
-            }
+            var viewerCountsTask = LoadStreamSearchResultViewerCountsAsync(
+                enrichedProbes,
+                searchCancellation.Token,
+                updated =>
+                {
+                    if (!IsCurrentStreamSearch(searchGeneration, query)) return;
+                    UpdateStreamSearchViewerCounts(OrderStreamSearchProbesForDisplay(updated));
+                });
+            // Keep both operations owned by this search until they finish or cancel.
+            await Task.WhenAll(metadataTask, viewerCountsTask);
         }
         catch (OperationCanceledException) when (searchCancellation.IsCancellationRequested)
         {
@@ -303,16 +312,21 @@ internal sealed class StreamSearchViewModel : HomeFeatureViewModel
 
     internal async Task<IReadOnlyList<StreamCandidateProbe>> LoadStreamSearchResultMetadataAsync(
         IReadOnlyList<StreamCandidateProbe> probes,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action<StreamCandidateProbe>? onUpdated = null)
     {
         if ((streamMetadataService is null && twitchVodService is null) || probes.Count == 0)
         {
             return probes;
         }
 
-        return await Task.WhenAll(probes.Select(probe => LoadStreamSearchResultMetadataAsync(
-            probe,
-            cancellationToken)));
+        return await Task.WhenAll(probes.Select(async probe =>
+        {
+            var updated = await LoadStreamSearchResultMetadataAsync(probe, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            onUpdated?.Invoke(updated);
+            return updated;
+        }));
     }
 
     internal async Task<StreamCandidateProbe> LoadStreamSearchResultMetadataAsync(
@@ -413,7 +427,8 @@ internal sealed class StreamSearchViewModel : HomeFeatureViewModel
 
     internal async Task<IReadOnlyList<StreamCandidateProbe>> LoadStreamSearchResultViewerCountsAsync(
         IReadOnlyList<StreamCandidateProbe> probes,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action<IReadOnlyList<StreamCandidateProbe>>? onUpdated = null)
     {
         if (viewerCountService is null ||
             !probes.Any(probe => IsLiveStreamSearchProbe(probe) && probe.Target.Kind == StreamTargetKind.Live && probe.ViewerCount is null))
@@ -422,7 +437,8 @@ internal sealed class StreamSearchViewModel : HomeFeatureViewModel
         }
 
         using var throttle = new SemaphoreSlim(StreamSearchViewerCountConcurrency);
-        var tasks = probes.Select(async probe =>
+        var updated = probes.ToArray();
+        var tasks = probes.Select(async (probe, index) =>
         {
             if (!IsLiveStreamSearchProbe(probe) || probe.Target.Kind != StreamTargetKind.Live || probe.ViewerCount is not null)
             {
@@ -432,7 +448,14 @@ internal sealed class StreamSearchViewModel : HomeFeatureViewModel
             await throttle.WaitAsync(cancellationToken);
             try
             {
-                return await LoadStreamSearchResultViewerCountAsync(probe, cancellationToken);
+                var result = await LoadStreamSearchResultViewerCountAsync(probe, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                if (result != probe)
+                {
+                    updated[index] = result;
+                    onUpdated?.Invoke(updated);
+                }
+                return result;
             }
             finally
             {

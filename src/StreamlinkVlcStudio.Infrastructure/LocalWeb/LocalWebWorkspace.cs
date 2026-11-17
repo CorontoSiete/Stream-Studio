@@ -36,6 +36,7 @@ public sealed record LocalWebDependencies
     public ILocalWebChatPresentation? ChatPresentation { get; init; }
     public LocalWebChannelProfileClient ChannelProfiles { get; init; } = new();
     public LocalWebCategoryArtwork CategoryArtwork { get; init; } = new();
+    internal Func<string, Uri, LocalWebMedia> CreateArchiveMedia { get; init; } = (id, uri) => new(id, uri);
     public SemaphoreSlim PlaybackSlots { get; } = new(32, 32);
 }
 
@@ -46,6 +47,7 @@ public sealed partial class LocalWebWorkspace(LocalWebDependencies services) : I
     private readonly ConcurrentDictionary<string, string> categoryArtworkUrls = new(StringComparer.Ordinal);
     private readonly Dictionary<string, StreamTarget> targets = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> targetIds = new(StringComparer.Ordinal);
+    private readonly HashSet<string> liveArchiveKeys = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource lifetime = new();
     private readonly AsyncOperationGate categoryViewerCountSlots = new(4);
     private readonly AsyncOperationGate followingHistorySlot = new();
@@ -240,6 +242,8 @@ public sealed partial class LocalWebWorkspace(LocalWebDependencies services) : I
                     DisplayTitle = livePlayer.Target.Channel + " replay"
                 };
                 return new { available = true, key = Register(replayTarget) };
+            case "live/archive":
+                return GetLiveArchive(input, settings);
             case "clip":
                 var clipTarget = GetPlayer(input).Target;
                 if (clipTarget.IsExplicitVod) throw new ArgumentException("Clips require live playback.");
@@ -333,7 +337,7 @@ public sealed partial class LocalWebWorkspace(LocalWebDependencies services) : I
             var cards = new List<object>();
             foreach (var v in result.Videos.OrderByDescending(v => v.PublishedAtUtc ?? v.CreatedAtUtc))
             {
-                var target = new StreamTarget(PlatformKind.Twitch, v.ChannelLogin, v.Url, StreamTargetKind.TwitchVod, v.Id, v.Title, v.BroadcasterId, v.Duration, v.CreatedAtUtc, ProfileImageUrl: v.ProfileImageUrl);
+                var target = v.ToStreamTarget();
                 cards.Add(await VodCardAsync(target, v.ThumbnailUrl, v.PublishedAtUtc ?? v.CreatedAtUtc, token).ConfigureAwait(false));
             }
             return new { items = cards, result.NextCursor, result.Message };
@@ -344,19 +348,30 @@ public sealed partial class LocalWebWorkspace(LocalWebDependencies services) : I
             var cards = new List<object>();
             foreach (var v in result.Videos.OrderByDescending(v => v.CreatedAtUtc ?? v.StartedAtUtc))
             {
-                var target = new StreamTarget(PlatformKind.Kick, v.ChannelSlug, v.Source, StreamTargetKind.KickVod, v.Id, v.Title, v.ChannelId, v.Duration, v.StartedAtUtc, v.ChannelId, ProfileImageUrl: v.ProfileImageUrl);
-                cards.Add(await VodCardAsync(target, v.ThumbnailUrl, v.CreatedAtUtc ?? v.StartedAtUtc, token).ConfigureAwait(false));
+                var target = v.ToStreamTarget();
+                cards.Add(await VodCardAsync(target, v.ThumbnailUrl, v.CreatedAtUtc ?? v.StartedAtUtc, token, v.Id).ConfigureAwait(false));
             }
             return new { items = cards, result.NextCursor, result.Message };
         }
     }
 
-    private async Task<object> VodCardAsync(StreamTarget target, string thumbnail, DateTimeOffset? published, CancellationToken token)
+    private async Task<object> VodCardAsync(StreamTarget target, string thumbnail, DateTimeOffset? published, CancellationToken token,
+        string legacyMediaId = "")
     {
         thumbnail = LocalWebProfileImages.PublicUrl(thumbnail);
         target = target with { MediaThumbnailUrl = thumbnail, MediaPublishedAtUtc = published };
         RememberVodMetadata(target, new(thumbnail, published));
         var bookmark = await services.History.GetAsync(target, token).ConfigureAwait(false);
+        if (bookmark is null && !string.IsNullOrWhiteSpace(legacyMediaId) &&
+            !legacyMediaId.Equals(target.MediaId, StringComparison.OrdinalIgnoreCase))
+        {
+            bookmark = await services.History.GetAsync(target with { MediaId = legacyMediaId }, token).ConfigureAwait(false);
+            if (bookmark is not null)
+            {
+                services.History.Remember(target, bookmark);
+                await services.History.SaveAsync(token).ConfigureAwait(false);
+            }
+        }
         return new
         {
             key = Register(target),
@@ -395,6 +410,8 @@ public sealed partial class LocalWebWorkspace(LocalWebDependencies services) : I
                     ? await resolveKick(target, token).ConfigureAwait(false)
                     : throw new ArgumentException("Choose a listed Kick video.");
             var quality = Quality(input, settings);
+            bool isLiveArchive;
+            lock (playerGate) isLiveArchive = Boolean(input, "liveArchive", false) && liveArchiveKeys.Contains(Optional(input, "key", 64));
             var id = LocalWebAuthentication.NewToken();
             LocalWebMedia media;
             if (offline is not null)
@@ -405,11 +422,18 @@ public sealed partial class LocalWebWorkspace(LocalWebDependencies services) : I
             }
             else
             {
-                var lowLatency = Boolean(input, "lowLatency", settings.LowLatency);
-                var resolved = await ResolveAsync(target, quality, lowLatency, settings, token).ConfigureAwait(false);
+                var lowLatency = !isLiveArchive && Boolean(input, "lowLatency", settings.LowLatency);
+                var resolved = await ResolveAsync(target, quality, lowLatency, settings, token, isLiveArchive).ConfigureAwait(false);
                 media = resolved.TrustedLocal
                     ? await LocalWebMedia.FromTrustedPlaylistAsync(id, resolved.Uri, token).ConfigureAwait(false)
-                    : new LocalWebMedia(id, resolved.Uri);
+                    : isLiveArchive ? services.CreateArchiveMedia(id, resolved.Uri) : new LocalWebMedia(id, resolved.Uri);
+                media.GrowingArchive = isLiveArchive;
+                media.RewriteTwitchArchive = resolved.RewriteTwitchArchive;
+                if (isLiveArchive)
+                {
+                    try { await media.ReadArchiveDurationAsync(quality, token, selectVariant: true).ConfigureAwait(false); }
+                    catch { media.Dispose(); throw; }
+                }
             }
             player = new(target, quality, media, offline, services.PlaybackSlots, lifetime.Token);
             player.ProfileImageUrl = target.IsOfflineVod && LocalWebProfileImages.HasCachedImage(target)
@@ -447,6 +471,7 @@ public sealed partial class LocalWebWorkspace(LocalWebDependencies services) : I
                 chatLayout = (WebChatOverlayLayout?)null,
                 url = media.PathFor(media.Root),
                 isVod = target.IsExplicitVod,
+                isLiveArchive = media.GrowingArchive,
                 isMp4 = target.LocalMediaPath.EndsWith(".mp4", StringComparison.OrdinalIgnoreCase),
                 resume = bookmark is { Completed: false } ? bookmark.Position.TotalSeconds : 0,
                 duration = target.MediaDuration.TotalSeconds,
@@ -467,21 +492,24 @@ public sealed partial class LocalWebWorkspace(LocalWebDependencies services) : I
         }
     }
 
-    private async Task<(Uri Uri, bool TrustedLocal)> ResolveAsync(StreamTarget target, string quality, bool lowLatency, AppSettings settings, CancellationToken token)
+    private async Task<(Uri Uri, bool TrustedLocal, bool RewriteTwitchArchive)> ResolveAsync(StreamTarget target, string quality, bool lowLatency, AppSettings settings, CancellationToken token, bool liveArchive = false)
     {
-        if (target.IsExplicitKickVod) return (new Uri(target.Url), false);
+        if (target.IsExplicitKickVod) return (new Uri(target.Url), false, false);
         if (target.IsExplicitVod && Uri.TryCreate(target.Url, UriKind.Absolute, out var direct) &&
-            direct.AbsolutePath.EndsWith(".m3u8", StringComparison.OrdinalIgnoreCase)) return (direct, false);
+            direct.AbsolutePath.EndsWith(".m3u8", StringComparison.OrdinalIgnoreCase)) return (direct, false, false);
         try
         {
             var result = await services.Streamlink.ResolveStreamUrlAsync(new(target, quality, settings.StreamlinkPath ?? "", lowLatency,
                 CommandLineTokenizer.Tokenize(settings.CustomStreamlinkArguments)), token).ConfigureAwait(false);
-            return (result.StreamUri, false);
+            return (result.StreamUri, false, false);
         }
         catch (Exception error) when (target.IsExplicitTwitchVod && error is not OperationCanceledException)
         {
-            var fallback = (await services.SubOnlyVods.ResolveAsync(new(target.MediaId, quality), token).ConfigureAwait(false)).PlaybackUri;
-            return (fallback, fallback.IsFile);
+            var fallback = await services.SubOnlyVods.ResolveAsync(new(target.MediaId, quality), token).ConfigureAwait(false);
+            // A captured local snapshot cannot grow. Keep fetching the validated provider
+            // playlist and apply the same sanitizer on every refresh for a live archive.
+            return liveArchive && fallback.RemotePlaylistUri is { } remote
+                ? (remote, false, true) : (fallback.PlaybackUri, fallback.PlaybackUri.IsFile, false);
         }
     }
 
@@ -577,7 +605,9 @@ public sealed partial class LocalWebWorkspace(LocalWebDependencies services) : I
             await LocalWebProfileImages.ServeCachedAsync(context, player.Target).ConfigureAwait(false);
             return;
         }
-        await player.Media.ServeAsync(context, resourceId).ConfigureAwait(false);
+        var previewMedia = player.ArchivePreview?.Media;
+        await (previewMedia is not null && previewMedia.ContainsResource(resourceId) ? previewMedia : player.Media)
+            .ServeAsync(context, resourceId).ConfigureAwait(false);
     }
 
     private object Card(StreamTarget target, string name, string title, string thumbnail, string state, int? viewers = null,
@@ -599,6 +629,11 @@ public sealed partial class LocalWebWorkspace(LocalWebDependencies services) : I
 
     private string Register(StreamTarget target)
     {
+        lock (playerGate) return RegisterTarget(target);
+    }
+
+    private string RegisterTarget(StreamTarget target)
+    {
         if (targetIds.TryGetValue(target.TabIdentityKey, out var key))
         {
             // Refresh playback URLs, duration and chat metadata even when the provider
@@ -616,7 +651,11 @@ public sealed partial class LocalWebWorkspace(LocalWebDependencies services) : I
         return key;
     }
 
-    private StreamTarget Target(JsonElement input) => targets.TryGetValue(RequiredText(input, "key", 64), out var target) ? target : throw new ArgumentException("Select a listed stream or video.");
+    private StreamTarget Target(JsonElement input)
+    {
+        lock (playerGate)
+            return targets.TryGetValue(RequiredText(input, "key", 64), out var target) ? target : throw new ArgumentException("Select a listed stream or video.");
+    }
     private StreamTarget TargetOrInput(JsonElement input)
     {
         if (input.TryGetProperty("key", out _)) return Target(input);
@@ -672,6 +711,9 @@ public sealed partial class LocalWebWorkspace(LocalWebDependencies services) : I
         internal TwitchPrediction? Prediction { get; set; }
         internal Task? ChatConnection { get; set; }
         internal Task<FollowState>? FollowStatus { get; set; }
+        internal Task<LiveArchiveState>? ArchiveLookup { get; set; }
+        internal LiveArchivePreview? ArchivePreview { get; set; }
+        internal DateTimeOffset ArchiveRetryAt { get; set; }
         internal CancellationTokenSource Lifetime { get; } = CancellationTokenSource.CreateLinkedTokenSource(token);
         internal void AddChat(ChatMessage message)
         {
@@ -690,8 +732,10 @@ public sealed partial class LocalWebWorkspace(LocalWebDependencies services) : I
         private Task DisposeCoreAsync() => AsyncDisposal.RunAllAsync(
             () => new ValueTask(Lifetime.CancelAsync()),
             () => new ValueTask(ChatConnection ?? Task.CompletedTask),
+            () => new ValueTask(ArchiveLookup ?? Task.CompletedTask),
             () => Chat?.DisposeAsync() ?? ValueTask.CompletedTask,
             () => { Media.Dispose(); return ValueTask.CompletedTask; },
+            () => { ArchivePreview?.Media.Dispose(); return ValueTask.CompletedTask; },
             () => offline?.DisposeAsync() ?? ValueTask.CompletedTask,
             () => { Lifetime.Dispose(); return ValueTask.CompletedTask; },
             () => { slots.Release(); return ValueTask.CompletedTask; });

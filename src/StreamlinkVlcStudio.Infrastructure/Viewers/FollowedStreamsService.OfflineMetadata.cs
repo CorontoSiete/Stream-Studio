@@ -3,6 +3,7 @@ using System.Text.Json;
 using StreamlinkVlcStudio.Core.Logging;
 using StreamlinkVlcStudio.Core.Models;
 using StreamlinkVlcStudio.Infrastructure.Http;
+using StreamlinkVlcStudio.Infrastructure.Threading;
 using StreamlinkVlcStudio.Infrastructure.Twitch;
 using static StreamlinkVlcStudio.Core.Json.JsonElementReader;
 using static StreamlinkVlcStudio.Core.Text.StringValues;
@@ -166,6 +167,7 @@ public sealed partial class FollowedStreamsService
     private async Task LoadKickOfflineMetadataAsync(FollowedChannel[] channels, CancellationToken cancellationToken)
     {
         var reader = new KickWebsiteJsonReader(httpClient, logger, "Followed", TimeSpan.FromSeconds(5));
+        using var requests = new AsyncOperationGate(4);
         await Parallel.ForEachAsync(channels,
             new ParallelOptions { MaxDegreeOfParallelism = 4, CancellationToken = cancellationToken },
             async (channel, token) =>
@@ -176,6 +178,18 @@ public sealed partial class FollowedStreamsService
                 var historyLoaded = false;
                 try
                 {
+                    // Artwork and history have no dependency. Bound actual requests as well
+                    // as channels so overlapping their waits does not increase provider load.
+                    await Task.WhenAll(LoadBannerAsync(), LoadHistoryAsync()).ConfigureAwait(false);
+                }
+                finally
+                {
+                    StoreOfflineMetadata(channel, banner, lastLive, MetadataTimeProvider.GetUtcNow(), bannerLoaded && historyLoaded);
+                }
+
+                async Task LoadBannerAsync()
+                {
+                    using var lease = await requests.EnterAsync(token).ConfigureAwait(false);
                     try
                     {
                         banner = await LoadKickOfflineBannerAsync(reader, channel, token).ConfigureAwait(false);
@@ -186,7 +200,11 @@ public sealed partial class FollowedStreamsService
                     {
                         logger.Write(AppLogLevel.Info, "Followed", $"Kick offline banner unavailable for {channel.Channel}.", ex);
                     }
+                }
 
+                async Task LoadHistoryAsync()
+                {
+                    using var lease = await requests.EnterAsync(token).ConfigureAwait(false);
                     try
                     {
                         var body = await reader.ReadAsync(
@@ -210,12 +228,6 @@ public sealed partial class FollowedStreamsService
                     {
                         logger.Write(AppLogLevel.Info, "Followed", $"Kick broadcast history unavailable for {channel.Channel}.", ex);
                     }
-                }
-                finally
-                {
-                    // Artwork and history are independent. Even a history deadline must retain
-                    // a banner already loaded, while partial failures still retry after 30 seconds.
-                    StoreOfflineMetadata(channel, banner, lastLive, MetadataTimeProvider.GetUtcNow(), bannerLoaded && historyLoaded);
                 }
             }).ConfigureAwait(false);
     }

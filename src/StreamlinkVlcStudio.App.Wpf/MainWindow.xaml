@@ -1681,7 +1681,7 @@
         </ResourceDictionary>
     </Window.Resources>
 
-    <Grid x:Name="WorkspaceRoot" SizeChanged="WorkspaceRoot_SizeChanged">
+    <Grid x:Name="WorkspaceRoot" Background="{DynamicResource StudioBaseBrush}" SizeChanged="WorkspaceRoot_SizeChanged">
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="*" />
             <ColumnDefinition Width="Auto" />
@@ -1774,7 +1774,7 @@
                       Grid.Row="2" Grid.ColumnSpan="2" Panel.ZIndex="100"
                       VerticalAlignment="Top" Margin="12,8"
                       HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"
-                      Visibility="{Binding IsUpdateBannerVisible, Converter={StaticResource BoolToVisibility}}">
+                      Visibility="{Binding IsUpdateBannerVisible, Converter={StaticResource BoolToVisibility}, FallbackValue=Collapsed}">
             <Border Width="{Binding ViewportWidth, ElementName=UpdateBannerViewport}" MinWidth="200"
                     Padding="14,10" CornerRadius="8"
                     Background="{DynamicResource StudioSurfaceCardBrush}"
@@ -1809,6 +1809,11 @@
                 <Style TargetType="{x:Type DockPanel}">
                     <Setter Property="Visibility" Value="Visible" />
                     <Style.Triggers>
+                        <!-- Settings load after the first window layout. Keep the workspace
+                             out of that layout until its view model is available. -->
+                        <DataTrigger Binding="{Binding}" Value="{x:Null}">
+                            <Setter Property="Visibility" Value="Collapsed" />
+                        </DataTrigger>
                         <DataTrigger Binding="{Binding IsSettingsOpen}" Value="True">
                             <Setter Property="Visibility" Value="Collapsed" />
                         </DataTrigger>
@@ -2839,6 +2844,14 @@
                                                 <Grid>
                                                 <Button x:Name="VodCardOpenButton" Style="{StaticResource HomeCardButton}"
                                                         Command="{Binding OpenCommand}">
+                                                    <Button.ContextMenu>
+                                                        <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
+                                                            <MenuItem Header="{Binding AutoDownloadMenuHeader}" IsCheckable="True"
+                                                                      IsChecked="{Binding IsAutoDownloadEnabled, Mode=TwoWay}"
+                                                                      IsEnabled="{Binding CanAutoDownloadChannel}"
+                                                                      ToolTip="Automatically save new completed broadcasts from this channel while Stream Studio is open, using your download settings." />
+                                                        </ContextMenu>
+                                                    </Button.ContextMenu>
                                                     <Grid>
                                                         <Grid.RowDefinitions>
                                                             <RowDefinition Height="Auto" />
@@ -3348,32 +3361,6 @@
                                                       AutomationProperties.Name="Category stream language"
                                                       ToolTip="Filter live streams by language" />
 
-                                            <Border Background="{DynamicResource StudioSurface1Brush}"
-                                                    BorderBrush="{DynamicResource StudioBorderBrush}"
-                                                    BorderThickness="1"
-                                                    CornerRadius="8"
-                                                    Padding="14,11"
-                                                    Margin="0,6,0,16"
-                                                    Visibility="{Binding HasSelectedBrowseCategory, Converter={StaticResource BoolToVisibility}}">
-                                                <DockPanel LastChildFill="True">
-                                                    <TextBlock DockPanel.Dock="Right"
-                                                               Text="{Binding BrowseStreamsTitle}"
-                                                               FontSize="12"
-                                                               Foreground="{DynamicResource StudioTextMutedBrush}"
-                                                               VerticalAlignment="Center"
-                                                               Margin="12,0,0,0" />
-                                                    <StackPanel>
-                                                        <TextBlock Text="{Binding SelectedBrowseCategoryName}"
-                                                                   FontSize="17"
-                                                                   FontWeight="SemiBold" />
-                                                        <TextBlock Text="{Binding BrowsePlatformText}"
-                                                                   FontSize="12"
-                                                                   Foreground="{DynamicResource StudioTextMutedBrush}"
-                                                                   Margin="0,3,0,0" />
-                                                    </StackPanel>
-                                                </DockPanel>
-                                            </Border>
-
                                     <ProgressBar Height="4"
                                                  IsIndeterminate="True"
                                                  Margin="0,0,0,18"
@@ -3676,12 +3663,37 @@
             </Grid>
         </DockPanel>
 
+        <TextBlock x:Name="StartupLoadingMessage" Grid.Row="2" Grid.ColumnSpan="2"
+                   Text="Loading Stream Studio…" HorizontalAlignment="Center" VerticalAlignment="Center"
+                   Foreground="{DynamicResource StudioTextMutedBrush}">
+            <TextBlock.Style>
+                <Style TargetType="TextBlock">
+                    <Setter Property="Visibility" Value="Collapsed" />
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding}" Value="{x:Null}">
+                            <Setter Property="Visibility" Value="Visible" />
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </TextBlock.Style>
+        </TextBlock>
+
         <Border x:Name="TopControlsBar"
                 shell:WindowChrome.IsHitTestVisibleInChrome="True"
                 Grid.Row="1"
                 Background="{DynamicResource StudioSurface0Brush}"
                 BorderBrush="{DynamicResource StudioBorderBrush}"
                 BorderThickness="0,0,0,1">
+            <Border.Style>
+                <Style TargetType="Border">
+                    <Setter Property="Visibility" Value="Visible" />
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding}" Value="{x:Null}">
+                            <Setter Property="Visibility" Value="Collapsed" />
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Border.Style>
             <controls:ResponsiveGrid x:Name="TopControlLayout" CompactWidth="700">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="53" />
@@ -4260,7 +4272,7 @@
                 Grid.ColumnSpan="2"
                 Grid.Row="2"
                 Background="{DynamicResource StudioBaseBrush}"
-                Visibility="{Binding IsSettingsOpen, Converter={StaticResource BoolToVisibility}}">
+                Visibility="{Binding IsSettingsOpen, Converter={StaticResource BoolToVisibility}, FallbackValue=Collapsed}">
             <Border.Resources>
                 <DataTemplate x:Key="SettingsWrappedToggleContent">
                     <TextBlock Text="{Binding}" TextWrapping="Wrap" />
@@ -4652,6 +4664,73 @@
 
                             <StackPanel x:Name="DownloadsSettingsPage"
                                         Visibility="{Binding IsDownloadsSettingsSelected, Converter={StaticResource BoolToVisibility}}">
+                                <Border x:Name="AutoVodDownloadSettingsCard" Style="{StaticResource SettingsSectionCard}">
+                                    <StackPanel>
+                                        <ContentControl Content="Automatic VOD downloads" Tag="{StaticResource StudioIconDownload}"
+                                                        Style="{StaticResource StudioSectionHeading}" />
+                                        <TextBlock Text="{Binding AutoDownloadChannelStatus}" Foreground="{DynamicResource StudioAccentBrush}"
+                                                   FontWeight="SemiBold" Margin="0,0,0,12" AutomationProperties.Name="Automatic VOD download channel status" />
+                                        <WrapPanel Margin="0,0,0,8">
+                                            <StackPanel MinWidth="170" Margin="0,0,24,12">
+                                                <TextBlock Text="Completed automatically" Style="{StaticResource StudioFieldLabelStyle}" />
+                                                <TextBlock x:Name="AutoVodDownloadCompletedText" Text="{Binding AutoDownloadCompletedText}"
+                                                           Foreground="{DynamicResource StudioTextBrush}" FontSize="24" FontWeight="SemiBold"
+                                                           AutomationProperties.Name="Completed automatic VOD downloads" />
+                                            </StackPanel>
+                                            <StackPanel MinWidth="150" Margin="0,0,0,12">
+                                                <TextBlock Text="Storage in use" Style="{StaticResource StudioFieldLabelStyle}" />
+                                                <TextBlock x:Name="AutoVodDownloadStorageText" Text="{Binding AutoDownloadStorageText}"
+                                                           Foreground="{DynamicResource StudioTextBrush}" FontSize="24" FontWeight="SemiBold"
+                                                           AutomationProperties.Name="Automatic VOD download storage in use" />
+                                            </StackPanel>
+                                        </WrapPanel>
+                                        <TextBlock Text="The completed total is kept after deletion. Storage shows saved automatic VOD media, excluding unfinished downloads."
+                                                   Style="{StaticResource SettingsPageDescriptionStyle}" Margin="0,0,0,14" />
+                                        <ItemsControl x:Name="AutoVodDownloadChannelsList" ItemsSource="{Binding AutoDownloadChannels}"
+                                                      AutomationProperties.Name="Channels with automatic VOD downloads enabled">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Border Background="{DynamicResource StudioSurface2Brush}" CornerRadius="8" Padding="12" Margin="0,0,0,8">
+                                                        <Grid>
+                                                            <Grid.ColumnDefinitions>
+                                                                <ColumnDefinition Width="*" />
+                                                                <ColumnDefinition Width="Auto" />
+                                                            </Grid.ColumnDefinitions>
+                                                            <StackPanel Margin="0,0,12,0">
+                                                                <TextBlock Text="{Binding ChannelText}" Foreground="{DynamicResource StudioTextBrush}"
+                                                                           FontWeight="SemiBold" TextTrimming="CharacterEllipsis" ToolTip="{Binding ChannelText}" />
+                                                                <TextBlock Text="{Binding UsageText}" Style="{StaticResource SettingsPageDescriptionStyle}"
+                                                                           Margin="0,5,0,0" />
+                                                            </StackPanel>
+                                                            <Border Grid.Column="1" Style="{StaticResource StudioStatusPill}" VerticalAlignment="Top"
+                                                                    AutomationProperties.Name="Automatic VOD downloads enabled">
+                                                                <StackPanel Orientation="Horizontal">
+                                                                    <Ellipse Width="6" Height="6" Fill="{DynamicResource StudioAccentBrush}"
+                                                                             VerticalAlignment="Center" Margin="0,0,6,0" />
+                                                                    <TextBlock Text="Enabled" Foreground="{DynamicResource StudioAccentBrush}" FontWeight="SemiBold" />
+                                                                </StackPanel>
+                                                            </Border>
+                                                        </Grid>
+                                                    </Border>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                        <TextBlock x:Name="AutoVodDownloadEmptyText"
+                                                   Text="No channels enabled. Right-click a VOD and turn on auto-download for its channel.">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock" BasedOn="{StaticResource SettingsPageDescriptionStyle}">
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding HasAutoDownloadChannels}" Value="True">
+                                                            <Setter Property="Visibility" Value="Collapsed" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                        <TextBlock Text="New completed broadcasts are checked every two minutes while Stream Studio is open. Change a channel's choice by right-clicking any of its VODs."
+                                                   Style="{StaticResource SettingsPageDescriptionStyle}" Margin="0,8,0,0" />
+                                    </StackPanel>
+                                </Border>
                                 <controls:ResponsiveColumnsPanel>
                                     <Border Grid.Column="0" Style="{StaticResource SettingsSectionCard}" VerticalAlignment="Top">
                                         <StackPanel>

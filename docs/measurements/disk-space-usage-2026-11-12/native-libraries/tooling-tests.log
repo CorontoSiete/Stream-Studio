@@ -1,0 +1,71 @@
+PASS development: SDK propagation, focused tests, build ordering, and shell restoration
+PASS development: fast reruns and explicit interactive mode
+PASS development: build-only and application launch tasks
+PASS development: failures stop work, restore shell state, and reject incomplete checks
+PASS development: package version defaults, explicit overrides, and failures before publishing
+PASS development: packaging scripts honor the selected SDK host
+PASS installer lifecycle: upgrade settings rewrite preserves per-stream web chat layouts
+PASS installer lifecycle: installation lease matches the native uninstaller and normalizes path aliases
+PASS installer lifecycle: a competing process prevents replacement and allows retry after releasing its lease
+PASS installer lifecycle: search icon cleanup preserves unrelated apps at every display scale
+PASS installer lifecycle: upgrade preserves empty user directories and removes obsolete managed directories
+PASS installer lifecycle: upgrade snapshots user files after shutdown and leaves no transaction directories
+PASS installer lifecycle: a payload conflict preserves the existing installation and its user directories
+PASS installer lifecycle: cleanup removes unlocked siblings and retries read-only directories
+PASS installer lifecycle: cleanup rejects ancestor junctions and unlinks direct junctions without traversing targets
+PASS installer lifecycle: the installed app stays registered when a dependency fails
+PASS installer lifecycle: an unsuccessful forced shutdown aborts before installation can proceed
+PASS installer dependencies: real x64 startup accepts default and explicit dependency manifests before validating the install target
+PASS installer dependencies: compatible runtimes are retained without downloading or downgrading
+PASS installer dependencies: Streamlink installs only verified bytes and rechecks the resulting runtime
+PASS installer dependencies: Streamlink rejects a successful installer that leaves the runtime missing or obsolete
+PASS installer dependencies: Streamlink does not execute a rejected download
+PASS installer dependencies: Vlc installs only verified bytes and rechecks the resulting runtime
+PASS installer dependencies: Vlc rejects a successful installer that leaves the runtime missing or obsolete
+PASS installer dependencies: Vlc does not execute a rejected download
+PASS installer dependencies: WebView2 installs only verified bytes and rechecks the resulting runtime
+PASS installer dependencies: WebView2 rejects a successful installer that leaves the runtime missing or obsolete
+PASS installer dependencies: WebView2 does not execute a rejected download
+PASS installer dependencies: final verification refuses missing dependencies even when their installation was skipped
+PASS installer dependencies: authenticated payload minima replace the older install script manifest
+PASS installer dependencies: legacy signed releases keep their declared minima and gain the reviewed WebView2 Runtime
+PASS installer dependencies: dependency-only repair follows the installed payload rather than the older script minima
+PASS installer dependencies: manifest and signing checks reject omissions invalid minima and unsafe download locations
+PASS installer dependencies: bounded real Streamlink probes require x64 exact version output and successful exit
+PASS installer dependencies: dependency probes terminate descendants and preserve Windows argument quoting
+PASS installer dependencies: Streamlink must load both provider plugins offline and ignore personal configuration
+PASS installer dependencies: a 32-bit installer host fails before changing the application or shared runtimes
+PASS native commands: successful stderr diagnostics survive redirected output
+PASS native commands: failing exit codes retain the command failure and diagnostics
+PASS native commands: missing executables fail before stale exit codes are examined
+PASS workflow: invalid tags remain data and fail before expression evaluation
+PASS workflow: quoted branches remain data and preserve the build version
+PASS workflow: stable tags produce exact versioned build metadata
+PASS workflow: embedded PowerShell parses and receives GitHub metadata through environment variables
+Verified signed update manifest for v1.8.3 with key 45a121c3a097d09997ce821c40f5ea158193f2d3e0bb13bc4d19f9de71e88f1d.
+Verified signed update manifest for v1.8.3 with key 45a121c3a097d09997ce821c40f5ea158193f2d3e0bb13bc4d19f9de71e88f1d.
+PASS update signing: generated signature authenticates all three runtime minima and exact package bytes
+PASS update signing: even valid signatures cannot omit lower or add undeclared payload requirements
+Verified signed update manifest for v1.8.3 with key 45a121c3a097d09997ce821c40f5ea158193f2d3e0bb13bc4d19f9de71e88f1d.
+PASS update signing: legacy two-dependency releases are supported and unsigned tampering is rejected
+PASS tooling: native build search paths omit stale entries and preserve precedence
+PASS tooling: dependency manifests use canonical length
+PASS tooling: WiX stable version is exact and its reported build metadata is accepted
+PASS tooling: offline builds reuse pinned cached dependencies and preserve the source
+PASS tooling: corrupt or untrusted cached dependencies preserve prior output and stop the build
+PASS tooling: missing cached dependencies keep the reviewed download and validation path
+PASS tooling: compatible installed dependency selection
+PASS tooling: shared downloads require HTTPS
+PASS tooling: Windows leaf names and contract paths are canonical
+PASS tooling: installation ownership rejects noncanonical Windows paths
+PASS tooling: installation ownership normalizes and deduplicates directory separators
+PASS tooling: ZIP extraction is bounded, canonical, and traversal-safe
+PASS tooling: parent junctions are rejected before promotion writes
+PASS tooling: multi-file promotion rolls back earlier replacements
+PASS tooling: selected native overlay provenance is closed and pinned
+PASS tooling: ambiguous payload roots are rejected
+PASS tooling: exact release sets are atomically staged and independently verified
+Generated SPDX 2.3 SBOM with 1 files and 19 packages: C:\Users\ComputerGuy\Documents\streamlink3\streamlink test2\streamlink-vlc-studio\.tmp\StreamStudio-tooling-tests-5ccde79ff0f748ec937426d03527a8d6\test.spdx.json
+Verified SPDX 2.3 SBOM with 1 files and 19 packages.
+PASS tooling: SBOM verification reconstructs runtime-pack dependencies
+PASS tooling: stable release tags, trust root, public closure, and signing configuration

@@ -14,19 +14,6 @@ public partial class App : Application
 
     protected override void OnStartup(StartupEventArgs e)
     {
-        // Helper and maintenance modes must run before WPF, mutex creation, or app services.
-        if (MaintenanceModeRunner.TryRun(e.Args, out var maintenanceExitCode))
-        {
-            Shutdown(maintenanceExitCode);
-            return;
-        }
-
-        if (UpdateHelperRunner.TryRun(e.Args, out var helperExitCode))
-        {
-            Shutdown(helperExitCode);
-            return;
-        }
-
         // Publish the activation endpoint before claiming the mutex. A second
         // launch can otherwise observe the mutex during this short window and
         // have nowhere to signal the primary instance.

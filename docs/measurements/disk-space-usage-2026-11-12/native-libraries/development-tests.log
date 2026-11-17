@@ -1,0 +1,6 @@
+PASS development: SDK propagation, focused tests, build ordering, and shell restoration
+PASS development: fast reruns and explicit interactive mode
+PASS development: build-only and application launch tasks
+PASS development: failures stop work, restore shell state, and reject incomplete checks
+PASS development: package version defaults, explicit overrides, and failures before publishing
+PASS development: packaging scripts honor the selected SDK host

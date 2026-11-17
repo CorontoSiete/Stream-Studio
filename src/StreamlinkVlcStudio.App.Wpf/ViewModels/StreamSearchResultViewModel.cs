@@ -9,7 +9,7 @@ public sealed class StreamSearchResultViewModel : ObservableObject, IHomeStreamO
 {
     private readonly StreamSearchChannel? channel;
     private readonly StreamlinkProbeResult probeResult;
-    private readonly StreamMetadataResult? metadata;
+    private StreamMetadataResult? metadata;
     private int? viewerCount;
 
     public StreamSearchResultViewModel(
@@ -68,7 +68,24 @@ public sealed class StreamSearchResultViewModel : ObservableObject, IHomeStreamO
 
     public AsyncRelayCommand GoToVodsCommand { get; }
 
-    public StreamTarget Target { get; }
+    public StreamTarget Target { get; private set; }
+
+    internal void UpdateMetadata(StreamMetadataResult? value)
+    {
+        if (channel is not null || value?.State != StreamMetadataState.Available || metadata == value) return;
+        metadata = value;
+        Target = Target with
+        {
+            CategoryName = FirstNonEmpty(value.CategoryName, Target.CategoryName),
+            ProfileImageUrl = FirstNonEmpty(Target.ProfileImageUrl, value.ProfileImageUrl)
+        };
+        OnPropertyChanged(nameof(Target));
+        OnPropertyChanged(nameof(DisplayName));
+        OnPropertyChanged(nameof(ThumbnailUrl));
+        OnPropertyChanged(nameof(HasThumbnail));
+        OnPropertyChanged(nameof(CategoryName));
+        OnPropertyChanged(nameof(HasCategory));
+    }
 
     public PlatformKind Platform => Target.Platform;
 

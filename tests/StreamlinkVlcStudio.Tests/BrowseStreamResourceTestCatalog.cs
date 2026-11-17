@@ -3,6 +3,8 @@ internal static class BrowseStreamResourceTestCatalog
     internal static IReadOnlyList<(string Name, Func<Task> Run)> All { get; } =
     [
         ("browse stream resources: Refresh joins an initial load and later refreshes again", ShareLoadAsync),
+        ("workflow loading latency: selecting the current category preserves cards and pagination until Refresh", RepeatCategoryAsync),
+        ("workflow loading latency: selecting the current category during pagination keeps the active page", RepeatCategoryDuringPageAsync),
         ("browse stream resources: unchanged refreshes retain cards and commands without collection changes", PreserveCardsAsync),
         ("browse stream resources: refresh reconciles ordering identities and current metadata", UpdateCardsAsync),
         ("browse stream resources: unavailable refresh retains usable results and pagination", () => FailedRefreshAsync(false)),
@@ -16,6 +18,46 @@ internal static class BrowseStreamResourceTestCatalog
         ("discovery language: desktop changes cancel old results and restart pagination", ChangeLanguageAsync),
         ("browse stream resources: shutdown cancels loading and retained commands start no work", ShutdownAsync)
     ];
+
+    private static Task RepeatCategoryAsync() => RunAsync(async (viewModel, service) =>
+    {
+        await LoadInitialAsync(viewModel, service, [Stream("first")], "next");
+        var category = viewModel.BrowseCategories[0];
+        var card = viewModel.BrowseStreams[0];
+        var repeated = category.SelectCommand.ExecuteAsync();
+        Assert.Equal(1, service.Requests.Count);
+        await repeated;
+        Assert.True(ReferenceEquals(card, viewModel.BrowseStreams.Single()));
+        Assert.True(viewModel.CanLoadMoreBrowseStreams);
+        var more = viewModel.LoadMoreBrowseStreamsCommand.ExecuteAsync();
+        Assert.Equal("next", service.Requests[1].Request.Cursor);
+        service.Requests[1].Complete([Stream("second")]);
+        await more;
+        repeated = category.SelectCommand.ExecuteAsync();
+        Assert.Equal(2, service.Requests.Count);
+        await repeated;
+        Assert.Equal(2, viewModel.BrowseStreams.Count);
+        var refresh = viewModel.RefreshBrowseCommand.ExecuteAsync();
+        Assert.Equal(3, service.Requests.Count);
+        Assert.Equal("", service.Requests[2].Request.Cursor);
+        service.Requests[2].Complete([Stream("fresh")]);
+        await refresh;
+        Assert.Equal("fresh", viewModel.BrowseStreams.Single().Channel);
+    });
+
+    private static Task RepeatCategoryDuringPageAsync() => RunAsync(async (viewModel, service) =>
+    {
+        await LoadInitialAsync(viewModel, service, [Stream("first")], "next");
+        var card = viewModel.BrowseStreams[0];
+        var more = viewModel.LoadMoreBrowseStreamsCommand.ExecuteAsync();
+        var repeated = viewModel.BrowseCategories[0].SelectCommand.ExecuteAsync();
+        Assert.Equal(2, service.Requests.Count);
+        Assert.Equal(false, service.Requests[1].Token.IsCancellationRequested);
+        Assert.True(ReferenceEquals(card, viewModel.BrowseStreams.Single()));
+        service.Requests[1].Complete([Stream("second")]);
+        await Task.WhenAll(more, repeated);
+        Assert.SequenceEqual(new[] { "first", "second" }, viewModel.BrowseStreams.Select(item => item.Channel));
+    });
 
     private static Task ShareLoadAsync() => RunAsync(async (viewModel, service) =>
     {

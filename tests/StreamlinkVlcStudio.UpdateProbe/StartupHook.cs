@@ -1,4 +1,6 @@
 using System.Reflection;
+using System.Resources;
+using System.Security.Cryptography;
 using System.Text.Json;
 
 // Run only by the packaging smoke test, before the actual app entry point.
@@ -84,7 +86,9 @@ internal static class StartupHook
                 BaseDirectory = AppContext.BaseDirectory,
                 ConfiguredDirectory = directory,
                 InstallKind = detect.Invoke(null, [directory])!.ToString(),
-                LiveUpdate = liveUpdate
+                LiveUpdate = liveUpdate,
+                Package = Environment.GetEnvironmentVariable("SVS_UPDATE_PROBE_PACKAGE_RESOURCES") == "true"
+                    ? ProbePackage() : null
             });
             var restartReport = Environment.GetEnvironmentVariable("SVS_UPDATE_PROBE_RESTART_REPORT");
             if (!string.IsNullOrEmpty(restartReport))
@@ -100,6 +104,38 @@ internal static class StartupHook
             Environment.Exit(1);
         }
         Environment.Exit(0);
+    }
+
+    private static object ProbePackage()
+    {
+        var locations = new SortedDictionary<string, string>(StringComparer.Ordinal);
+        var resources = new SortedDictionary<string, string>(StringComparer.Ordinal);
+        var app = Assembly.Load("StreamStudio");
+        foreach (var assembly in new[] { app, Assembly.Load("StreamlinkVlcStudio.Core"), Assembly.Load("StreamlinkVlcStudio.Infrastructure") })
+        {
+            locations.Add(assembly.GetName().Name!, assembly.Location);
+            foreach (var name in assembly.GetManifestResourceNames())
+            {
+                using var stream = assembly.GetManifestResourceStream(name)!;
+                resources.Add(assembly.GetName().Name + "/" + name, Convert.ToHexString(SHA256.HashData(stream)));
+            }
+        }
+
+        using var markup = app.GetManifestResourceStream("StreamStudio.g.resources")
+            ?? throw new InvalidDataException("The packaged WPF resources are missing.");
+        using var reader = new ResourceReader(markup);
+        var keys = reader.Cast<System.Collections.DictionaryEntry>().Select(entry => (string)entry.Key).ToArray();
+        if (!keys.Contains("mainwindow.baml", StringComparer.Ordinal) ||
+            !keys.Contains("assets/studio.ico", StringComparer.Ordinal) ||
+            !resources.Keys.Any(name => name.EndsWith(".LocalWeb.Assets.app.js", StringComparison.Ordinal)) ||
+            !resources.Keys.Any(name => name.StartsWith("StreamStudio/StreamStudio.ReleaseNotes.", StringComparison.Ordinal)))
+            throw new InvalidDataException("The package is missing application resources.");
+
+        return new
+        {
+            ManagedAssemblyLocations = locations, ResourceDigests = resources,
+            WpfResourceCount = keys.Length, RenderedControls = PackageWpfProbe.Verify(app)
+        };
     }
 
     private static object AwaitResult(object value)

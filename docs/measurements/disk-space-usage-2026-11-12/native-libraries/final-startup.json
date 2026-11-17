@@ -1,0 +1,459 @@
+{
+  "MeasuredAtUtc": "2026-11-12T14:19:57.7840554+00:00",
+  "OperatingSystem": "Microsoft Windows NT 10.0.19044.0",
+  "Probe": "updater startup hook",
+  "Sizes": [
+    {
+      "Variant": "baseline",
+      "ExecutableSha256": "2886DEA3D945A78538D8871D9B648B272500072D180A0F03A352DD23B21E82C4",
+      "PublishedBytes": 260022645.0,
+      "ExtractedBytes": 22380600.0,
+      "ExtractedFiles": 10,
+      "TotalBytes": 282403245.0,
+      "FreshExtractionMs": 166.5208,
+      "MedianWarmMs": 124.04185,
+      "P95WarmMs": 126.1735
+    },
+    {
+      "Variant": "candidate",
+      "ExecutableSha256": "977812022CDCB92B664C01B5B5C6482E3D73CDC7602E88B5EE195065147BADA9",
+      "PublishedBytes": 259220573.0,
+      "ExtractedBytes": 0,
+      "ExtractedFiles": 0,
+      "TotalBytes": 259220573.0,
+      "FreshExtractionMs": 124.3766,
+      "MedianWarmMs": 124.2662,
+      "P95WarmMs": 128.2777
+    }
+  ],
+  "Samples": [
+    {
+      "Variant": "baseline",
+      "FreshExtraction": true,
+      "ElapsedMs": 166.5208
+    },
+    {
+      "Variant": "candidate",
+      "FreshExtraction": true,
+      "ElapsedMs": 124.3766
+    },
+    {
+      "Variant": "baseline",
+      "FreshExtraction": false,
+      "ElapsedMs": 124.3055
+    },
+    {
+      "Variant": "candidate",
+      "FreshExtraction": false,
+      "ElapsedMs": 126.4991
+    },
+    {
+      "Variant": "candidate",
+      "FreshExtraction": false,
+      "ElapsedMs": 131.8708
+    },
+    {
+      "Variant": "baseline",
+      "FreshExtraction": false,
+      "ElapsedMs": 126.163
+    },
+    {
+      "Variant": "baseline",
+      "FreshExtraction": false,
+      "ElapsedMs": 124.1164
+    },
+    {
+      "Variant": "candidate",
+      "FreshExtraction": false,
+      "ElapsedMs": 123.8876
+    },
+    {
+      "Variant": "candidate",
+      "FreshExtraction": false,
+      "ElapsedMs": 127.3514
+    },
+    {
+      "Variant": "baseline",
+      "FreshExtraction": false,
+      "ElapsedMs": 124.1946
+    },
+    {
+      "Variant": "baseline",
+      "FreshExtraction": false,
+      "ElapsedMs": 125.9844
+    },
+    {
+      "Variant": "candidate",
+      "FreshExtraction": false,
+      "ElapsedMs": 123.1064
+    },
+    {
+      "Variant": "candidate",
+      "FreshExtraction": false,
+      "ElapsedMs": 124.7209
+    },
+    {
+      "Variant": "baseline",
+      "FreshExtraction": false,
+      "ElapsedMs": 121.9114
+    },
+    {
+      "Variant": "baseline",
+      "FreshExtraction": false,
+      "ElapsedMs": 124.0796
+    },
+    {
+      "Variant": "candidate",
+      "FreshExtraction": false,
+      "ElapsedMs": 123.2179
+    },
+    {
+      "Variant": "candidate",
+      "FreshExtraction": false,
+      "ElapsedMs": 128.5152
+    },
+    {
+      "Variant": "baseline",
+      "FreshExtraction": false,
+      "ElapsedMs": 123.2448
+    },
+    {
+      "Variant": "baseline",
+      "FreshExtraction": false,
+      "ElapsedMs": 125.4735
+    },
+    {
+      "Variant": "candidate",
+      "FreshExtraction": false,
+      "ElapsedMs": 122.5624
+    },
+    {
+      "Variant": "candidate",
+      "FreshExtraction": false,
+      "ElapsedMs": 124.0446
+    },
+    {
+      "Variant": "baseline",
+      "FreshExtraction": false,
+      "ElapsedMs": 121.4891
+    },
+    {
+      "Variant": "baseline",
+      "FreshExtraction": false,
+      "ElapsedMs": 123.2328
+    },
+    {
+      "Variant": "candidate",
+      "FreshExtraction": false,
+      "ElapsedMs": 122.9977
+    },
+    {
+      "Variant": "candidate",
+      "FreshExtraction": false,
+      "ElapsedMs": 125.8171
+    },
+    {
+      "Variant": "baseline",
+      "FreshExtraction": false,
+      "ElapsedMs": 126.013
+    },
+    {
+      "Variant": "baseline",
+      "FreshExtraction": false,
+      "ElapsedMs": 126.5983
+    },
+    {
+      "Variant": "candidate",
+      "FreshExtraction": false,
+      "ElapsedMs": 122.4623
+    },
+    {
+      "Variant": "candidate",
+      "FreshExtraction": false,
+      "ElapsedMs": 123.4266
+    },
+    {
+      "Variant": "baseline",
+      "FreshExtraction": false,
+      "ElapsedMs": 122.507
+    },
+    {
+      "Variant": "baseline",
+      "FreshExtraction": false,
+      "ElapsedMs": 125.1333
+    },
+    {
+      "Variant": "candidate",
+      "FreshExtraction": false,
+      "ElapsedMs": 124.3128
+    },
+    {
+      "Variant": "candidate",
+      "FreshExtraction": false,
+      "ElapsedMs": 127.9273
+    },
+    {
+      "Variant": "baseline",
+      "FreshExtraction": false,
+      "ElapsedMs": 123.8936
+    },
+    {
+      "Variant": "baseline",
+      "FreshExtraction": false,
+      "ElapsedMs": 123.804
+    },
+    {
+      "Variant": "candidate",
+      "FreshExtraction": false,
+      "ElapsedMs": 124.7707
+    },
+    {
+      "Variant": "candidate",
+      "FreshExtraction": false,
+      "ElapsedMs": 124.0809
+    },
+    {
+      "Variant": "baseline",
+      "FreshExtraction": false,
+      "ElapsedMs": 122.9148
+    },
+    {
+      "Variant": "baseline",
+      "FreshExtraction": false,
+      "ElapsedMs": 123.3452
+    },
+    {
+      "Variant": "candidate",
+      "FreshExtraction": false,
+      "ElapsedMs": 128.2777
+    },
+    {
+      "Variant": "candidate",
+      "FreshExtraction": false,
+      "ElapsedMs": 125.9842
+    },
+    {
+      "Variant": "baseline",
+      "FreshExtraction": false,
+      "ElapsedMs": 124.0773
+    },
+    {
+      "Variant": "baseline",
+      "FreshExtraction": false,
+      "ElapsedMs": 125.5663
+    },
+    {
+      "Variant": "candidate",
+      "FreshExtraction": false,
+      "ElapsedMs": 124.9464
+    },
+    {
+      "Variant": "candidate",
+      "FreshExtraction": false,
+      "ElapsedMs": 123.8047
+    },
+    {
+      "Variant": "baseline",
+      "FreshExtraction": false,
+      "ElapsedMs": 122.1955
+    },
+    {
+      "Variant": "baseline",
+      "FreshExtraction": false,
+      "ElapsedMs": 123.4993
+    },
+    {
+      "Variant": "candidate",
+      "FreshExtraction": false,
+      "ElapsedMs": 122.9896
+    },
+    {
+      "Variant": "candidate",
+      "FreshExtraction": false,
+      "ElapsedMs": 123.5033
+    },
+    {
+      "Variant": "baseline",
+      "FreshExtraction": false,
+      "ElapsedMs": 124.0064
+    },
+    {
+      "Variant": "baseline",
+      "FreshExtraction": false,
+      "ElapsedMs": 125.9016
+    },
+    {
+      "Variant": "candidate",
+      "FreshExtraction": false,
+      "ElapsedMs": 122.1258
+    },
+    {
+      "Variant": "candidate",
+      "FreshExtraction": false,
+      "ElapsedMs": 124.5638
+    },
+    {
+      "Variant": "baseline",
+      "FreshExtraction": false,
+      "ElapsedMs": 123.8724
+    },
+    {
+      "Variant": "baseline",
+      "FreshExtraction": false,
+      "ElapsedMs": 123.9447
+    },
+    {
+      "Variant": "candidate",
+      "FreshExtraction": false,
+      "ElapsedMs": 124.7531
+    },
+    {
+      "Variant": "candidate",
+      "FreshExtraction": false,
+      "ElapsedMs": 124.6696
+    },
+    {
+      "Variant": "baseline",
+      "FreshExtraction": false,
+      "ElapsedMs": 123.1257
+    },
+    {
+      "Variant": "baseline",
+      "FreshExtraction": false,
+      "ElapsedMs": 124.4924
+    },
+    {
+      "Variant": "candidate",
+      "FreshExtraction": false,
+      "ElapsedMs": 124.0245
+    },
+    {
+      "Variant": "candidate",
+      "FreshExtraction": false,
+      "ElapsedMs": 124.3162
+    },
+    {
+      "Variant": "baseline",
+      "FreshExtraction": false,
+      "ElapsedMs": 120.6089
+    },
+    {
+      "Variant": "baseline",
+      "FreshExtraction": false,
+      "ElapsedMs": 121.8989
+    },
+    {
+      "Variant": "candidate",
+      "FreshExtraction": false,
+      "ElapsedMs": 123.7139
+    },
+    {
+      "Variant": "candidate",
+      "FreshExtraction": false,
+      "ElapsedMs": 123.631
+    },
+    {
+      "Variant": "baseline",
+      "FreshExtraction": false,
+      "ElapsedMs": 128.4612
+    },
+    {
+      "Variant": "baseline",
+      "FreshExtraction": false,
+      "ElapsedMs": 124.7953
+    },
+    {
+      "Variant": "candidate",
+      "FreshExtraction": false,
+      "ElapsedMs": 124.8509
+    },
+    {
+      "Variant": "candidate",
+      "FreshExtraction": false,
+      "ElapsedMs": 122.7113
+    },
+    {
+      "Variant": "baseline",
+      "FreshExtraction": false,
+      "ElapsedMs": 123.1046
+    },
+    {
+      "Variant": "baseline",
+      "FreshExtraction": false,
+      "ElapsedMs": 124.297
+    },
+    {
+      "Variant": "candidate",
+      "FreshExtraction": false,
+      "ElapsedMs": 123.3709
+    },
+    {
+      "Variant": "candidate",
+      "FreshExtraction": false,
+      "ElapsedMs": 126.0139
+    },
+    {
+      "Variant": "baseline",
+      "FreshExtraction": false,
+      "ElapsedMs": 124.1993
+    },
+    {
+      "Variant": "baseline",
+      "FreshExtraction": false,
+      "ElapsedMs": 126.0233
+    },
+    {
+      "Variant": "candidate",
+      "FreshExtraction": false,
+      "ElapsedMs": 126.6963
+    },
+    {
+      "Variant": "candidate",
+      "FreshExtraction": false,
+      "ElapsedMs": 124.2196
+    },
+    {
+      "Variant": "baseline",
+      "FreshExtraction": false,
+      "ElapsedMs": 122.1877
+    },
+    {
+      "Variant": "baseline",
+      "FreshExtraction": false,
+      "ElapsedMs": 123.1406
+    },
+    {
+      "Variant": "candidate",
+      "FreshExtraction": false,
+      "ElapsedMs": 123.3176
+    },
+    {
+      "Variant": "candidate",
+      "FreshExtraction": false,
+      "ElapsedMs": 125.0085
+    },
+    {
+      "Variant": "baseline",
+      "FreshExtraction": false,
+      "ElapsedMs": 126.1735
+    }
+  ],
+  "Reports": {
+    "baseline": {
+      "ProcessPath": "C:\\Users\\ComputerGuy\\Documents\\streamlink3\\streamlink test2\\streamlink-vlc-studio\\.artifacts\\disk-minimum\\control\\StreamStudio.exe",
+      "BaseDirectory": "C:\\Users\\ComputerGuy\\Documents\\streamlink3\\streamlink test2\\streamlink-vlc-studio\\.artifacts\\disk-minimum\\control\\",
+      "ConfiguredDirectory": "C:\\Users\\ComputerGuy\\Documents\\streamlink3\\streamlink test2\\streamlink-vlc-studio\\.artifacts\\disk-minimum\\control",
+      "InstallKind": "Unmanaged",
+      "LiveUpdate": null,
+      "Package": null
+    },
+    "candidate": {
+      "ProcessPath": "C:\\Users\\ComputerGuy\\Documents\\streamlink3\\streamlink test2\\streamlink-vlc-studio\\.artifacts\\disk-minimum\\final\\StreamStudio.exe",
+      "BaseDirectory": "C:\\Users\\ComputerGuy\\Documents\\streamlink3\\streamlink test2\\streamlink-vlc-studio\\.artifacts\\disk-minimum\\final\\",
+      "ConfiguredDirectory": "C:\\Users\\ComputerGuy\\Documents\\streamlink3\\streamlink test2\\streamlink-vlc-studio\\.artifacts\\disk-minimum\\final",
+      "InstallKind": "Unmanaged",
+      "LiveUpdate": null,
+      "Package": null
+    }
+  }
+}

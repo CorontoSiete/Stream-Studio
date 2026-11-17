@@ -15,4 +15,5 @@ public sealed record TwitchSubOnlyVodResolution(
     string Message,
     TimeSpan MediaDuration = default,
     string OwnerLogin = "",
-    DateTimeOffset? CreatedAtUtc = null);
+    DateTimeOffset? CreatedAtUtc = null,
+    Uri? RemotePlaylistUri = null);

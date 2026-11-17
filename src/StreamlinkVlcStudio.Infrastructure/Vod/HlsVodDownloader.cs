@@ -14,25 +14,24 @@ internal sealed record VodDownloadProgress(int CompletedSegments, int TotalSegme
 internal sealed class HlsVodDownloader(HttpClient client, ReplayUrlSecurityValidator validator,
     VodDownloadBandwidthLimiter bandwidthLimiter)
 {
+    internal async Task<bool> IsCompletedAsync(Uri playlistUri, PlatformKind platform,
+        CancellationToken cancellationToken, bool allowLocalPlaylist = false)
+    {
+        var (content, effectiveUri) = await ReadPlaylistAsync(playlistUri, platform, cancellationToken, allowLocalPlaylist)
+            .ConfigureAwait(false);
+        if (!content.Split('\n').Any(line => line.Trim() == "#EXT-X-ENDLIST")) return false;
+        var playlist = OfflineHlsPlaylist.Parse(content, effectiveUri);
+        ValidateAssets(playlist, platform);
+        return true;
+    }
+
     internal async Task<OfflineVodPackage> DownloadAsync(Uri playlistUri, PlatformKind platform, string directory,
         Func<VodDownloadProgress, Task> progress, CancellationToken cancellationToken, bool allowLocalPlaylist = false)
     {
-        string content;
-        Uri effectiveUri;
-        if (allowLocalPlaylist && platform == PlatformKind.Twitch && playlistUri.IsFile && !playlistUri.IsUnc)
-        {
-            OfflineVodPackage.RequireRegularPath(playlistUri.LocalPath);
-            var bytes = await BoundedByteReader.ReadFileAsync(playlistUri.LocalPath, PayloadLimits.PlaylistBytes, cancellationToken).ConfigureAwait(false)
-                ?? throw new InvalidDataException("The Twitch fallback playlist is missing or too large.");
-            content = new UTF8Encoding(false, true).GetString(bytes);
-            effectiveUri = playlistUri;
-        }
-        else (content, effectiveUri) = await ValidatedReplayHttpClient.ReadPlaylistAsync(client, validator,
-            playlistUri, platform, cancellationToken).ConfigureAwait(false);
+        var (content, effectiveUri) = await ReadPlaylistAsync(playlistUri, platform, cancellationToken, allowLocalPlaylist)
+            .ConfigureAwait(false);
         var playlist = OfflineHlsPlaylist.Parse(content, effectiveUri);
-        foreach (var asset in playlist.Assets)
-            if (!ReplayUrlSecurityValidator.TryValidateProviderUri(asset.Uri, platform))
-                throw new InvalidDataException("The VOD references media outside the approved provider CDN.");
+        ValidateAssets(playlist, platform);
         await progress(new VodDownloadProgress(0, playlist.SegmentCount, 0, playlist.Duration)).ConfigureAwait(false);
         Directory.CreateDirectory(directory);
         OfflineVodPackage.RequireRegularPath(directory);
@@ -57,6 +56,31 @@ internal sealed class HlsVodDownloader(HttpClient client, ReplayUrlSecurityValid
         }).ConfigureAwait(false);
         cancellationToken.ThrowIfCancellationRequested();
         return await OfflineVodPackage.CreateAsync(directory, playlist, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<(string Content, Uri Uri)> ReadPlaylistAsync(Uri playlistUri, PlatformKind platform,
+        CancellationToken cancellationToken, bool allowLocalPlaylist)
+    {
+        string content;
+        Uri effectiveUri;
+        if (allowLocalPlaylist && platform == PlatformKind.Twitch && playlistUri.IsFile && !playlistUri.IsUnc)
+        {
+            OfflineVodPackage.RequireRegularPath(playlistUri.LocalPath);
+            var bytes = await BoundedByteReader.ReadFileAsync(playlistUri.LocalPath, PayloadLimits.PlaylistBytes, cancellationToken).ConfigureAwait(false)
+                ?? throw new InvalidDataException("The Twitch fallback playlist is missing or too large.");
+            content = new UTF8Encoding(false, true).GetString(bytes);
+            effectiveUri = playlistUri;
+        }
+        else (content, effectiveUri) = await ValidatedReplayHttpClient.ReadPlaylistAsync(client, validator,
+            playlistUri, platform, cancellationToken).ConfigureAwait(false);
+        return (content, effectiveUri);
+    }
+
+    private static void ValidateAssets(OfflineHlsPlaylist playlist, PlatformKind platform)
+    {
+        foreach (var asset in playlist.Assets)
+            if (!ReplayUrlSecurityValidator.TryValidateProviderUri(asset.Uri, platform))
+                throw new InvalidDataException("The VOD references media outside the approved provider CDN.");
     }
 
     private async Task<long> DownloadAssetAsync(OfflineHlsAsset asset, PlatformKind platform, string path,

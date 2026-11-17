@@ -207,11 +207,17 @@ internal static class VodWatchedCompletionTestCatalog
     internal static async Task AssertPersistedAsync(VodResumeTestCatalog.HistoryFiles files,
         IVodPlaybackHistory history, StreamTarget target)
     {
-        // A read on the existing history waits for the save it has already queued, without
-        // requesting another write or holding the destination open against atomic replacement.
-        // No checkpoint timer or tab close should be needed to start that save.
-        await history.GetAsync(target);
-        var saved = await files.Create().GetAsync(target);
+        // Cached reads deliberately do not wait for disk writes. Observe the EOF save
+        // from a fresh reader without starting another save or closing the tab.
+        Assert.True(await history.GetAsync(target) is { Completed: true, HasBeenWatched: true });
+        VodPlaybackBookmark? saved;
+        var elapsed = Stopwatch.StartNew();
+        do
+        {
+            saved = await files.Create().GetAsync(target);
+            if (saved is { Completed: true, HasBeenWatched: true }) break;
+            await Task.Delay(10);
+        } while (elapsed.Elapsed < TimeSpan.FromSeconds(3));
         Assert.True(saved is { Completed: true, HasBeenWatched: true });
         Assert.Equal(saved!.Duration, saved.Position);
     }

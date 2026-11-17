@@ -53,41 +53,8 @@ internal static class HlsReplayTimeline
         return ParsePublishedDuration(content);
     }
 
-    internal static TimeSpan? ParsePublishedDuration(string content)
-    {
-        var lines = HlsPlaylistPolicy.SplitLines(content);
-        if (lines.Length == 0 || lines[0] != "#EXTM3U" ||
-            HlsPlaylistPolicy.HasSkippedSegments(lines) ||
-            lines.Any(line => line.StartsWith("#EXT-X-STREAM-INF:", StringComparison.Ordinal))) return null;
-
-        decimal seconds = 0;
-        decimal? pending = null;
-        var segments = 0;
-        foreach (var line in lines)
-        {
-            if (line.StartsWith("#EXT-X-MEDIA-SEQUENCE:", StringComparison.Ordinal) &&
-                (!long.TryParse(line[22..], NumberStyles.None, CultureInfo.InvariantCulture, out var sequence) || sequence != 0))
-                return null;
-            if (line.StartsWith("#EXTINF:", StringComparison.Ordinal))
-            {
-                if (pending.HasValue ||
-                    !HlsPlaylistPolicy.TryReadSegmentDuration(line.AsSpan(8), 3600, out var duration)) return null;
-                pending = duration;
-            }
-            else if (line[0] != '#')
-            {
-                if (!pending.HasValue) return null;
-                seconds += pending.Value;
-                if (seconds > 14 * 24 * 60 * 60) return null;
-                pending = null;
-                segments++;
-            }
-        }
-
-        return segments > 0 && !pending.HasValue
-            ? TimeSpan.FromTicks((long)(seconds * TimeSpan.TicksPerSecond))
-            : null;
-    }
+    internal static TimeSpan? ParsePublishedDuration(string content) =>
+        HlsPlaylistPolicy.ReadPublishedDuration(HlsPlaylistPolicy.SplitLines(content));
 
     internal static async Task<PlaybackMediaSource> PrepareAsync(
         PlaybackMediaSource source, TimeSpan position, CancellationToken cancellationToken,
@@ -150,9 +117,9 @@ internal static class HlsReplayTimeline
                 line.StartsWith("#EXT-X-BYTERANGE:", StringComparison.Ordinal) ||
                 (line.StartsWith('#') && line.Contains("URI=", StringComparison.OrdinalIgnoreCase)))) return null;
 
-        var segments = new List<(int Start, int End, TimeSpan Time)>();
+        var segments = new List<(int End, TimeSpan Time)>();
         var elapsed = TimeSpan.Zero;
-        var pendingStart = -1;
+        var waitingForSegment = false;
         var duration = TimeSpan.Zero;
         long sequence = 0, discontinuitySequence = 0;
         for (var i = 0; i < lines.Length; i++)
@@ -164,25 +131,25 @@ internal static class HlsReplayTimeline
                 discontinuitySequence = long.Parse(line[30..], CultureInfo.InvariantCulture);
             else if (line.StartsWith("#EXTINF:", StringComparison.Ordinal))
             {
-                if (pendingStart >= 0) throw new InvalidDataException("Replay playlist has a missing media segment.");
+                if (waitingForSegment) throw new InvalidDataException("Replay playlist has a missing media segment.");
                 if (!HlsPlaylistPolicy.TryReadSegmentDuration(line.AsSpan(8), 3600, out var seconds))
                     throw new InvalidDataException("Replay playlist has an invalid segment duration.");
                 duration = TimeSpan.FromTicks(checked((long)(seconds * TimeSpan.TicksPerSecond)));
-                pendingStart = i;
+                waitingForSegment = true;
             }
             else if (line[0] != '#')
             {
-                if (pendingStart < 0) throw new InvalidDataException("Replay playlist has an unpaired media segment.");
+                if (!waitingForSegment) throw new InvalidDataException("Replay playlist has an unpaired media segment.");
                 var segmentUri = new Uri(uri, line);
                 if (!segmentUri.AbsolutePath.EndsWith(".ts", StringComparison.OrdinalIgnoreCase)) return null;
                 ValidateSegment(uri, segmentUri);
                 lines[i] = segmentUri.AbsoluteUri;
-                segments.Add((pendingStart, i, elapsed));
+                segments.Add((i, elapsed));
                 elapsed += duration;
-                pendingStart = -1;
+                waitingForSegment = false;
             }
         }
-        if (pendingStart >= 0) throw new InvalidDataException("Replay playlist has a missing media segment.");
+        if (waitingForSegment) throw new InvalidDataException("Replay playlist has a missing media segment.");
         if (segments.Count == 0) return null;
         // Keep one preceding segment for decoder preroll, including exact segment boundaries.
         var selected = segments.FindLastIndex(segment => segment.Time <= position);

@@ -71,6 +71,23 @@ internal static partial class OfflineFollowedChannelsTestCatalog
         Assert.Equal(2, fixture.HistoryRequests);
     }
 
+    private static async Task KickOfflineHistoryBeforeBannerAsync()
+    {
+        using var fixture = new KickBannerFixture { BlockBanner = true };
+        var pending = fixture.LoadAsync();
+        var result = await pending.WaitAsync(TimeSpan.FromSeconds(3));
+        var card = result.OfflineChannels!.Single();
+        Assert.Equal(1, fixture.HistoryRequests);
+        Assert.Equal(MetadataNow.AddDays(-1), card.LastLiveAtUtc);
+        Assert.Equal(KickBannerFixture.ApiBanner, card.BannerImageUrl);
+        fixture.BlockBanner = false;
+        fixture.Clock.Advance(TimeSpan.FromSeconds(31));
+        var recovered = (await fixture.LoadAsync()).OfflineChannels!.Single();
+        Assert.Equal("https://images.example/working.webp", recovered.BannerImageUrl);
+        Assert.Equal(MetadataNow.AddDays(-1), recovered.LastLiveAtUtc);
+        Assert.Equal(2, fixture.BannerRequests);
+    }
+
     private sealed class KickBannerFixture : IDisposable
     {
         internal const string ApiBanner = "https://images.example/stale-api-banner";
@@ -79,6 +96,7 @@ internal static partial class OfflineFollowedChannelsTestCatalog
         internal ManualTimeProvider Clock { get; } = new(MetadataNow);
         internal string BannerBody { get; set; } = """{"id":42,"slug":"artwork","offline_banner_image":{"src":"https://images.example/inaccessible.jpg","srcset":"https://images.example/working.webp 702w"}}""";
         internal bool BlockHistory { get; set; }
+        internal bool BlockBanner { get; set; }
         internal int BannerRequests { get; private set; }
         internal int HistoryRequests { get; private set; }
 
@@ -94,6 +112,7 @@ internal static partial class OfflineFollowedChannelsTestCatalog
                     if (uri.AbsolutePath == "/api/v2/channels/artwork")
                     {
                         BannerRequests++;
+                        if (BlockBanner) await Task.Delay(Timeout.InfiniteTimeSpan, token);
                         return Response(BannerBody);
                     }
                     Assert.Equal("/api/v2/channels/artwork/videos", uri.AbsolutePath);

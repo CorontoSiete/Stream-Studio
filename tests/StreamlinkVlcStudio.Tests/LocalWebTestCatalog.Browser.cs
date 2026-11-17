@@ -16,10 +16,10 @@ internal static partial class LocalWebTestCatalog
     private static Task BrowserCategoryArtworkAsync() => BrowserAsync(false, categoryArtwork: true);
     private static Task BrowserFollowingLastLiveAsync() => BrowserAsync(false, lastLive: true);
     private static Task BrowserAsync(bool experience, bool overlay = false, bool desktopSignIn = false, bool volume = false, bool vodChat = false, bool publicVodChat = false,
-        bool categoryArtwork = false, bool lastLive = false, bool prefetch = false) => TestSta.RunOffscreenAsync(async () =>
+        bool categoryArtwork = false, bool lastLive = false, bool prefetch = false, bool liveSeek = false, bool fullArchive = false) => TestSta.RunOffscreenAsync(async () =>
     {
         using var certificate = Certificate();
-        var workspace = new BrowserWorkspace { Experience = experience, Overlay = overlay, CategoryArtwork = categoryArtwork, LastLive = lastLive, Prefetch = prefetch, PlayerPlatform = prefetch ? "Kick" : "Twitch" };
+        var workspace = new BrowserWorkspace { Experience = experience, Overlay = overlay, CategoryArtwork = categoryArtwork, LastLive = lastLive, Prefetch = prefetch, LiveSeek = liveSeek, FullArchive = fullArchive, PlayerPlatform = prefetch ? "Kick" : "Twitch" };
         await using var server = await Server(certificate, () => workspace);
         if (volume) await server.Users.AddAsync("otherviewer", "Other viewer password 123!");
         workspace.Address = server.Address;
@@ -62,6 +62,16 @@ internal static partial class LocalWebTestCatalog
             core.Navigate(server.Address.AbsoluteUri);
             await WaitBrowser(core, "document.readyState==='complete' && !!document.querySelector('#password')");
             await core.ExecuteScriptAsync($"document.querySelector('#username').value={JsonSerializer.Serialize(TestUsername)}");
+            if (fullArchive)
+            {
+                await CheckBrowserFullArchive(core, controller, workspace);
+                return;
+            }
+            if (liveSeek)
+            {
+                await CheckBrowserLiveSeek(core, controller, workspace);
+                return;
+            }
             if (lastLive)
             {
                 await CheckBrowserFollowingLastLive(core, controller, workspace, TestPassword);
@@ -178,6 +188,7 @@ internal static partial class LocalWebTestCatalog
                 "settings" => new { defaultQuality = "best", lowLatency = true, qualities = new[] { "best", "720p" }, accounts = new { twitch = true, kick = true } },
                 "following" => new { items = new[] { new { key = "fixture", channel = "streamer", displayName = "<script>window.injected=true</script>", title = "Browser HLS playback fixture", platform = "Twitch", state = "Live", thumbnailUrl = "" } } },
                 "open" => Open(input),
+                "live/archive" => FullArchive ? FullArchiveState(input) : new { available = false },
                 "channel/profile" => new
                 {
                     displayName = "Northstar",
@@ -242,6 +253,8 @@ internal static partial class LocalWebTestCatalog
         private object Open(JsonElement input)
         {
             var id = "fixture" + ++opened;
+            if (FullArchive && input.TryGetProperty("liveArchive", out var archive) && archive.GetBoolean())
+                return OpenFullArchive(id, input);
             if (PublicVodTarget is { } target)
             {
                 publicVodMedia = new LocalWebMedia(id, new Uri(target.Url));
@@ -285,6 +298,11 @@ internal static partial class LocalWebTestCatalog
         }
         public async Task ServeMediaAsync(HttpContext context, string playbackId, string resourceId)
         {
+            if (fullArchiveMedia.TryGetValue(playbackId, out var archive) && archive.ContainsResource(resourceId))
+            {
+                await archive.ServeAsync(context, resourceId);
+                return;
+            }
             if (publicVodMedia is { } media)
             {
                 await media.ServeAsync(context, resourceId);
@@ -299,6 +317,15 @@ internal static partial class LocalWebTestCatalog
             var directory = Path.Combine(AppContext.BaseDirectory, "Fixtures", "replay-position-event");
             if (resourceId == "root")
             {
+                if (LiveSeek)
+                {
+                    context.Response.ContentType = "application/vnd.apple.mpegurl";
+                    context.Response.Headers.CacheControl = "no-store";
+                    var start = Volatile.Read(ref LiveWindowStart);
+                    var segments = string.Join("", Enumerable.Range(start, Math.Min(5, 6 - start)).Select(i => $"#EXTINF:10.000000,\n/media/{playbackId}/index{i}.ts\n"));
+                    await context.Response.WriteAsync($"#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:10\n#EXT-X-MEDIA-SEQUENCE:{start}\n{segments}", context.RequestAborted);
+                    return;
+                }
                 var playlist = await File.ReadAllTextAsync(Path.Combine(directory, "index.m3u8"), context.RequestAborted);
                 playlist = System.Text.RegularExpressions.Regex.Replace(playlist, @"(?m)^(index\d+\.ts)\r?$", $"/media/{playbackId}/$1");
                 context.Response.ContentType = "application/vnd.apple.mpegurl";
@@ -308,6 +335,6 @@ internal static partial class LocalWebTestCatalog
                 await Results.File(Path.Combine(directory, resourceId), "video/mp2t", enableRangeProcessing: true).ExecuteAsync(context);
             else context.Response.StatusCode = 404;
         }
-        public ValueTask DisposeAsync() { publicVodMedia?.Dispose(); artworkHttp?.Dispose(); return ValueTask.CompletedTask; }
+        public ValueTask DisposeAsync() { publicVodMedia?.Dispose(); artworkHttp?.Dispose(); foreach (var media in fullArchiveMedia.Values) media.Dispose(); return ValueTask.CompletedTask; }
     }
 }

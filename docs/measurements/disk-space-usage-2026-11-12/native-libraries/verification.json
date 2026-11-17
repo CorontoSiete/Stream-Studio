@@ -1,0 +1,14 @@
+{
+  "OriginalResourceDigestsMatch": true,
+  "NativeFilesVerified": 10,
+  "ManagedBundleCompression": false,
+  "FullBundleExtraction": false,
+  "NativeBundleExtraction": false,
+  "ReferenceDocumentationPublished": false,
+  "StagedHelperRunsWithoutNativeLibraries": true,
+  "NegativeControlRejectsExtractingLayout": true,
+  "NegativeControlRejectsWpfDependentHelper": true,
+  "FinalExecutableSha256": "977812022CDCB92B664C01B5B5C6482E3D73CDC7602E88B5EE195065147BADA9",
+  "FinalUpdateTestsPassed": 124,
+  "FinalUpdateTestsSkipped": 0
+}

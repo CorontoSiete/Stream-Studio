@@ -38,7 +38,7 @@ $versionScript = [string]$versionSteps[0].Script
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('StreamStudio-workflow-tests-' + [Guid]::NewGuid().ToString('N'))
 $environmentPath = Join-Path $testRoot 'github-env.txt'
 $savedEnvironment = @{}
-foreach ($name in @('GITHUB_REF', 'GITHUB_REF_NAME', 'GITHUB_ENV')) {
+foreach ($name in @('GITHUB_REF', 'GITHUB_REF_NAME', 'GITHUB_ENV', 'GITHUB_ACTIONS', 'RUNNER_OS', 'GITHUB_REPOSITORY')) {
     $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
 }
 $previousExitCode = Get-Variable -Name LASTEXITCODE -Scope Global -ErrorAction SilentlyContinue
@@ -91,6 +91,38 @@ try {
         $result.Metadata['RELEASE_TAG'] -ceq 'v9.8.7' -and $result.Metadata['IS_STABLE_TAG'] -ceq 'true') `
         'Stable release metadata no longer preserves the exact tag version.'
     Write-Host 'PASS workflow: stable tags produce exact versioned build metadata'
+
+    $workflowText = [IO.File]::ReadAllText($workflowPath)
+    $updaterText = [IO.File]::ReadAllText((Join-Path $repoRoot 'src\StreamlinkVlcStudio.Infrastructure\Updates\StagedAppUpdateService.cs'))
+    $trustedRepository = [regex]::Match($updaterText, 'private const string Repository = "([^"]+)";').Groups[1].Value
+    $releaseRepository = [regex]::Match($workflowText, '(?m)^      RELEASE_REPOSITORY: ([^\r\n]+)$').Groups[1].Value
+    Assert-Workflow ($trustedRepository -ne '' -and $releaseRepository -ceq $trustedRepository) `
+        'Signed releases must retain the repository identity trusted by installed updaters after a GitHub rename.'
+    Write-Host 'PASS workflow: signed release identity stays compatible with installed updaters'
+
+    $tokens = $null
+    $parseErrors = $null
+    $upgradeScript = [Management.Automation.Language.Parser]::ParseFile(
+        (Join-Path $repoRoot 'scripts\test-published-upgrade.ps1'), [ref]$tokens, [ref]$parseErrors)
+    $runnerGuard = $upgradeScript.EndBlock.Statements | Where-Object {
+        $_ -is [Management.Automation.Language.IfStatementAst]
+    } | Select-Object -First 1
+    Assert-Workflow ($null -ne $runnerGuard) 'The installer verification runner restriction is missing.'
+    foreach ($fixture in @(
+            @{ Actions = 'true'; OS = 'Windows'; Repository = 'CorontoSiete/streamlink-vlc-studio'; Allowed = $true },
+            @{ Actions = 'true'; OS = 'Windows'; Repository = 'CorontoSiete/Stream-Studio'; Allowed = $true },
+            @{ Actions = 'true'; OS = 'Windows'; Repository = 'Other/Stream-Studio'; Allowed = $false },
+            @{ Actions = 'false'; OS = 'Windows'; Repository = 'CorontoSiete/Stream-Studio'; Allowed = $false },
+            @{ Actions = 'true'; OS = 'Linux'; Repository = 'CorontoSiete/Stream-Studio'; Allowed = $false })) {
+        $env:GITHUB_ACTIONS = $fixture.Actions
+        $env:RUNNER_OS = $fixture.OS
+        $env:GITHUB_REPOSITORY = $fixture.Repository
+        $allowed = $true
+        try { & ([scriptblock]::Create($runnerGuard.Extent.Text)) }
+        catch { $allowed = $false }
+        Assert-Workflow ($allowed -eq $fixture.Allowed) 'Installer verification accepted an unsafe runner or rejected the renamed repository.'
+    }
+    Write-Host 'PASS workflow: installation verification allows both repository names only on disposable Windows Actions'
 
     foreach ($workflow in Get-ChildItem -LiteralPath (Join-Path $repoRoot '.github\workflows') -Filter '*.yml' -File) {
         foreach ($step in Get-WorkflowRunScripts $workflow.FullName) {

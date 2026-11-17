@@ -17,7 +17,7 @@ public enum VodDownloadState
 
 public sealed record VodDownloadOptions(string StreamlinkPath, IReadOnlyList<string> CustomArguments);
 
-public sealed record VodDownloadRequest(StreamTarget Target, string Quality, VodDownloadOptions Options);
+public sealed record VodDownloadRequest(StreamTarget Target, string Quality, VodDownloadOptions Options, bool IsAutomatic = false);
 
 public sealed record VodDownloadItem(
     Guid Id,
@@ -34,7 +34,8 @@ public sealed record VodDownloadItem(
     long Revision = 0,
     VodDownloadFormat Format = VodDownloadFormat.Hls,
     VodDownloadFormat? RequestedFormat = null,
-    string MediaFolder = "media")
+    string MediaFolder = "media",
+    bool IsAutomatic = false)
 {
     [JsonIgnore]
     public bool IsActive => State is VodDownloadState.Queued or VodDownloadState.Resolving or VodDownloadState.Downloading or

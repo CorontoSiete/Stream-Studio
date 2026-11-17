@@ -1,0 +1,145 @@
+Using .NET SDK 10.0.403 at C:\Users\ComputerGuy\Documents\streamlink3\streamlink test2\streamlink-vlc-studio\.dotnet-sdk\dotnet.exe
+dotnet build StreamlinkVlcStudio.sln --configuration Release --no-restore -warnaserror
+  StreamlinkVlcStudio.Maintenance -> C:\Users\ComputerGuy\Documents\streamlink3\streamlink test2\streamlink-vlc-studio\src\StreamlinkVlcStudio.Maintenance\bin\Release\net10.0-windows10.0.19041.0\win-x64\StreamStudio.Maintenance.dll
+  StreamlinkVlcStudio.Bootstrapper -> C:\Users\ComputerGuy\Documents\streamlink3\streamlink test2\streamlink-vlc-studio\src\StreamlinkVlcStudio.Bootstrapper\bin\Release\net10.0-windows10.0.19041.0\win-x64\StreamStudio.Bootstrapper.dll
+  StreamlinkVlcStudio.AccountService -> C:\Users\ComputerGuy\Documents\streamlink3\streamlink test2\streamlink-vlc-studio\src\StreamlinkVlcStudio.AccountService\bin\Release\net10.0\StreamlinkVlcStudio.AccountService.dll
+  StreamlinkVlcStudio.Core -> C:\Users\ComputerGuy\Documents\streamlink3\streamlink test2\streamlink-vlc-studio\src\StreamlinkVlcStudio.Core\bin\Release\net10.0\StreamlinkVlcStudio.Core.dll
+  Verified 2 pinned native overlay inputs from C:\Users\ComputerGuy\Documents\streamlink3\streamlink test2\streamlink-vlc-studio\src\StreamlinkVlcStudio.Infrastructure\Vlc\BundledOverlay.
+  Verified bundled VLC 3.0.23 condition-wait and replay-clock core (d1dbe4b571422df97c73e25ce357cc28c82d703b475f8dc5b8c6c7203da4549c).
+  StreamlinkVlcStudio.Infrastructure -> C:\Users\ComputerGuy\Documents\streamlink3\streamlink test2\streamlink-vlc-studio\src\StreamlinkVlcStudio.Infrastructure\bin\Release\net10.0\StreamlinkVlcStudio.Infrastructure.dll
+  StreamlinkVlcStudio.App.Wpf -> C:\Users\ComputerGuy\Documents\streamlink3\streamlink test2\streamlink-vlc-studio\src\StreamlinkVlcStudio.App.Wpf\bin\Release\net10.0-windows10.0.19041.0\StreamStudio.dll
+  StreamlinkVlcStudio.Tests -> C:\Users\ComputerGuy\Documents\streamlink3\streamlink test2\streamlink-vlc-studio\tests\StreamlinkVlcStudio.Tests\bin\Release\net10.0-windows10.0.19041.0\StreamlinkVlcStudio.Tests.dll
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:55.87
+Running filter 'update' (interactive desktop; maximum skips: 0).
+dotnet test tests\StreamlinkVlcStudio.Tests\StreamlinkVlcStudio.Tests.csproj --configuration Release --no-restore --no-build
+  PASS recent stream controller isolates transient hints and status updates
+  PASS native replay overlay scheduler coalesces rapid updates to latest frame
+  PASS native overlay updates ignore unstarted overlay process handles
+  PASS multi-stream mode toggle keeps live video surfaces mounted and updates current layout
+  PASS dock width drag updates docked chat setting without chat or playback restart
+  PASS detached window resize updates remembered picture-in-picture bounds before close
+  PASS signed updater verifies release and reuses its 24-hour cache
+  PASS updater trust roots match the release signing key
+  PASS signed updater rejects tampering newer protocols and asset mismatch
+  PASS update snoozing is version-specific and expires after 24 hours
+  PASS completed updater cleanup removes staged operation files
+  PASS updater retains and revalidates installers after failed or canceled installation
+  PASS signed updater refreshes malformed cached release assets
+  PASS updater cleans up stalled transfers and distinguishes user cancellation
+  PASS updater keeps downloading while slow transfers make progress
+  PASS signed updater restores verified downloads across restarts
+  PASS signed updater rejects staged package and metadata tampering
+  PASS signed updater recovers from missing truncated and invalid staged packages
+  PASS signed updater removes failed and canceled downloads
+  PASS signed updater refreshes future-dated cache after clock rollback
+  PASS signed updater refuses current-version downloads
+  PASS signed updater rejects modified helpers before starting a process
+  PASS updater skips malformed completion records and reports failed installs
+  PASS automatic updater continues after failures and throughout long sessions
+  PASS automatic updater survives unrelated completion cancellation
+  PASS automatic updater honors disabled and busy states without restarting
+  PASS update UI cancels downloads and disables conflicting actions
+  PASS update UI only closes after the helper actually starts
+  PASS update helper maps real installer completion codes
+  PASS signed updater keeps a prepared installer after a failed or canceled refresh
+  PASS signed updater preserves prepared trust when a newer refresh is canceled
+  PASS automatic updater retries preparation failures without installing
+  PASS automatic update downloads are opt-in and preserve settings
+  PASS automatic updater only downloads eligible installed releases
+  PASS automatic updater prepares downloads without restarting
+  PASS automatic updater cancellation pauses that version for the session
+  PASS automatic updater stops downloading when preferences are disabled
+  PASS update UI retries failed downloads without another release check
+  PASS update UI keeps snoozed prepared updates hidden until manual action
+  PASS local web: offline last-live browser updates cards and sidebar without losing focus
+  PASS account sign-in: badges, account names and accessible labels update in wide and compact layouts
+  PASS changelog: failed canceled reboot and stale update results select the correct installed version
+  PASS changelog: startup waits for the installation result even with update checks disabled
+  PASS changelog: unreadable update results still allow offline version detection
+  PASS changelog: closing before presentation keeps the update pending for the next launch
+  PASS changelog: update instructions stay separate without losing notes or splitting code samples
+  PASS VOD downloads: recover fully committed media after an interrupted metadata update
+  PASS VOD downloads: replacing download settings updates the shared limit and releases old preferences
+  PASS playback speed control: clock samples from before a speed change cannot update replay
+  PASS playback speed control: clock updates queued before a speed change cannot update the seekbar
+  PASS VOD watch progress: playback and backward seeks update existing cards until confirmed completion
+  PASS VOD watch progress: thumbnail badges and bars render and update in dark theme
+  PASS VOD watch progress: thumbnail badges and bars render and update in light theme
+  PASS review robustness: automatic updater survives completion diagnostics failures
+  PASS review robustness: automatic updater survives retry diagnostics failures
+  PASS signed updater refreshes cached release metadata when retrying a failed download
+  PASS signed updater preserves available download retry and notification actions after failed refresh
+  PASS signed updater retry rejects invalid replacement metadata and preserves prior trust
+  PASS update UI checks for newer releases independently of download and install actions
+  PASS update UI blocks manual refresh while busy and recovers after failed checks
+  PASS update UI serializes manual actions while saving snooze preferences
+  PASS updater release protocol and installed path remain compatible with 1.7.0
+  PASS updater cleans obsolete packages and expired cache at startup without a network check
+  PASS updater removes superseded packages only after the replacement is verified
+  PASS updater cleanup removes read-only cache files
+  PASS updater cleanup removes unlocked siblings and retries locked leftovers
+  PASS updater cleanup expires verified packages even when directory timestamps are refreshed
+  PASS updater expires prepared packages during a long-running session and recovers offline
+  PASS updater rejects expired and future-dated prepared packages before launch
+  PASS updater cleanup isolates unsafe cache areas and preserves junction targets
+  PASS updater reports completion when its result is locked against deletion
+  PASS updater reports successful installation despite unsafe operation cleanup
+  PASS update helper defers relaunch for reboot and recovers after canceled setup
+  PASS update helper reopens the app when completion persistence stays locked
+  PASS update helper retries a transient completion write lock before relaunch
+  PASS updater retries incomplete current-version installs after restart corruption and cache expiration
+  PASS updater clears the repair notice only after the installed runtime check succeeds
+  PASS updater successful retry supersedes a failed marker while the cached installer is locked
+  PASS updater ignores invalid and unrelated persistent repair notices
+  PASS signed updater accepts new dependency minima and rejects missing malformed and overflowed versions
+  PASS update helper requires a successful bounded installed dependency check
+  PASS updater reads the dependency capability from MSI metadata and refuses legacy or malformed declarations
+  PASS updater records install intent before launch and recovers without a helper completion
+  PASS updater recovery record locks prevent launch and preserve the verified installer
+  PASS updater helper launch failure preserves recovery and allows another attempt
+  PASS updater successful completion clears the prelaunch repair notice
+  PASS ZIP updater checks downloads and restarts without opening a browser
+  PASS ZIP updater restores verified packages and rejects changed installation types
+  PASS ZIP updater rejects substituted release assets and damaged downloads
+  PASS ZIP updater repairs interrupted same-version installations
+  PASS ZIP update helper rejects unsafe archives before installation
+  PASS ZIP update helper rejects excessive and ambiguous archive payloads
+  PASS ZIP update helper locks authenticated files and preserves argument boundaries
+  PASS ZIP update helper handles real PowerShell success cancellation failure and reboot
+  PASS ZIP update helper rejects the wrong payload version without starting installation
+  PASS ZIP update helper reopens the correct executable after installation
+  PASS responsive clipping update banner text and actions remain reachable in narrow and short windows
+  PASS studio experience: Enter queues a download once and the empty library updates immediately
+  PASS never mute tab indicators update realized tabs and compact choices
+  PASS Bootstrapper install requests repair registered bundles for current and legacy update helpers
+  PASS Kick identity snapshots remain serializable during concurrent updates
+  PASS Update command reports status and requests shutdown after launch
+  PASS Update command keeps app open when updater reports latest version
+  PASS review: update checks leave the checking state after timeout or cancellation
+  PASS repository audit: bookmark observers cannot interrupt history updates
+  PASS repository audit: update observers cannot interrupt update checks
+  PASS repository review: updater disposal preserves in-flight errors
+  PASS skip hotkeys: physical right click opens the slider and dragging updates only its direction
+  PASS recent refresh resources: fast channels update before slow channels with one settings save
+  PASS home refresh resources: followed changes update surviving cards and commands
+  PASS paged refresh resources: TwitchVod updates metadata ordering and commands in place
+  PASS paged refresh resources: KickVod updates metadata ordering and commands in place
+  PASS paged refresh resources: Categories updates metadata ordering and commands in place
+  PASS background workflow resources: queued log callbacks do not update a disposed view model
+  PASS chat catalog resources: global updates stay within their platform
+  PASS Twitch bonuses observe replaced and updated followed cards without reloading metadata
+  PASS Kick category progress: replaced searches and shutdown reject late updates
+  PASS Kick category progress: queued updates cannot replace final results
+  PASS polling lifecycle: queued viewer updates are ignored after polling stops
+  PASS offline followed channels: superseded optional metadata cannot update displayed cards
+  PASS offline followed channels: unchanged refreshes reuse cards and commands while metadata updates
+  PASS offline followed channels: pinned refreshes reuse commands and update channel metadata
+  PASS offline followed channels: replacing settings updates pin order and releases old settings
+  PASS emoji titles: title bindings survive updates nulls and recycled data contexts
+  All 124 tests passed; 0 skipped.
+Test completed successfully.

@@ -273,6 +273,13 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     public ObservableCollection<VodChannelSearchResultViewModel> VodChannelSearchResults => vodLibrary.VodChannelSearchResults;
 
     public ObservableCollection<VodDownloadViewModel> VodDownloads => downloads.VodDownloads;
+    public ObservableCollection<AutoDownloadChannelViewModel> AutoDownloadChannels => downloads.AutoDownloadChannels;
+    public bool HasAutoDownloadChannels => downloads.HasAutoDownloadChannels;
+    public string AutoDownloadChannelStatus => downloads.AutoDownloadChannelStatus;
+    public int AutoDownloadCompletedCount => downloads.AutoDownloadCompletedCount;
+    public long AutoDownloadStorageBytes => downloads.AutoDownloadStorageBytes;
+    public string AutoDownloadCompletedText => downloads.AutoDownloadCompletedText;
+    public string AutoDownloadStorageText => downloads.AutoDownloadStorageText;
     public bool HasVodDownloads => downloads.HasVodDownloads;
     public string DownloadsStatus => downloads.DownloadsStatus;
     public string DownloadDirectory => downloads.DownloadDirectory;

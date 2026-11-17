@@ -9,6 +9,7 @@ const assert = require('node:assert/strict');
 const root = path.resolve(__dirname, '../..');
 const loginMode = process.argv.includes('--login-only');
 const searchMode = process.argv.includes('--search-only');
+const loadingMode = process.argv.includes('--loading-only');
 const discoveryLanguageMode = process.argv.includes('--discovery-language-only');
 const deleteMode = process.argv.includes('--downloads-delete-only');
 const vodLibraryMode = process.argv.includes('--vod-library-only');
@@ -18,7 +19,8 @@ const multistreamMode = process.argv.includes('--multistream-only');
 const volumeWheelMode = process.argv.includes('--volume-wheel-only');
 const sidebarMode = process.argv.includes('--sidebar-only');
 const mobileControlsMode = process.argv.includes('--mobile-controls-only');
-const output = path.join(root, discoveryLanguageMode ? '.artifacts/web-discovery-language' : vodLibraryMode ? '.artifacts/web-vod-library' : mobileControlsMode ? '.artifacts/web-mobile-controls' : loginMode ? '.artifacts/web-login' : sidebarMode ? '.artifacts/web-sidebar' : multistreamMode ? '.artifacts/web-multistream' : hotkeyMode ? '.artifacts/web-hotkeys' : settingsMode ? '.artifacts/web-settings' : volumeWheelMode ? '.artifacts/web-volume-wheel' : deleteMode ? '.artifacts/web-download-delete' : searchMode ? '.artifacts/web-search' : '.artifacts/player-navigation');
+const seekPreviewMode = process.argv.includes('--seek-preview-only');
+const output = path.join(root, seekPreviewMode ? '.artifacts/web-seek-preview' : discoveryLanguageMode ? '.artifacts/web-discovery-language' : vodLibraryMode ? '.artifacts/web-vod-library' : mobileControlsMode ? '.artifacts/web-mobile-controls' : loginMode ? '.artifacts/web-login' : sidebarMode ? '.artifacts/web-sidebar' : multistreamMode ? '.artifacts/web-multistream' : hotkeyMode ? '.artifacts/web-hotkeys' : settingsMode ? '.artifacts/web-settings' : volumeWheelMode ? '.artifacts/web-volume-wheel' : deleteMode ? '.artifacts/web-download-delete' : searchMode ? '.artifacts/web-search' : '.artifacts/player-navigation');
 const assets = path.join(root, 'src/StreamlinkVlcStudio.Infrastructure/LocalWeb/Assets');
 const mediaFixture = path.join(root, 'tests/StreamlinkVlcStudio.Tests/Fixtures', multistreamMode ? 'hover-preview-fmp4' : 'replay-position-event');
 const browserPath = [process.env.SVS_WEB_TEST_BROWSER, 'C:/Program Files/Google/Chrome/Application/chrome.exe', 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe', 'C:/Program Files/BraveSoftware/Brave-Browser/Application/brave.exe'].find(file => file && fs.existsSync(file));
@@ -68,10 +70,12 @@ let openCount = 0;
 let profileOverride = null;
 const closed = [];
 const progressWrites = [];
+const startedWrites = [];
 const playerMetadata = new Map();
 const followStates = new Map(live.map(item => [item.platform + ':' + item.channel.toLowerCase(), true]));
 const followRequests = [], followWrites = [];
 const searchFixture = { requests: [], held: [], hold: new Set(), fail: false, canceled: 0 };
+const loadingFixture = { requests: [], hold: new Set(), held: [], canceled: 0, categories: null };
 const discoveryRequests = [];
 let followPending = false, followUnknown = false, followFailure = false, followConfirmed = true;
 const deleteFixture = { requests: [], items: [{ id: 'ec263e99-7ad7-47f9-b2e6-50c2f3c744e1', title: 'Saved broadcast', channel: 'Northstar', platform: 'Twitch', state: 'Completed', format: 'HLS' }] };
@@ -86,10 +90,23 @@ const vodLibraryItems = [
 const server = http.createServer(async (request, response) => {
   const url = new URL(request.url, 'http://localhost');
   if (url.pathname.startsWith('/artwork/')) { response.setHeader('Content-Type', 'image/svg+xml'); response.end(artwork(url.pathname.split('/').pop())); return; }
-  if (url.pathname === '/media/fixture/root' || url.pathname === '/media/fixture/vod') {
+  if (seekPreviewMode && url.pathname === '/media/fixture/colors.mp4') {
+    const parts = ['init.mp4', ...Array.from({ length: 6 }, (_, index) => `segment${index}.m4s`)];
+    const bytes = Buffer.concat(parts.map(file => fs.readFileSync(path.join(root, 'tests/StreamlinkVlcStudio.Tests/Fixtures/hover-preview-fmp4', file))));
+    const range = /^bytes=(\d+)-(\d*)$/.exec(request.headers.range || '');
+    const start = range ? Number(range[1]) : 0, end = range && range[2] ? Math.min(Number(range[2]), bytes.length - 1) : bytes.length - 1;
+    response.setHeader('Content-Type', 'video/mp4'); response.setHeader('Accept-Ranges', 'bytes');
+    if (range) { response.statusCode = 206; response.setHeader('Content-Range', `bytes ${start}-${end}/${bytes.length}`); }
+    response.setHeader('Content-Length', end - start + 1); response.end(bytes.subarray(start, end + 1)); return;
+  }
+  if (seekPreviewMode && url.pathname === '/media/fixture/root') {
+    response.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+    response.end('#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:10\n#EXT-X-MEDIA-SEQUENCE:4\n#EXTINF:10,\n/media/fixture/index4.ts\n#EXTINF:10,\n/media/fixture/index5.ts\n'); return;
+  }
+  if (url.pathname === '/media/fixture/root' || url.pathname === '/media/fixture/vod' || seekPreviewMode && url.pathname === '/media/fixture/history') {
     response.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
     const playlist = fs.readFileSync(path.join(mediaFixture, 'index.m3u8'), 'utf8').replace(/^(index\d+\.ts)\r?$/gm, '/media/fixture/$1');
-    response.end(playlist + (url.pathname.endsWith('/vod') ? '\n#EXT-X-ENDLIST\n' : '')); return;
+    response.end(playlist + (url.pathname.endsWith('/vod') || url.pathname.endsWith('/history') ? '\n#EXT-X-ENDLIST\n' : '')); return;
   }
   if (/^\/media\/fixture\/index[0-5]\.ts$/.test(url.pathname)) { response.setHeader('Content-Type', 'video/mp2t'); response.end(fs.readFileSync(path.join(mediaFixture, url.pathname.split('/').pop()))); return; }
   if (multistreamMode && /^\/media\/fixture\/(init\.mp4|segment[0-5]\.m4s)$/.test(url.pathname)) { response.setHeader('Content-Type', 'video/mp4'); response.end(fs.readFileSync(path.join(mediaFixture, url.pathname.split('/').pop()))); return; }
@@ -98,6 +115,14 @@ const server = http.createServer(async (request, response) => {
     const input = JSON.parse(raw || '{}');
     const action = url.pathname.slice(5);
     response.setHeader('Content-Type', 'application/json');
+    if (loadingMode) {
+      loadingFixture.requests.push(action);
+      if (loadingFixture.hold.has(action)) {
+        response.once('close', () => { if (!response.writableEnded) loadingFixture.canceled++; });
+        loadingFixture.held.push({ action, response });
+        return;
+      }
+    }
     let result = {};
     if (action === 'session') { response.statusCode = signedIn ? 200 : 401; result = { csrf: 'visual-fixture', username: 'webtester' }; }
     else if (action === 'login') {
@@ -126,13 +151,15 @@ const server = http.createServer(async (request, response) => {
     else if (action === 'open') {
       lastOpen = input;
       const isVod = !!input.input?.includes('/videos/');
+      const isMp4 = seekPreviewMode && input.input?.endsWith('/videos/mp4');
       const item = live.find(item => item.key === input.key || item.channel.toLowerCase() === input.input?.toLowerCase()) ||
-        (isVod ? live[0] : { key: 'guest', channel: input.input || 'Guest', platform: input.platform === 'kick' ? 'Kick' : 'Twitch', title: 'Guest stream' });
+        (isVod ? live[0] : { key: 'guest', channel: input.input || 'Guest', platform: input.platform === 'kick' || input.input?.startsWith('https://kick.com/') ? 'Kick' : 'Twitch', title: 'Guest stream' });
       result = { id: 'visual-player-' + ++openCount, key: isVod ? input.input : item.key, title: isVod ? 'Mountain adventure - full broadcast' : item.title,
-        channel: item.channel, platform: item.platform, profileImageUrl: item.profileImageUrl, url: '/media/fixture/' + (isVod ? 'vod' : 'root'), isVod, isMp4: false, resume: 0, duration: 0,
+        channel: item.channel, platform: item.platform, profileImageUrl: item.profileImageUrl, url: '/media/fixture/' + (isMp4 ? 'colors.mp4' : isVod ? 'vod' : 'root'), isVod, isMp4, resume: 0, duration: 0,
         quality: input.quality ?? savedSettings.quality, chatLayout: savedSettings.chatLayouts[item.platform + ':' + item.channel.toLowerCase()] ?? null };
       playerMetadata.set(result.id, result);
     }
+    else if (action === 'live/archive' && seekPreviewMode) result = { available: true, key: 'full-history', duration: 60, url: '/media/fixture/history' };
     else if (action === 'volume/save') {
       const p = playerMetadata.get(input.player);
       if (p) savedSettings.volumes[p.platform + ':' + p.channel.toLowerCase()] = input.volume;
@@ -140,6 +167,7 @@ const server = http.createServer(async (request, response) => {
     }
     else if (action === 'close') closed.push(input.player);
     else if (action === 'progress') progressWrites.push(input);
+    else if (action === 'started') startedWrites.push(input);
     else if (action === 'follow/status') {
       followRequests.push(input.player);
       const p = playerMetadata.get(input.player);
@@ -181,7 +209,7 @@ const server = http.createServer(async (request, response) => {
       if (holdViewerIds.has(id)) heldViewers.push({ id, response, send }); else send();
       return;
     }
-    else if (action === 'categories') result = { items: categories };
+    else if (action === 'categories') result = loadingMode && loadingFixture.categories ? loadingFixture.categories(input) : { items: categories };
     else if (action === 'streams' && discoveryLanguageMode) {
       discoveryRequests.push(input);
       savedSettings.categoryLanguages[(input.platform === 'kick' ? 'Kick' : 'Twitch') + ':' + input.categoryId] = input.language;
@@ -229,7 +257,7 @@ async function main() {
   const address = 'http://127.0.0.1:' + server.address().port;
   console.log('Starting isolated render fixture at ' + address);
   console.log('Browser: ' + browserPath);
-  const chrome = spawn(browserPath, ['--headless=new', '--disable-gpu', '--autoplay-policy=no-user-gesture-required', '--no-first-run', '--no-default-browser-check', '--remote-debugging-port=0', '--user-data-dir=' + profile, 'about:blank'], { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] });
+  const chrome = spawn(browserPath, ['--headless=new', ...(process.argv.includes('--enable-gpu') ? [] : ['--disable-gpu']), '--autoplay-policy=no-user-gesture-required', '--no-first-run', '--no-default-browser-check', '--remote-debugging-port=0', '--user-data-dir=' + profile, 'about:blank'], { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] });
   const deadline = setTimeout(() => { console.error('Renderer fixture timed out.'); chrome.kill(); server.close(); process.exit(1); }, 90000);
   process.stdin.on('data', () => { chrome.kill(); server.close(); process.exit(1); });
   let errors = ''; chrome.stderr.on('data', chunk => errors += chunk);
@@ -287,12 +315,21 @@ async function main() {
     await evaluate("document.querySelector('#username').value='webtester';document.querySelector('#password').value='Test web password 123!';document.querySelector('#login-form').requestSubmit()");
     const settled = "document.querySelector('#cards').getAttribute('aria-busy')==='false'";
     await wait("!document.querySelector('#studio').hidden && document.querySelectorAll('.card').length===6");
+    if (loadingMode) {
+      await require('./helpers/web-loading-browser.cjs')({ evaluate, wait, capture, viewport, fixture: loadingFixture });
+      return;
+    }
     if (discoveryLanguageMode) {
       await require('./helpers/web-discovery-language-browser.cjs')({ cdp, evaluate, wait, capture, viewport, requests: discoveryRequests });
       return;
     }
     if (mobileControlsMode) {
       await require('./helpers/web-mobile-controls-browser.cjs')({ cdp, evaluate, wait, capture, output });
+      return;
+    }
+    if (seekPreviewMode) {
+      await require('./helpers/web-seek-preview-browser.cjs')({ cdp, evaluate, wait, capture, viewport,
+        playbackRequests: () => ({ opens: openCount, progress: progressWrites.length, started: startedWrites.length }) });
       return;
     }
     if (sidebarMode) {
@@ -353,6 +390,7 @@ async function main() {
       holdViewerIds = new Set(['0']);
       await evaluate("document.querySelector('#more').click()");
       await wait(settled + " && document.querySelectorAll('.card').length===6 && " + meta('5') + "==='5,500 viewers'");
+      assert.ok(await evaluate("document.querySelector('.card[data-key=\"1\"] .card-main')===window.categoryCard"), 'pagination keeps enriched category controls attached');
       assert.equal(await evaluate(meta('1')), '329,518 viewers', 'pagination preserves totals on earlier cards');
       assert.equal(viewerRequests.filter(input => input.categoryIds[0] === '1').length, 1, 'completed totals are not fetched again during pagination');
       assert.equal(await evaluate(meta('3')), '0 viewers');

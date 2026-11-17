@@ -5,6 +5,7 @@ using System.Net.Sockets;
 using System.Text;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.WebUtilities;
+using StreamlinkVlcStudio.Core.Twitch;
 using StreamlinkVlcStudio.Infrastructure.Hls;
 using StreamlinkVlcStudio.Infrastructure.Http;
 using StreamlinkVlcStudio.Infrastructure.Replay;
@@ -13,7 +14,7 @@ using StreamlinkVlcStudio.Infrastructure.Vod;
 namespace StreamlinkVlcStudio.Infrastructure.LocalWeb;
 
 /// <summary>Only server-resolved resources receive opaque IDs. There is no URL/path proxy endpoint.</summary>
-internal sealed class LocalWebMedia : IDisposable
+internal sealed partial class LocalWebMedia : IDisposable
 {
     private static readonly Uri TrustedPlaylistUri = new("https://trusted-playlist.invalid/index.m3u8");
     private readonly ConcurrentDictionary<string, Uri> resources = new(StringComparer.Ordinal);
@@ -24,6 +25,10 @@ internal sealed class LocalWebMedia : IDisposable
     private readonly string playbackId;
     private string? trustedPlaylist;
     internal string Root { get; }
+    internal string PlaybackId => playbackId;
+    internal bool ContainsResource(string id) => resources.ContainsKey(id);
+    internal bool GrowingArchive { get; set; }
+    internal bool RewriteTwitchArchive { get; set; }
 
     internal LocalWebMedia(string playbackId, Uri root, HttpClient? http = null)
     {
@@ -104,6 +109,10 @@ internal sealed class LocalWebMedia : IDisposable
     {
         if (playlist.Length > 16 * 1024 * 1024 || !playlist.TrimStart('\uFEFF').StartsWith("#EXTM3U", StringComparison.Ordinal))
             throw new InvalidDataException("Invalid HLS playlist.");
+        if (RewriteTwitchArchive)
+            playlist = TwitchSubOnlyVodPlaylist.RewriteMediaPlaylist(playlist, source);
+        if (GrowingArchive && playlist.Contains("#EXTINF:", StringComparison.Ordinal))
+            playlist = GrowingArchivePlaylist(playlist);
         var result = new StringBuilder();
         foreach (var raw in playlist.TrimStart('\uFEFF').Split('\n'))
         {

@@ -18,6 +18,41 @@ internal static class HlsPlaylistPolicy
         lines.Any(static line => line == "#EXT-X-SKIP" ||
             line.StartsWith("#EXT-X-SKIP:", StringComparison.Ordinal));
 
+    // A published duration needs every segment from the broadcast's beginning,
+    // including growing EVENT playlists that do not have an end marker yet.
+    internal static TimeSpan? ReadPublishedDuration(string[] lines)
+    {
+        if (lines.Length == 0 || lines[0] != "#EXTM3U" || HasSkippedSegments(lines) ||
+            lines.Any(line => line.StartsWith("#EXT-X-STREAM-INF:", StringComparison.Ordinal))) return null;
+
+        decimal seconds = 0;
+        decimal? pending = null;
+        var segments = 0;
+        foreach (var line in lines)
+        {
+            if (line.StartsWith("#EXT-X-MEDIA-SEQUENCE:", StringComparison.Ordinal) &&
+                (!long.TryParse(line.AsSpan(22), NumberStyles.None, CultureInfo.InvariantCulture, out var sequence) || sequence != 0))
+                return null;
+            if (line.StartsWith("#EXTINF:", StringComparison.Ordinal))
+            {
+                if (pending.HasValue || !TryReadSegmentDuration(line.AsSpan(8), 3600, out var duration)) return null;
+                pending = duration;
+            }
+            else if (!line.StartsWith('#'))
+            {
+                if (!pending.HasValue) return null;
+                seconds += pending.Value;
+                if (seconds > 14 * 24 * 60 * 60) return null;
+                pending = null;
+                segments++;
+            }
+        }
+
+        return segments > 0 && !pending.HasValue
+            ? TimeSpan.FromTicks((long)(seconds * TimeSpan.TicksPerSecond))
+            : null;
+    }
+
     internal static bool TryReadSegmentDuration(ReadOnlySpan<char> value, decimal maximumSeconds, out decimal seconds)
     {
         seconds = 0;

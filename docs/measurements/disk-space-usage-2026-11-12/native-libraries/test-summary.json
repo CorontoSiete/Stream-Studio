@@ -1,0 +1,34 @@
+[
+  {
+    "Suite": "final-update",
+    "Summary": "All 124 tests passed; 0 skipped."
+  },
+  {
+    "Suite": "lifecycle",
+    "Summary": "All 1 tests passed; 0 skipped."
+  },
+  {
+    "Suite": "package",
+    "Summary": "All 2 tests passed; 0 skipped."
+  },
+  {
+    "Suite": "changelog",
+    "Summary": "All 16 tests passed; 0 skipped."
+  },
+  {
+    "Suite": "workflow",
+    "Summary": "4 checks passed"
+  },
+  {
+    "Suite": "development",
+    "Summary": "6 checks passed"
+  },
+  {
+    "Suite": "install-lifecycle",
+    "Summary": "11 checks passed"
+  },
+  {
+    "Suite": "tooling",
+    "Summary": "66 checks passed"
+  }
+]

@@ -387,8 +387,11 @@ internal static partial class ApplicationTestCatalog
         return model;
     }
 
-    private sealed class CardDownloadTestService(params VodDownloadItem[] initial) : IVodDownloadService
+    private sealed class CardDownloadTestService(params VodDownloadItem[] initial) : IVodDownloadService, IVodDownloadCompletionProbe
     {
+        internal Func<VodDownloadRequest, CancellationToken, Task<bool>> CompletionProbe { get; set; } = (_, _) => Task.FromResult(true);
+        public Task<bool> IsCompletedAsync(VodDownloadRequest request, CancellationToken cancellationToken = default) =>
+            CompletionProbe(request, cancellationToken);
         private readonly Dictionary<Guid, VodDownloadItem> entries = initial.ToDictionary(item => item.Id);
         public string DownloadDirectory { get; private set; } = Path.GetTempPath();
         internal long BandwidthLimit { get; private set; }
@@ -425,7 +428,7 @@ internal static partial class ApplicationTestCatalog
             Requests.Add(request);
             if (EnqueueGate is not null) await EnqueueGate.Task.WaitAsync(cancellationToken);
             if (EnqueueFailure is not null) throw EnqueueFailure;
-            var item = new VodDownloadItem(Guid.NewGuid(), request.Target, request.Quality, DateTimeOffset.UtcNow);
+            var item = new VodDownloadItem(Guid.NewGuid(), request.Target, request.Quality, DateTimeOffset.UtcNow, IsAutomatic: request.IsAutomatic);
             Publish(item);
             return item;
         }

@@ -14,6 +14,27 @@ public sealed class VodViewModel : ObservableObject, IHomeStreamOpenItemViewMode
     private VodPlaybackBookmark? playbackBookmark;
     private VodDownloadViewModel? download;
     private bool isDownloadStarting;
+    private Func<bool>? getAutoDownloadEnabled;
+    private Action<bool>? setAutoDownloadEnabled;
+
+    public bool CanAutoDownloadChannel => setAutoDownloadEnabled is not null;
+    public string AutoDownloadMenuHeader => $"Auto-download new completed VODs for {ChannelDisplayName}";
+    public bool IsAutoDownloadEnabled
+    {
+        get => getAutoDownloadEnabled?.Invoke() == true;
+        set
+        {
+            if (value != IsAutoDownloadEnabled) setAutoDownloadEnabled?.Invoke(value);
+        }
+    }
+
+    internal void BindAutoDownload(Func<bool>? getEnabled, Action<bool>? setEnabled)
+    {
+        getAutoDownloadEnabled = getEnabled;
+        setAutoDownloadEnabled = setEnabled;
+        OnPropertyChanged(nameof(CanAutoDownloadChannel));
+        OnPropertyChanged(nameof(IsAutoDownloadEnabled));
+    }
 
     public VodViewModel(
         TwitchVodItem vod,
@@ -75,44 +96,7 @@ public sealed class VodViewModel : ObservableObject, IHomeStreamOpenItemViewMode
 
     public AsyncRelayCommand OpenAndStayOnHomeCommand { get; }
 
-    public StreamTarget Target
-    {
-        get
-        {
-            if (twitchVod is { } twitch)
-            {
-                return new StreamTarget(
-                    PlatformKind.Twitch,
-                    twitch.ChannelLogin,
-                    twitch.Url,
-                    StreamTargetKind.TwitchVod,
-                    twitch.Id,
-                    Title,
-                    twitch.BroadcasterId,
-                    twitch.Duration,
-                    ProfileImageUrl: twitch.ProfileImageUrl,
-                    MediaThumbnailUrl: twitch.ThumbnailUrl,
-                    MediaPublishedAtUtc: twitch.PublishedAtUtc ?? twitch.CreatedAtUtc);
-            }
-
-            var kick = kickVod!;
-            return new StreamTarget(
-                PlatformKind.Kick,
-                kick.ChannelSlug,
-                kick.Source,
-                StreamTargetKind.KickVod,
-                FirstNonEmpty(kick.Uuid, kick.Id, kick.LiveStreamId),
-                Title,
-                "",
-                kick.Duration,
-                kick.StartedAtUtc,
-                kick.ChannelId,
-                kick.CategoryName,
-                kick.ProfileImageUrl,
-                MediaThumbnailUrl: kick.ThumbnailUrl,
-                MediaPublishedAtUtc: kick.CreatedAtUtc ?? kick.StartedAtUtc);
-        }
-    }
+    public StreamTarget Target => twitchVod is { } twitch ? twitch.ToStreamTarget() : kickVod!.ToStreamTarget();
 
     public PlatformKind Platform => twitchVod is not null ? PlatformKind.Twitch : PlatformKind.Kick;
 
@@ -155,6 +139,7 @@ public sealed class VodViewModel : ObservableObject, IHomeStreamOpenItemViewMode
         NotifyChanged(previous.Id, Id, nameof(Id));
         NotifyChanged(previous.Title, Title, nameof(Title));
         NotifyChanged(previous.ChannelDisplayName, ChannelDisplayName, nameof(ChannelDisplayName));
+        if (previous.ChannelDisplayName != ChannelDisplayName) OnPropertyChanged(nameof(AutoDownloadMenuHeader));
         if (previous.ThumbnailUrl != ThumbnailUrl)
         {
             OnPropertyChanged(nameof(ThumbnailUrl));
@@ -181,16 +166,7 @@ public sealed class VodViewModel : ObservableObject, IHomeStreamOpenItemViewMode
         if (!EqualityComparer<T>.Default.Equals(previous, current)) OnPropertyChanged(propertyName);
     }
 
-    public string Title
-    {
-        get
-        {
-            var title = twitchVod?.Title ?? kickVod?.Title;
-            return string.IsNullOrWhiteSpace(title)
-                ? "Untitled VOD"
-                : title.Trim();
-        }
-    }
+    public string Title => VodTargets.DisplayTitle(twitchVod?.Title ?? kickVod?.Title);
 
     public string ChannelDisplayName
     {

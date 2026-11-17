@@ -176,9 +176,6 @@ if ([string]::IsNullOrWhiteSpace($PublishedAppDirectory)) {
         --no-restore `
         --self-contained $selfContained `
         -p:PublishSingleFile=$publishSingleFile `
-        -p:IncludeNativeLibrariesForSelfExtract=true `
-        -p:IncludeAllContentForSelfExtract=true `
-        -p:EnableCompressionInSingleFile=true `
         -p:PublishTrimmed=false `
         -p:DebugType=none `
         -p:DebugSymbols=false `
@@ -356,7 +353,14 @@ if ($archiveItems.Count -eq 0) {
 $temporaryZipPath = Join-Path $outputRootPath (
     ".StreamlinkVlcStudio-release.{0}.tmp.zip" -f [Guid]::NewGuid().ToString("N"))
 try {
-    Compress-Archive -LiteralPath $archiveItems.FullName -DestinationPath $temporaryZipPath
+    # Compress the distribution once, rather than decompressing managed assemblies
+    # on every app launch. Older Windows PowerShell retains its supported level.
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $zipCompression = [IO.Compression.CompressionLevel]::Optimal
+    if ([Enum]::GetNames([IO.Compression.CompressionLevel]) -contains 'SmallestSize') {
+        $zipCompression = [Enum]::Parse([IO.Compression.CompressionLevel], 'SmallestSize')
+    }
+    [IO.Compression.ZipFile]::CreateFromDirectory($stageDir, $temporaryZipPath, $zipCompression, $false)
     if (-not (Test-Path -LiteralPath $temporaryZipPath -PathType Leaf) -or
         (Get-Item -LiteralPath $temporaryZipPath).Length -eq 0) {
         throw "Release zip was not created: $temporaryZipPath"

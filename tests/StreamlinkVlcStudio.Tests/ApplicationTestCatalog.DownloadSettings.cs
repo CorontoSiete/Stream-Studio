@@ -46,7 +46,7 @@ internal static partial class ApplicationTestCatalog
             Assert.Equal(toolbar.Items.IndexOf(settingsButton) - 1, toolbar.Items.IndexOf(downloadSettingsButton));
             Assert.Equal("Download settings", downloadSettingsButton.Content);
             Assert.Equal("Open VOD download settings", AutomationProperties.GetName(downloadSettingsButton));
-            Assert.Equal(1, FindVisualDescendants<Button>((FrameworkElement)window.FindName("HomeViewport"))
+            Assert.Equal(1, FindVisualDescendants<Button>((FrameworkElement)window.Content)
                 .Count(button => AutomationProperties.GetName(button) == "Open VOD download settings"));
             var root = (FrameworkElement)window.Content;
             foreach (var size in new[] { new Size(1320, 820), new Size(440, 820) })

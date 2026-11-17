@@ -6,6 +6,11 @@ internal static class WorkflowResourceTestCatalog
         ("workflow resources: changed queries cancel shared search without accepting stale results", ReplaceSearchAsync),
         ("workflow resources: changing quality starts a new search instead of sharing old probes", SearchQualityAsync),
         ("workflow resources: viewer counts preserve search rows and commands while reordering", PreserveSearchRowsAsync),
+        ("workflow resources: playable live search results appear before optional metadata", EarlySearchResultsAsync),
+        ("workflow resources: late metadata cannot overwrite a replacement search", StaleSearchMetadataAsync),
+        ("workflow resources: each viewer count appears without waiting for slower channels", ProgressiveSearchCountsAsync),
+        ("workflow resources: channel artwork and viewer counts load independently", IndependentSearchDetailsAsync),
+        ("workflow resources: replacing search cancels artwork and viewer counts together", CancelSearchDetailsAsync),
         ("workflow resources: Recent reuses fresh live and offline results without rebuilding cards", ReuseRecentAsync),
         ("workflow resources: Recent checks new channels without refreshing fresh channels", NewRecentAsync),
         ("workflow resources: Recent retries unavailable metadata on the next visit", RetryRecentAsync),
@@ -140,6 +145,155 @@ internal static class WorkflowResourceTestCatalog
         Assert.True(properties.Contains(nameof(StreamSearchResultViewModel.ViewerCountText)));
         Assert.Equal("200 viewers", original[1].ViewerCountText);
     });
+
+    private static Task EarlySearchResultsAsync() => TestSta.RunOffscreenAsync(async () =>
+    {
+        var release = new TaskCompletionSource<StreamMetadataResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var viewModel = Create(settings: new AppSettings { StreamlinkPath = "streamlink.exe" },
+            metadata: new SearchMetadataService((_, token) => release.Task.WaitAsync(token)));
+        viewModel.NewStreamText = "streamer";
+        try
+        {
+            Assert.Equal(2, viewModel.StreamSearchResults.Count);
+            Assert.Equal(false, viewModel.IsStreamSearchRunning);
+            var rows = viewModel.StreamSearchResults.ToArray();
+            Assert.True(rows.All(row => row.OpenCommand.CanExecute(null)));
+            var changes = new List<NotifyCollectionChangedAction>();
+            viewModel.StreamSearchResults.CollectionChanged += (_, args) => changes.Add(args.Action);
+            release.SetResult(new(StreamMetadataState.Available, "https://example.com/thumbnail.jpg",
+                "Streamer display", "live", "Music", "https://example.com/avatar.jpg"));
+            await TestWait.UntilAsync(() => rows.All(row => row.HasThumbnail), TimeSpan.FromSeconds(2));
+            Assert.SequenceEqual(rows, viewModel.StreamSearchResults);
+            Assert.Equal(0, changes.Count);
+            Assert.True(rows.All(row => row.DisplayName == "Streamer display" && row.CategoryName == "Music" &&
+                row.Target.ProfileImageUrl == "https://example.com/avatar.jpg"));
+        }
+        finally { release.TrySetResult(Metadata()); }
+    });
+
+    private static Task StaleSearchMetadataAsync() => TestSta.RunOffscreenAsync(async () =>
+    {
+        var old = new TaskCompletionSource<StreamMetadataResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var viewModel = Create(settings: new AppSettings { StreamlinkPath = "streamlink.exe" },
+            metadata: new SearchMetadataService((target, _) => target.Channel == "old"
+                ? old.Task : Task.FromResult(new StreamMetadataResult(StreamMetadataState.Available,
+                    "https://example.com/new.jpg", "New channel", "live"))));
+        viewModel.NewStreamText = "old";
+        var pending = viewModel.AddAndPlayCommand.ExecuteAsync();
+        try
+        {
+            Assert.Equal(2, viewModel.StreamSearchResults.Count);
+            viewModel.NewStreamText = "new";
+            var rows = viewModel.StreamSearchResults.ToArray();
+            Assert.True(rows.All(row => row.DisplayName == "New channel"));
+            old.SetResult(new(StreamMetadataState.Available, "https://example.com/old.jpg", "Old channel", "live"));
+            await pending;
+            Assert.SequenceEqual(rows, viewModel.StreamSearchResults);
+            Assert.True(rows.All(row => row.Channel == "new" && row.DisplayName == "New channel"));
+        }
+        finally { old.TrySetResult(Metadata()); }
+    });
+
+    private static Task ProgressiveSearchCountsAsync() => TestSta.RunOffscreenAsync(async () =>
+    {
+        var slow = new TaskCompletionSource<ViewerCountResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var fast = new TaskCompletionSource<ViewerCountResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var counts = new FakeViewerCountService
+        {
+            ResponderAsync = (target, token) => (target.Channel == "first" ? slow.Task : fast.Task).WaitAsync(token)
+        };
+        await using var viewModel = Create(search: new FakeStreamSearchService(SearchResult("first", "second")), counts: counts);
+        viewModel.NewStreamText = "streamer";
+        var rows = viewModel.StreamSearchResults.ToArray();
+        try
+        {
+            fast.SetResult(new(ViewerCountState.Available, 200, "updated"));
+            await TestWait.UntilAsync(() => viewModel.StreamSearchResults[0].ViewerCount == 200, TimeSpan.FromSeconds(2));
+            Assert.Equal(false, slow.Task.IsCompleted);
+            Assert.True(ReferenceEquals(rows[1], viewModel.StreamSearchResults[0]));
+            Assert.True(ReferenceEquals(rows[0].OpenCommand, viewModel.StreamSearchResults[1].OpenCommand));
+            slow.SetResult(new(ViewerCountState.Available, 10, "updated"));
+            await TestWait.UntilAsync(() => rows[0].ViewerCount == 10, TimeSpan.FromSeconds(2));
+        }
+        finally
+        {
+            slow.TrySetResult(new(ViewerCountState.Unavailable, null, "unavailable"));
+            fast.TrySetResult(new(ViewerCountState.Unavailable, null, "unavailable"));
+        }
+    });
+
+    private static Task IndependentSearchDetailsAsync() => TestSta.RunOffscreenAsync(async () =>
+    {
+        var slow = new TaskCompletionSource<StreamMetadataResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var fast = new TaskCompletionSource<StreamMetadataResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var viewers = new TaskCompletionSource<ViewerCountResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var counts = new FakeViewerCountService { ResponderAsync = (_, token) => viewers.Task.WaitAsync(token) };
+        await using var viewModel = Create(settings: new AppSettings { StreamlinkPath = "streamlink.exe" },
+            metadata: new SearchMetadataService((target, token) =>
+                (target.Platform == PlatformKind.Twitch ? slow.Task : fast.Task).WaitAsync(token)), counts: counts);
+        viewModel.NewStreamText = "streamer";
+        var rows = viewModel.StreamSearchResults.ToArray();
+        var changes = new List<NotifyCollectionChangedAction>();
+        viewModel.StreamSearchResults.CollectionChanged += (_, args) => changes.Add(args.Action);
+        try
+        {
+            Assert.Equal(2, counts.CallCount);
+            fast.SetResult(new(StreamMetadataState.Available, "https://example.com/kick.jpg", "Kick channel", "live"));
+            await TestWait.UntilAsync(() => rows.Single(row => row.Platform == PlatformKind.Kick).HasThumbnail, TimeSpan.FromSeconds(2));
+            Assert.Equal(false, slow.Task.IsCompleted);
+            Assert.Equal(false, viewers.Task.IsCompleted);
+            Assert.Equal(false, rows.Single(row => row.Platform == PlatformKind.Twitch).HasThumbnail);
+            Assert.Equal(0, changes.Count);
+            viewers.SetResult(new(ViewerCountState.Available, 123, "updated"));
+            await TestWait.UntilAsync(() => rows.All(row => row.ViewerCount == 123), TimeSpan.FromSeconds(2));
+            Assert.Equal(false, slow.Task.IsCompleted);
+            slow.SetResult(new(StreamMetadataState.Available, "https://example.com/twitch.jpg", "Twitch channel", "live"));
+            await TestWait.UntilAsync(() => rows.All(row => row.HasThumbnail), TimeSpan.FromSeconds(2));
+            Assert.SequenceEqual(rows, viewModel.StreamSearchResults);
+            Assert.True(rows.All(row => row.OpenCommand.CanExecute(null) && row.ViewerCount == 123));
+        }
+        finally
+        {
+            slow.TrySetResult(Metadata());
+            fast.TrySetResult(Metadata());
+            viewers.TrySetResult(new(ViewerCountState.Unavailable, null, "unavailable"));
+        }
+    });
+
+    private static Task CancelSearchDetailsAsync() => TestSta.RunOffscreenAsync(async () =>
+    {
+        var tokens = new List<CancellationToken>();
+        var metadata = new TaskCompletionSource<StreamMetadataResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var viewers = new TaskCompletionSource<ViewerCountResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var viewModel = Create(settings: new AppSettings { StreamlinkPath = "streamlink.exe" },
+            metadata: new SearchMetadataService((_, token) => { tokens.Add(token); return metadata.Task; }),
+            counts: new FakeViewerCountService { ResponderAsync = (_, token) => { tokens.Add(token); return viewers.Task; } });
+        viewModel.NewStreamText = "old";
+        var pending = viewModel.AddAndPlayCommand.ExecuteAsync();
+        try
+        {
+            Assert.Equal(4, tokens.Count);
+            viewModel.NewStreamText = "";
+            Assert.True(tokens.All(token => token.IsCancellationRequested));
+            metadata.SetResult(new(StreamMetadataState.Available, "https://example.com/old.jpg", "Old channel", "live"));
+            viewers.SetResult(new(ViewerCountState.Available, 123, "updated"));
+            await pending;
+            Assert.Equal(0, viewModel.StreamSearchResults.Count);
+            Assert.Equal(false, viewModel.IsStreamSearchRunning);
+        }
+        finally
+        {
+            metadata.TrySetResult(Metadata());
+            viewers.TrySetResult(new(ViewerCountState.Unavailable, null, "unavailable"));
+        }
+    });
+
+    private sealed class SearchMetadataService(Func<StreamTarget, CancellationToken, Task<StreamMetadataResult>> respond)
+        : IStreamMetadataService
+    {
+        public Task<StreamMetadataResult> GetLiveStreamMetadataAsync(StreamTarget target, AppSettings settings,
+            CancellationToken cancellationToken = default) => respond(target, cancellationToken);
+    }
 
     private static Task ReuseRecentAsync() => TestSta.RunOffscreenAsync(async () =>
     {

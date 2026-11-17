@@ -22,18 +22,34 @@ function fixture({ storage = new Map(), volumes = new Map(), layouts = new Map()
       return this.elements.get(selector);
     }
     querySelectorAll() { return []; }
-    append(...elements) { for (const element of elements) { if (element && typeof element === 'object') element.parentElement = this; this.children.push(element); } }
-    replaceChildren(...elements) { this.children = []; this.append(...elements); }
-    remove() { if (this.parentElement) this.parentElement.children = this.parentElement.children.filter(element => element !== this); }
+    get childElementCount() { return this.children.length; }
+    append(...elements) { for (const element of elements) this.insertBefore(element, null); }
+    prepend(...elements) { const first = this.children[0] || null; for (const element of elements) this.insertBefore(element, first); }
+    insertBefore(element, before) {
+      if (element === before) return;
+      element.remove?.();
+      if (element && typeof element === 'object') element.parentElement = this;
+      this.children.splice(before === null ? this.children.length : this.children.indexOf(before), 0, element);
+    }
+    replaceChildren(...elements) { for (const child of [...this.children]) child.remove?.(); this.children = []; this.append(...elements); }
+    contains(element) { for (; element; element = element.parentElement) if (element === this) return true; return false; }
+    remove() {
+      if (this.parentElement) {
+        if (this.contains(document.activeElement)) document.activeElement = null;
+        this.parentElement.children = this.parentElement.children.filter(element => element !== this);
+        this.parentElement = null;
+      }
+    }
     cloneNode() { return new Element(); }
     setAttribute() {}
     removeAttribute() {}
-    focus() {}
+    focus() { document.activeElement = this; }
     close() {}
     scrollIntoView() {}
+    getBoundingClientRect() { return { left: 0, top: 0, width: this.clientWidth, height: this.clientHeight }; }
   }
   class Video extends Element {
-    constructor() { super(); this.level = 1; this.silent = false; this.paused = true; this.ended = false; this.defaultPlaybackRate = this.playbackRate = 1; this.duration = 100; this.currentTime = 0; this.attachedVolumes = []; }
+    constructor() { super(); this.level = 1; this.silent = false; this.paused = true; this.ended = false; this.defaultPlaybackRate = this.playbackRate = 1; this.duration = 100; this.currentTime = 0; this.attachedVolumes = []; this.seekable = this.buffered = { length: 0 }; }
     get volume() { return this.level; }
     set volume(value) {
       assert.ok(Number.isFinite(value) && value >= 0 && value <= 1);
@@ -49,14 +65,19 @@ function fixture({ storage = new Map(), volumes = new Map(), layouts = new Map()
   }
   class Hls {
     static isSupported() { return media === 'hls' || media === 'both'; }
-    static Events = { ERROR: 'error' };
-    loadSource() {}
+    static Events = { ERROR: 'error', MANIFEST_PARSED: 'manifestParsed', LEVEL_UPDATED: 'levelUpdated', BUFFER_APPENDED: 'bufferAppended', BUFFER_FLUSHED: 'bufferFlushed' };
+    constructor(config) { this.config = config; this.listeners = new Map(); this.levels = [{ height: 0 }, { height: 360 }]; }
+    loadSource(url) { this.url = url; }
     attachMedia(video) { video.playbackRate = video.defaultPlaybackRate; video.attachedVolumes.push(video.volume); }
-    on() {}
+    on(event, callback) { this.listeners.set(event, callback); }
+    emit(event) { this.listeners.get(event)?.(event, {}); }
+    startLoad(position) { this.startPosition = position; this.loading = true; }
+    stopLoad() { this.loading = false; }
     destroy() {}
   }
   const document = new Element();
-  document.createElement = document.createElementNS = document.createTextNode = () => new Element();
+  document.createElement = tag => tag === 'video' ? new Video() : new Element();
+  document.createElementNS = document.createTextNode = () => new Element();
   document.querySelector('#player-template').content = { firstElementChild: new Element() };
   const localStorage = { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value) };
   const players = new Map(), layoutWrites = [], volumeWrites = [], closeCalls = [], requests = [], intervals = [];
@@ -67,12 +88,12 @@ function fixture({ storage = new Map(), volumes = new Map(), layouts = new Map()
   const context = vm.createContext({ document, localStorage, Event, URL, URLSearchParams, Option: Element, Hls, AbortController, DOMException, setTimeout, clearTimeout,
     navigator: { userAgent, platform: 'Win32', maxTouchPoints: 0 },
     ResizeObserver: class { observe() {} disconnect() {} },
-    window: Object.assign(new EventTarget(), { Hls }), location: { hash: '', pathname: '/', search: '' },
+    window: Object.assign(new EventTarget(), { Hls, scrollTo() {} }), location: { hash: '', pathname: '/', search: '' },
     setInterval(callback, delay) { intervals.push({ callback, delay }); },
     fetch: async (url, options) => {
       const input = JSON.parse(options.body || '{}');
       requests.push({ url, input, keepalive: options.keepalive });
-      const response = onRequest && await onRequest(url, input);
+      const response = onRequest && await onRequest(url, input, options);
       if (response) return response;
       let result = {};
       if (url === '/api/open') {
@@ -106,7 +127,7 @@ function fixture({ storage = new Map(), volumes = new Map(), layouts = new Map()
   // Only replace startup authentication. All opening, replacement, closing, audio
   // selection, event handlers and persistence run from the actual application.
   assert.ok(code.includes('  restoreSession();'));
-  vm.runInContext(code.replace('  restoreSession();', '  globalThis.playerTest = { state, load, openPlayer, closePlayer, playerAction, selectPlayer, disconnect, flushVolumes, storeChatGeometry, resizeChat, positionChat, chatGeometry, normalizeHotkey, hotkeyFromEvent, loadHotkeys, setPreferences: value => Object.assign(preferences, value), seedVolumes: values => { for (const [key, volume] of values) streamVolumes.set(key, volume); }, flush: () => queue };'), context);
+  vm.runInContext(code.replace('  restoreSession();', '  globalThis.playerTest = { state, load, showPage, openPlayer, closePlayer, playerAction, selectPlayer, disconnect, flushVolumes, storeChatGeometry, resizeChat, positionChat, chatGeometry, normalizeHotkey, hotkeyFromEvent, loadHotkeys, setPreferences: value => Object.assign(preferences, value), seedVolumes: values => { for (const [key, volume] of values) streamVolumes.set(key, volume); }, flush: () => queue };'), context);
   const app = context.playerTest;
   app.state.authenticated = true;
   app.state.settings = { defaultQuality: 'best', qualities: ['best', '720p'], lowLatency: true };

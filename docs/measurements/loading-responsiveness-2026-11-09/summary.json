@@ -1,0 +1,221 @@
+{
+  "date": "2026-11-09",
+  "scope": "Controlled offscreen WPF shell and in-memory download snapshot reconciliation; excludes process launch, application resources, real settings IO, provider latency, media validation, and playback.",
+  "method": "Sequential Release runs on the same host and pinned SDK. First trial retained as cold sample but excluded from medians. Shell uses six fixture cards; library uses 1000 completed automatic downloads across 25 channels.",
+  "shell": {
+    "before": [
+      {
+        "trial": 0.0,
+        "model_ms": 48.81,
+        "construct_ms": 601.67,
+        "initial_ms": 585.66,
+        "initial_settings": "Visible",
+        "bind_ms": 116.12,
+        "cards_ms": 2.47,
+        "home_ms": 153.42,
+        "settings_ms": 5.54,
+        "accounts_ms": 22.86,
+        "hotkeys_ms": 3.58
+      },
+      {
+        "trial": 1.0,
+        "model_ms": 0.41,
+        "construct_ms": 149.1,
+        "initial_ms": 328.64,
+        "initial_settings": "Visible",
+        "bind_ms": 56.94,
+        "cards_ms": 0.71,
+        "home_ms": 112.83,
+        "settings_ms": 1.87,
+        "accounts_ms": 21.38,
+        "hotkeys_ms": 2.52
+      },
+      {
+        "trial": 2.0,
+        "model_ms": 0.31,
+        "construct_ms": 194.26,
+        "initial_ms": 286.45,
+        "initial_settings": "Visible",
+        "bind_ms": 28.34,
+        "cards_ms": 0.83,
+        "home_ms": 98.51,
+        "settings_ms": 31.99,
+        "accounts_ms": 22.45,
+        "hotkeys_ms": 2.55
+      },
+      {
+        "trial": 3.0,
+        "model_ms": 0.32,
+        "construct_ms": 129.65,
+        "initial_ms": 275.29,
+        "initial_settings": "Visible",
+        "bind_ms": 70.43,
+        "cards_ms": 0.85,
+        "home_ms": 85.8,
+        "settings_ms": 1.84,
+        "accounts_ms": 19.8,
+        "hotkeys_ms": 2.26
+      },
+      {
+        "trial": 4.0,
+        "model_ms": 0.3,
+        "construct_ms": 118.75,
+        "initial_ms": 297.44,
+        "initial_settings": "Visible",
+        "bind_ms": 32.03,
+        "cards_ms": 0.76,
+        "home_ms": 91.06,
+        "settings_ms": 1.78,
+        "accounts_ms": 20.39,
+        "hotkeys_ms": 2.32
+      }
+    ],
+    "after": [
+      {
+        "trial": 0.0,
+        "model_ms": 47.94,
+        "construct_ms": 615.47,
+        "initial_ms": 172.84,
+        "initial_settings": "Collapsed",
+        "bind_ms": 97.66,
+        "cards_ms": 1.76,
+        "home_ms": 188.45,
+        "settings_ms": 59.05,
+        "accounts_ms": 41.56,
+        "hotkeys_ms": 32.31
+      },
+      {
+        "trial": 1.0,
+        "model_ms": 0.44,
+        "construct_ms": 130.13,
+        "initial_ms": 40.13,
+        "initial_settings": "Collapsed",
+        "bind_ms": 45.76,
+        "cards_ms": 0.25,
+        "home_ms": 87.64,
+        "settings_ms": 50.1,
+        "accounts_ms": 31.73,
+        "hotkeys_ms": 22.98
+      },
+      {
+        "trial": 2.0,
+        "model_ms": 0.22,
+        "construct_ms": 149.01,
+        "initial_ms": 11.75,
+        "initial_settings": "Collapsed",
+        "bind_ms": 31.0,
+        "cards_ms": 0.33,
+        "home_ms": 125.79,
+        "settings_ms": 47.48,
+        "accounts_ms": 31.33,
+        "hotkeys_ms": 22.74
+      },
+      {
+        "trial": 3.0,
+        "model_ms": 0.33,
+        "construct_ms": 146.42,
+        "initial_ms": 10.08,
+        "initial_settings": "Collapsed",
+        "bind_ms": 27.78,
+        "cards_ms": 0.26,
+        "home_ms": 119.68,
+        "settings_ms": 48.16,
+        "accounts_ms": 30.74,
+        "hotkeys_ms": 22.61
+      },
+      {
+        "trial": 4.0,
+        "model_ms": 0.49,
+        "construct_ms": 145.7,
+        "initial_ms": 12.2,
+        "initial_settings": "Collapsed",
+        "bind_ms": 32.39,
+        "cards_ms": 0.36,
+        "home_ms": 98.77,
+        "settings_ms": 52.19,
+        "accounts_ms": 62.16,
+        "hotkeys_ms": 24.78
+      }
+    ],
+    "warm_median_before": {
+      "initial_layout_ms": 291.945,
+      "ready_ms": 585.52,
+      "settings_ms": 1.855,
+      "accounts_ms": 20.884999999999998,
+      "hotkeys_ms": 2.42,
+      "workflow_ms": 625.9649999999999
+    },
+    "warm_median_after": {
+      "initial_layout_ms": 11.975,
+      "ready_ms": 304.45,
+      "settings_ms": 49.129999999999995,
+      "accounts_ms": 31.53,
+      "hotkeys_ms": 22.86,
+      "workflow_ms": 414.40500000000003
+    }
+  },
+  "library": {
+    "before": [
+      {
+        "trial": 0.0,
+        "count": 1000.0,
+        "elapsed_ms": 1399.25,
+        "allocated_bytes": 347314400.0,
+        "settings_notifications": 1000.0
+      },
+      {
+        "trial": 1.0,
+        "count": 1000.0,
+        "elapsed_ms": 818.68,
+        "allocated_bytes": 344677824.0,
+        "settings_notifications": 1000.0
+      },
+      {
+        "trial": 2.0,
+        "count": 1000.0,
+        "elapsed_ms": 784.15,
+        "allocated_bytes": 344677584.0,
+        "settings_notifications": 1000.0
+      },
+      {
+        "trial": 3.0,
+        "count": 1000.0,
+        "elapsed_ms": 779.18,
+        "allocated_bytes": 344677584.0,
+        "settings_notifications": 1000.0
+      }
+    ],
+    "after": [
+      {
+        "trial": 0.0,
+        "count": 1000.0,
+        "elapsed_ms": 22.76,
+        "allocated_bytes": 3343448.0,
+        "settings_notifications": 1.0
+      },
+      {
+        "trial": 1.0,
+        "count": 1000.0,
+        "elapsed_ms": 5.69,
+        "allocated_bytes": 3333176.0,
+        "settings_notifications": 1.0
+      },
+      {
+        "trial": 2.0,
+        "count": 1000.0,
+        "elapsed_ms": 5.83,
+        "allocated_bytes": 3333176.0,
+        "settings_notifications": 1.0
+      },
+      {
+        "trial": 3.0,
+        "count": 1000.0,
+        "elapsed_ms": 5.0,
+        "allocated_bytes": 3333176.0,
+        "settings_notifications": 1.0
+      }
+    ],
+    "warm_median_before_ms": 784.15,
+    "warm_median_after_ms": 5.69
+  }
+}

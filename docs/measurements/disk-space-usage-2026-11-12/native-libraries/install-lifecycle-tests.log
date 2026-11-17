@@ -1,0 +1,11 @@
+PASS installer lifecycle: upgrade settings rewrite preserves per-stream web chat layouts
+PASS installer lifecycle: installation lease matches the native uninstaller and normalizes path aliases
+PASS installer lifecycle: a competing process prevents replacement and allows retry after releasing its lease
+PASS installer lifecycle: search icon cleanup preserves unrelated apps at every display scale
+PASS installer lifecycle: upgrade preserves empty user directories and removes obsolete managed directories
+PASS installer lifecycle: upgrade snapshots user files after shutdown and leaves no transaction directories
+PASS installer lifecycle: a payload conflict preserves the existing installation and its user directories
+PASS installer lifecycle: cleanup removes unlocked siblings and retries read-only directories
+PASS installer lifecycle: cleanup rejects ancestor junctions and unlinks direct junctions without traversing targets
+PASS installer lifecycle: the installed app stays registered when a dependency fails
+PASS installer lifecycle: an unsuccessful forced shutdown aborts before installation can proceed

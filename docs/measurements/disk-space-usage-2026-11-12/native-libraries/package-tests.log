@@ -1,0 +1,8 @@
+Using .NET SDK 10.0.403 at C:\Users\ComputerGuy\Documents\streamlink3\streamlink test2\streamlink-vlc-studio\.dotnet-sdk\dotnet.exe
+Reusing existing Release output (-NoBuild); source changes are not rebuilt.
+Running filter 'release package' (headless-safe; maximum skips: 0).
+dotnet test tests\StreamlinkVlcStudio.Tests\StreamlinkVlcStudio.Tests.csproj --configuration Release --no-restore --no-build
+  PASS release package zip includes runtime payload and user documentation
+  PASS release package refuses recursive staging inside published files
+  All 2 tests passed; 0 skipped.
+Test completed successfully.

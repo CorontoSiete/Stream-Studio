@@ -11,7 +11,7 @@ using StreamlinkVlcStudio.Core.Settings;
 
 namespace StreamlinkVlcStudio.App.Wpf.ViewModels;
 
-internal sealed class VodDownloadsViewModel : HomeFeatureViewModel
+internal sealed partial class VodDownloadsViewModel : HomeFeatureViewModel
 {
     private readonly IVodDownloadService? service;
     private readonly Func<string> getQuality;
@@ -33,6 +33,13 @@ internal sealed class VodDownloadsViewModel : HomeFeatureViewModel
         : base(dependencies, setStatus)
     {
         service = dependencies.VodDownloadService;
+        legacyAutoDownloadVideoKeys = Settings.Downloads.AutoDownloadChannels.SelectMany(channel =>
+            channel.QueuedVideoIds.Select(id => $"{channel.Platform}:{channel.Channel}:{id}"))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        twitchVodService = dependencies.TwitchVodService;
+        kickVodService = dependencies.KickVodService;
+        completionProbe = service as IVodDownloadCompletionProbe;
+        autoDownloadRefreshInterval = dependencies.AutoVodDownloadRefreshInterval ?? TimeSpan.FromMinutes(2);
         this.getQuality = getQuality;
         this.openOffline = openOffline;
         this.ensureNotOpen = ensureNotOpen;
@@ -75,7 +82,19 @@ internal sealed class VodDownloadsViewModel : HomeFeatureViewModel
         }
     }
 
-    internal void Initialize() => Track(LoadAsync());
+    internal void Initialize()
+    {
+        if (initialized || disposed) return;
+        initialized = true;
+        Track(InitializeDownloadsAsync());
+    }
+
+    private async Task InitializeDownloadsAsync()
+    {
+        await LoadAsync();
+        UpdateAutoDownloadTimer();
+        await CheckAutoDownloadsAsync();
+    }
 
     internal Task ChangeDownloadDirectoryAsync(string directory) => Track(ChangeDownloadDirectoryCoreAsync(directory));
 
@@ -119,13 +138,25 @@ internal sealed class VodDownloadsViewModel : HomeFeatureViewModel
         observedDownloadSettings.PropertyChanged += OnDownloadSettingsChanged;
         service?.SetBandwidthLimit(observedDownloadSettings.BandwidthLimitBytesPerSecond);
         Track(ApplyDownloadFormatAsync(announce: false));
+        UpdateAutoDownloadTimer();
         OnPropertyChanged(nameof(MainViewModel.SelectedVodDownloadQuality));
         RefreshVodCards();
+        RefreshAutoDownloadStats();
     }
 
     private void OnDownloadSettingsChanged(object? sender, PropertyChangedEventArgs arguments)
     {
         if (disposed || !ReferenceEquals(sender, observedDownloadSettings)) return;
+        if (arguments.PropertyName == nameof(DownloadSettings.AutoDownloadChannels))
+            dispatch(() =>
+            {
+                if (disposed) return;
+                RefreshVodCards();
+                RefreshAutoDownloadStats();
+                UpdateAutoDownloadTimer();
+            });
+        if (arguments.PropertyName == nameof(DownloadSettings.AutomaticDownloads))
+            dispatch(() => { if (!disposed) RefreshAutoDownloadStats(); });
         if (arguments.PropertyName == nameof(DownloadSettings.BandwidthLimitMegabytesPerSecond))
             service?.SetBandwidthLimit(Settings.Downloads.BandwidthLimitBytesPerSecond);
         if (arguments.PropertyName == nameof(DownloadSettings.Format))
@@ -190,6 +221,10 @@ internal sealed class VodDownloadsViewModel : HomeFeatureViewModel
 
     private void UpdateVodCard(VodViewModel vod)
     {
+        if (CanAutoDownload(vod.Target))
+            vod.BindAutoDownload(() => FindAutoDownloadChannel(vod.Target) is not null,
+                enabled => SetAutoDownloadChannel(vod.Target, enabled));
+        else vod.BindAutoDownload(null, null);
         var identity = vod.Target.TabIdentityKey;
         var quality = getQuality().Trim();
         var matches = VodDownloads.Where(card => card.Item.Target.TabIdentityKey == identity &&
@@ -228,8 +263,14 @@ internal sealed class VodDownloadsViewModel : HomeFeatureViewModel
         {
             var entries = await service.GetDownloadsAsync(lifetimeCancellation.Token);
             if (disposed) return;
-            foreach (var entry in entries) Apply(entry);
+            // Reconcile every card before publishing aggregate statistics. Per-card
+            // aggregation repeatedly scans the growing library and rewrites settings.
+            foreach (var entry in entries) Apply(entry, refresh: false);
+            TrackAutomaticDownloads(cards.Values.Select(card => card.Item));
+            OnPropertyChanged(nameof(HasVodDownloads));
             RefreshStatus();
+            RefreshAutoDownloadStats();
+            RefreshVodCards();
         }
         catch (OperationCanceledException) when (lifetimeCancellation.IsCancellationRequested) { }
         catch (Exception exception)
@@ -283,21 +324,34 @@ internal sealed class VodDownloadsViewModel : HomeFeatureViewModel
         if (!disposed && !removed.Contains(item.Id)) Apply(item);
     });
 
-    private void Apply(VodDownloadItem item)
+    private void Apply(VodDownloadItem item, bool refresh = true)
     {
         if (removed.Contains(item.Id)) return;
+        var previous = cards.GetValueOrDefault(item.Id)?.Item;
         if (cards.TryGetValue(item.Id, out var card)) card.Update(item);
         else
         {
             card = new VodDownloadViewModel(item, (execute, canExecute) => CreateCommand(execute, canExecute),
                 PlayAsync, CancelAsync, RetryAsync, DeleteAsync);
             cards.Add(item.Id, card);
-            var index = 0;
-            while (index < VodDownloads.Count && VodDownloads[index].Item.CreatedAtUtc > item.CreatedAtUtc) index++;
-            VodDownloads.Insert(index, card);
-            OnPropertyChanged(nameof(HasVodDownloads));
+            var first = 0;
+            var last = VodDownloads.Count;
+            while (first < last)
+            {
+                var middle = first + (last - first) / 2;
+                if (VodDownloads[middle].Item.CreatedAtUtc > item.CreatedAtUtc) first = middle + 1;
+                else last = middle;
+            }
+            VodDownloads.Insert(first, card);
+            if (refresh) OnPropertyChanged(nameof(HasVodDownloads));
         }
+        if (!refresh) return;
         RefreshStatus();
+        if (previous is null || HasSavedMedia(previous) || HasSavedMedia(card.Item))
+        {
+            TrackAutomaticDownloads([card.Item]);
+            RefreshAutoDownloadStats();
+        }
         RefreshVodCards(card.Item.Target);
     }
 
@@ -335,6 +389,7 @@ internal sealed class VodDownloadsViewModel : HomeFeatureViewModel
         VodDownloads.Remove(card);
         OnPropertyChanged(nameof(HasVodDownloads));
         RefreshStatus();
+        RefreshAutoDownloadStats();
         RefreshVodCards(card.Item.Target);
         StatusMessage = "Downloaded VOD deleted from disk.";
     }
@@ -348,15 +403,23 @@ internal sealed class VodDownloadsViewModel : HomeFeatureViewModel
 
     protected override void StopOperations()
     {
+        StopRefreshTimer(autoDownloadTimerGate, ref autoDownloadTimer);
         Settings.PropertyChanged -= OnSettingsChanged;
         if (observedDownloadSettings is not null) observedDownloadSettings.PropertyChanged -= OnDownloadSettingsChanged;
         if (vodCards is not null) vodCards.CollectionChanged -= OnVodCardsChanged;
         if (service is not null)
         {
             service.DownloadChanged -= OnDownloadChanged;
-            serviceCleanup = service.DisposeAsync().AsTask();
+            serviceCleanup = StopDownloadsAsync();
         }
     }
 
     protected override Task WaitForOperationsAsync() => serviceCleanup;
+
+    private async Task StopDownloadsAsync()
+    {
+        // Completion probes share the service's HTTP client with its queue.
+        await autoDownloadCheckTask;
+        await service!.DisposeAsync();
+    }
 }

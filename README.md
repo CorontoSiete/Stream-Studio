@@ -92,6 +92,10 @@ Enter a Twitch or Kick channel name or URL in the **Home** search bar, then sele
 
 For a previous broadcast, open **Past broadcasts** or paste a supported VOD URL into the search bar.
 
+Right-click a VOD and enable **Auto-download new completed VODs for [channel]** to save future broadcasts from that Twitch or Kick channel. Stream Studio checks every two minutes while it is open, waits for the recording to finish, and uses your download folder, quality, format, and bandwidth settings. The choice is saved per channel; older completed broadcasts are skipped. Turn it off from any VOD belonging to the same channel. Downloads already queued remain in **Downloads**, where you can cancel them.
+
+**Settings > Downloads > Automatic VOD downloads** shows enabled channels, their completed counts and saved media size, and overall totals. The completed count stays saved after deletion or disabling a channel. Storage in use reflects automatic VOD media currently in the library and excludes unfinished downloads; deleting a saved VOD reduces it.
+
 ### 2. Arrange your streams
 
 - **Tabs:** switch between open streams.

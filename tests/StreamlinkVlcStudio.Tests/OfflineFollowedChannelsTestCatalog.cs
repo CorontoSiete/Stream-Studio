@@ -35,6 +35,7 @@ internal static partial class OfflineFollowedChannelsTestCatalog
         ("offline followed channels: Kick offline banners use advertised responsive artwork instead of stale API paths", KickOfflineBannerSourcesAsync),
         ("offline followed channels: Kick banner failures retry while preserving confirmed artwork and history", KickOfflineBannerRecoveryAsync),
         ("offline followed channels: Kick history deadlines preserve independently loaded banners", KickOfflineBannerHistoryDeadlineAsync),
+        ("workflow loading latency: Kick history loads while artwork is pending and survives its deadline", KickOfflineHistoryBeforeBannerAsync),
         ("offline followed channels: optional history requests have bounded concurrency and a deadline", OfflineMetadataDeadlineAsync),
         ("offline followed channels: cancellation during optional history loading propagates", OfflineMetadataCancellationAsync),
         ("offline followed channels: last-live labels handle elapsed boundaries and metadata changes", LastLiveLabelsAsync),

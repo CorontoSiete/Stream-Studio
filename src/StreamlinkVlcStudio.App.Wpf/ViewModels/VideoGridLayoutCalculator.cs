@@ -9,24 +9,9 @@ internal static class VideoGridLayoutCalculator
     public static VideoGridLayout GetLayout(int visibleCount)
     {
         var boundedCount = Math.Clamp(visibleCount, 1, TileLimit);
-        if (boundedCount == 6)
-        {
-            return new VideoGridLayout(2, 3);
-        }
-
-        if (boundedCount == 8)
-        {
-            return new VideoGridLayout(2, 4);
-        }
-
         if (boundedCount == 10)
         {
             return new VideoGridLayout(2, 5);
-        }
-
-        if (boundedCount == 12)
-        {
-            return new VideoGridLayout(3, 4);
         }
 
         if (boundedCount <= BaseGridSize * BaseGridSize)

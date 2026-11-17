@@ -2,8 +2,8 @@ namespace StreamlinkVlcStudio.Core;
 
 public static class AppIdentity
 {
-    // IncludeAllContentForSelfExtract makes AppContext.BaseDirectory point at the
-    // runtime extraction cache. Installation ownership and staged helpers use the apphost.
+    // Resolve ownership and staged helpers from the apphost, including releases
+    // that used IncludeAllContentForSelfExtract and an extraction-cache base directory.
     public static string ExecutableDirectory => Path.GetDirectoryName(Environment.ProcessPath)
         ?? throw new InvalidOperationException("The running application directory is unavailable.");
 

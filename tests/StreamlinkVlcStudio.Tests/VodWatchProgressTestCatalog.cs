@@ -6,7 +6,14 @@ internal static class VodWatchProgressTestCatalog
         ("VOD watch progress: Kick cards restore saved completion and paged progress", () => SavedCardsAsync(PlatformKind.Kick)),
         ("VOD watch progress: playback and backward seeks update existing cards until confirmed completion", PlaybackAsync),
         ("VOD watch progress: watched status survives rewatching and restarting without losing resume", RewatchAsync),
-        ("VOD watch progress: unreadable history does not prevent browsing", ReadFailureAsync)
+        ("VOD watch progress: delayed completion preserves the newest resume position and watched status", DelayedCompletionAsync),
+        ("VOD watch progress: unreadable history does not prevent browsing", ReadFailureAsync),
+        ("VOD watch progress: Twitch pagination reads only newly appended bookmarks", () => PageHistoryWorkAsync(PlatformKind.Twitch)),
+        ("VOD watch progress: Kick pagination reads only newly appended bookmarks", () => PageHistoryWorkAsync(PlatformKind.Kick)),
+        ("VOD watch progress: Twitch pagination retries earlier unavailable bookmarks", () => RetryPageHistoryAsync(PlatformKind.Twitch)),
+        ("VOD watch progress: Kick pagination retries earlier unavailable bookmarks", () => RetryPageHistoryAsync(PlatformKind.Kick)),
+        ("VOD watch progress: loaded resume positions remain available during disk work", LoadedHistoryAsync),
+        ("VOD watch progress: canceled cached and initial history reads stay canceled", CancelHistoryAsync)
     ];
 
     internal static TwitchVodItem Video(string id, string title = "Recorded stream") => new(
@@ -18,9 +25,9 @@ internal static class VodWatchProgressTestCatalog
         new(TimeSpan.FromSeconds(seconds), TimeSpan.FromHours(2), DateTimeOffset.UtcNow, completed);
 
     internal static MainViewModel CreateMain(IVodPlaybackHistory history, PlatformKind platform = PlatformKind.Twitch,
-        Action<Action>? dispatch = null)
+        Action<Action>? dispatch = null, string[][]? pages = null)
     {
-        string[][] pages = [["1", "2", "3"], ["4"]];
+        pages ??= [["1", "2", "3"], ["4"]];
         var settings = VodResumeTestCatalog.Settings();
         var main = new MainViewModel(new MainViewModelDependencies
         {
@@ -129,6 +136,35 @@ internal static class VodWatchProgressTestCatalog
         Assert.Equal(TimeSpan.FromMinutes(30), factory.Engine!.LastStartPosition!.Value);
     }
 
+    private static async Task DelayedCompletionAsync()
+    {
+        using var files = new VodResumeTestCatalog.HistoryFiles();
+        var target = VodResumeTestCatalog.Target();
+        var history = files.Create();
+        var resumed = Bookmark(1800);
+        history.Remember(target, resumed);
+        var notifications = new List<VodPlaybackBookmark>();
+        history.BookmarkChanged += (_, bookmark) => notifications.Add(bookmark);
+
+        history.Remember(target, Bookmark(7200, completed: true) with
+        {
+            UpdatedAtUtc = resumed.UpdatedAtUtc.AddSeconds(-1)
+        });
+        var expected = resumed with { HasBeenWatched = true };
+        Assert.Equal(expected, (await history.GetAsync(target))!);
+        Assert.SequenceEqual(new[] { expected }, notifications);
+
+        // A stale position without new completion information must remain a no-op.
+        history.Remember(target, Bookmark(60) with { UpdatedAtUtc = resumed.UpdatedAtUtc.AddSeconds(-2) });
+        Assert.Equal(1, notifications.Count);
+        await history.SaveAsync();
+        Assert.Equal(expected, (await files.Create().GetAsync(target))!);
+        var card = new VodViewModel(Video("1"), (_, _) => Task.CompletedTask);
+        card.UpdateWatchProgress(resumed);
+        card.UpdateWatchProgress(notifications[0]);
+        Assert.True(card.IsWatched);
+    }
+
     private static async Task ReadFailureAsync()
     {
         using var files = new VodResumeTestCatalog.HistoryFiles();
@@ -139,5 +175,102 @@ internal static class VodWatchProgressTestCatalog
         Assert.Equal(3, main.TwitchVods.Count);
         Assert.Equal("page", main.TwitchVodStatus);
         Assert.Equal(false, main.IsTwitchVodSearchRunning);
+    }
+
+    private static async Task PageHistoryWorkAsync(PlatformKind platform)
+    {
+        var history = new CountingHistory();
+        await using var main = CreateMain(history, platform, pages: [["1", "2", "3"], ["2", "4", "4"]]);
+        await main.SearchTwitchVodsCommand.ExecuteAsync();
+        Assert.SequenceEqual(new[] { "1", "2", "3" }, history.Reads);
+        var original = main.TwitchVods.ToArray();
+        history.Reads.Clear();
+        await main.LoadMoreTwitchVodsCommand.ExecuteAsync();
+        Assert.SequenceEqual(new[] { "4" }, history.Reads);
+        Assert.SequenceEqual(original, main.TwitchVods.Take(3));
+        Assert.Equal(25d, main.TwitchVods[3].WatchProgressPercent);
+        history.Remember(original[0].Target, Bookmark(3600));
+        Assert.Equal(50d, original[0].WatchProgressPercent);
+
+        // An explicit refresh still reloads progress on the retained card.
+        history.Reads.Clear();
+        await main.SearchTwitchVodsCommand.ExecuteAsync();
+        Assert.SequenceEqual(new[] { "2", "4" }, history.Reads);
+    }
+
+    private static SemaphoreSlim HistoryFileGate(JsonVodPlaybackHistory history) =>
+        (SemaphoreSlim)typeof(JsonVodPlaybackHistory).GetField("fileGate",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(history)!;
+
+    private static async Task RetryPageHistoryAsync(PlatformKind platform)
+    {
+        var history = new CountingHistory { FailRead = true };
+        await using var main = CreateMain(history, platform);
+        await main.SearchTwitchVodsCommand.ExecuteAsync();
+        Assert.Equal(3, main.TwitchVods.Count);
+        Assert.True(main.TwitchVods.All(card => !card.HasWatchProgress));
+        history.FailRead = false;
+        history.Reads.Clear();
+        await main.LoadMoreTwitchVodsCommand.ExecuteAsync();
+        Assert.SequenceEqual(new[] { "1", "2", "3", "4" }, history.Reads);
+        Assert.True(main.TwitchVods.All(card => card.WatchProgressPercent == 25));
+    }
+
+    private static async Task LoadedHistoryAsync()
+    {
+        using var files = new VodResumeTestCatalog.HistoryFiles();
+        var history = await files.SeedAsync();
+        var target = VodResumeTestCatalog.Target();
+        var fileGate = HistoryFileGate(history);
+        await fileGate.WaitAsync();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        try
+        {
+            // Model a disk operation owning the file gate while playback advances.
+            history.Remember(target, Bookmark(1800));
+            Assert.Equal(TimeSpan.FromMinutes(30), (await history.GetAsync(target, timeout.Token))!.Position);
+            Assert.Equal<VodPlaybackBookmark?>(null, await history.GetAsync(VodResumeTestCatalog.Target(id: "missing"), timeout.Token));
+        }
+        finally { fileGate.Release(); }
+        await history.SaveAsync();
+        Assert.Equal(TimeSpan.FromMinutes(30), (await files.Create().GetAsync(target))!.Position);
+    }
+
+    private static async Task CancelHistoryAsync()
+    {
+        using var files = new VodResumeTestCatalog.HistoryFiles();
+        var history = files.Create();
+        var target = VodResumeTestCatalog.Target();
+        var fileGate = HistoryFileGate(history);
+        await fileGate.WaitAsync();
+        using var canceled = new CancellationTokenSource();
+        var pending = history.GetAsync(target, canceled.Token);
+        try
+        {
+            Assert.Equal(false, pending.IsCompleted);
+            await canceled.CancelAsync();
+            try { await pending; throw new InvalidOperationException("Initial history read ignored cancellation."); }
+            catch (OperationCanceledException) when (canceled.IsCancellationRequested) { }
+        }
+        finally { fileGate.Release(); }
+        await history.GetAsync(target);
+        try { await history.GetAsync(target, canceled.Token); throw new InvalidOperationException("Cached history read ignored cancellation."); }
+        catch (OperationCanceledException) when (canceled.IsCancellationRequested) { }
+    }
+
+    private sealed class CountingHistory : IVodPlaybackHistory
+    {
+        internal List<string> Reads { get; } = [];
+        internal bool FailRead { get; set; }
+        public event Action<StreamTarget, VodPlaybackBookmark>? BookmarkChanged;
+        public Task<VodPlaybackBookmark?> GetAsync(StreamTarget target, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Reads.Add(target.MediaId);
+            if (FailRead) throw new IOException("History is temporarily unavailable.");
+            return Task.FromResult<VodPlaybackBookmark?>(Bookmark(1800));
+        }
+        public void Remember(StreamTarget target, VodPlaybackBookmark bookmark) => BookmarkChanged?.Invoke(target, bookmark);
+        public Task SaveAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
     }
 }
