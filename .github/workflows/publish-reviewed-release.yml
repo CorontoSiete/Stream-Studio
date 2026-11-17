@@ -1,0 +1,114 @@
+name: Publish verified release artifacts
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: Build-and-release run whose signed artifacts passed installation and provenance checks
+        required: true
+      tag:
+        description: Existing stable release tag
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Verify provenance and publish reviewed files
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: release
+    concurrency:
+      group: stable-release-${{ github.repository }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      actions: read
+      attestations: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+      RELEASE_TAG: ${{ inputs.tag }}
+      RELEASE_REPOSITORY: CorontoSiete/streamlink-vlc-studio
+
+    steps:
+      - name: Check out current publication tools
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Verify source build and installer checks
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:SOURCE_RUN_ID -notmatch '^[1-9][0-9]*$') { throw 'A numeric source run ID is required.' }
+          . ./scripts/lib/common.ps1
+          . ./scripts/lib/release-contract.ps1
+          Get-StableReleaseIdentity -Tag $env:RELEASE_TAG | Out-Null
+          $source = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:SOURCE_RUN_ID" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Could not read the source workflow.' }
+          if ($source.path -cne '.github/workflows/build.yml' -or $source.event -cne 'push' -or
+              $source.head_branch -cne $env:RELEASE_TAG -or $source.status -cne 'completed' -or
+              $source.repository.full_name -cne $env:GITHUB_REPOSITORY -or
+              $source.head_repository.full_name -cne $env:GITHUB_REPOSITORY -or
+              $source.head_sha -notmatch '^[0-9a-f]{40}$') {
+            throw 'The source must be a completed stable-tag build from this repository.'
+          }
+          $pages = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:SOURCE_RUN_ID/attempts/$($source.run_attempt)/jobs?per_page=100" --paginate --slurp | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Could not read source validation jobs.' }
+          $jobs = @($pages | ForEach-Object { $_.jobs })
+          $validation = @($jobs | Where-Object name -CEQ 'Validate versioned Windows artifacts')
+          $release = @($jobs | Where-Object name -CEQ 'Build and publish protected stable release')
+          if ($validation.Count -ne 1 -or $validation[0].conclusion -cne 'success' -or $release.Count -ne 1) {
+            throw 'The source Windows validation did not succeed.'
+          }
+          foreach ($required in @(
+              'Verify previous release updater, upgrade, restart, and quiet repair',
+              'Upload reviewed stable release set',
+              'Attest reviewed release provenance',
+              'Attest release payload SBOM')) {
+            $step = @($release[0].steps | Where-Object name -CEQ $required)
+            if ($step.Count -ne 1 -or $step[0].conclusion -cne 'success') { throw "Source check did not succeed: $required" }
+          }
+          "RELEASE_COMMIT=$($source.head_sha)" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+          "SOURCE_ATTEMPT=$($source.run_attempt)" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Download and independently verify attested release files
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $directory = 'artifacts/recovered-release'
+          gh run download $env:SOURCE_RUN_ID --repo $env:GITHUB_REPOSITORY `
+            --name "StreamlinkVlcStudio-release-$env:RELEASE_TAG-attempt-$env:SOURCE_ATTEMPT" --dir $directory
+          if ($LASTEXITCODE -ne 0) { throw 'Could not download the reviewed release artifact.' }
+          ./scripts/stage-release-set.ps1 -Check -CheckRoot $directory
+          gh attestation verify "$directory/RELEASE-METADATA.json" --repo $env:GITHUB_REPOSITORY `
+            --source-ref "refs/tags/$env:RELEASE_TAG" --source-digest $env:RELEASE_COMMIT `
+            --signer-workflow "$env:GITHUB_REPOSITORY/.github/workflows/build.yml" --deny-self-hosted-runners
+          if ($LASTEXITCODE -ne 0) { throw 'The source release provenance did not verify.' }
+          $metadata = Get-Content "$directory/RELEASE-METADATA.json" -Raw | ConvertFrom-Json
+          if ([string]$metadata.workflowRunId -cne $env:SOURCE_RUN_ID -or
+              [string]$metadata.workflowRunAttempt -cne $env:SOURCE_ATTEMPT) {
+            throw 'The attested metadata belongs to a different source run.'
+          }
+          foreach ($asset in $metadata.artifacts.PSObject.Properties.Value) {
+            if ([IO.Path]::GetFileName([string]$asset.name) -cne [string]$asset.name) { throw 'Invalid artifact filename.' }
+            $file = Get-Item -LiteralPath (Join-Path $directory $asset.name)
+            if ($file.Length -ne $asset.length -or
+                (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant() -cne $asset.sha256) {
+              throw "Attested metadata does not match $($asset.name)."
+            }
+          }
+
+      - name: Publish the exact reviewed release set
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $notes = @(git show "$($env:RELEASE_TAG):docs/releases/$($env:RELEASE_TAG).md")
+          if ($LASTEXITCODE -ne 0) { throw 'Could not read the tagged release notes.' }
+          $notesPath = Join-Path $env:RUNNER_TEMP 'reviewed-release-notes.md'
+          [IO.File]::WriteAllText($notesPath, ($notes -join "`n") + "`n", [Text.UTF8Encoding]::new($false))
+          ./scripts/publish-release.ps1 -Tag $env:RELEASE_TAG -Commit $env:RELEASE_COMMIT `
+            -Repository $env:RELEASE_REPOSITORY -GitHubRepository $env:GITHUB_REPOSITORY `
+            -ReleaseDirectory artifacts/recovered-release -NotesPath $notesPath

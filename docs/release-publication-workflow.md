@@ -44,6 +44,15 @@ The optional destination defaults to `-Repository` for repositories without a re
 
 ## Retry an interrupted release
 
+If publication tooling needs a fix after the protected run produced reviewed,
+signed artifacts, run **Publish verified release artifacts** on the current
+default branch with the original build run ID and stable tag. This recovery job
+uses the protected release environment, requires successful Windows validation,
+installation/upgrade/repair, artifact upload, and provenance/SBOM attestation,
+then independently checks the downloaded signatures, checksums, attested source,
+and every artifact digest. It publishes the original files with the original
+tagged notes, without rebuilding the app or accessing the signing key.
+
 Rerun the failed protected workflow for the same stable tag and source commit.
 The publication script recognizes its draft by an exact repository/tag/commit
 marker in the release notes and the draft's target commit. It reuses files with
