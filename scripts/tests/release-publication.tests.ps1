@@ -36,7 +36,7 @@ function New-PublicationScenario {
         Releases = @(); Assets = @(); Calls = [Collections.Generic.List[object]]::new()
         RemoteCommit = $commit; FailApi = $false; FailUpload = $false; FailPublish = $false
         AfterUpload = ''; LaterPage = $false; Notes = ''; AssetReads = 0; ListResponse = ''
-        LockNotes = $false; NotesLock = $null; NotesPath = ''
+        LockNotes = $false; NotesLock = $null; NotesPath = ''; HiddenDraftReads = 0
     }
 }
 
@@ -76,6 +76,10 @@ function gh {
             }
         } elseif ($endpoint -like '*/releases?*') {
             $records = @($publicationScenario.Releases)
+            if ($records.Count -gt 0 -and $publicationScenario.HiddenDraftReads -gt 0) {
+                $publicationScenario.HiddenDraftReads--
+                $records = @()
+            }
         } else { throw "Unexpected fake API endpoint: $endpoint" }
         $json = ConvertTo-Json -InputObject $records -Depth 12 -Compress
         if ($publicationScenario.LaterPage) { '[[],' + $json + ']' } else { '[' + $json + ']' }
@@ -175,6 +179,15 @@ try {
     Assert-Publication (-not $publicationScenario.Releases[0].draft -and $publicationScenario.Assets.Count -eq 7) 'Complete release was not published.'
     Assert-Publication ($publicationScenario.Notes.Contains('`Setup.exe`; preserve $literal')) 'Release note literals were altered.'
     Write-Host 'PASS publication: signed local set, private staging, remote verification, literal release notes'
+
+    $publicationScenario = New-PublicationScenario
+    $publicationScenario.HiddenDraftReads = 2
+    Invoke-Publication
+    Assert-Publication (-not $publicationScenario.Releases[0].draft -and $publicationScenario.Assets.Count -eq 7) `
+        'A temporarily invisible created draft did not finish publication.'
+    Assert-Publication (@($publicationScenario.Calls | Where-Object { $_[0] -eq 'release' -and $_[1] -eq 'create' }).Count -eq 1) `
+        'Delayed draft visibility created a duplicate release.'
+    Write-Host 'PASS publication: delayed draft visibility retries verification without creating another release'
 
     $publicationScenario = New-PublicationScenario
     $publicationScenario.FailUpload = $true

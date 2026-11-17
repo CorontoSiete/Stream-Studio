@@ -65,8 +65,10 @@ Rerun the failed protected workflow for the same stable tag and source commit.
 The publication script recognizes its draft by an exact repository/tag/commit
 marker in the release notes and the verified remote tag commit. It reuses files with
 matching names, upload states, sizes, and SHA-256 digests, and replaces missing,
-unfinished, or changed uploads. A rebuilt file can have different bytes, so a
-full job rerun may need to replace more files than an interrupted upload alone.
+unfinished, or changed uploads. After creating a draft, it briefly retries an
+absent list entry to accommodate GitHub propagation. API errors and mismatched
+release state still stop immediately. A rebuilt file can have different bytes,
+so a full job rerun may need to replace more files than an interrupted upload alone.
 Validation artifacts, reviewed release artifacts, and installer logs include the
 workflow attempt number in their names, so reruns retain previous evidence and
 avoid colliding with an earlier attempt's uploads.

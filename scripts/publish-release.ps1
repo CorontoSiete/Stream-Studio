@@ -71,7 +71,14 @@ try {
         # its workflow-edit permission when the default branch has advanced.
         Invoke-ReleaseGitHub @('release', 'create', $Tag, '--repo', $GitHubRepository, '--verify-tag',
             '--title', "Stream Studio $Tag", '--notes-file', $temporaryNotes, '--draft') | Out-Null
-        $draft = Assert-ReleasePublicationState -Repository $GitHubRepository -Tag $Tag -Commit $Commit -Identity $identity
+        # A successful create can precede visibility in the paginated list.
+        # Retry absence only; API errors, foreign drafts, moved tags, and newer
+        # releases still fail immediately through the same preflight checks.
+        for ($visibilityAttempt = 0; $visibilityAttempt -lt 6; $visibilityAttempt++) {
+            if ($visibilityAttempt -gt 0) { Start-Sleep -Seconds 2 }
+            $draft = Assert-ReleasePublicationState -Repository $GitHubRepository -Tag $Tag -Commit $Commit -Identity $identity
+            if ($null -ne $draft) { break }
+        }
         if ($null -eq $draft) { throw "Created draft $Tag could not be found." }
     }
 
