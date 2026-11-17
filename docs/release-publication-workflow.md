@@ -28,6 +28,13 @@ checks that the upgraded application reports the latest version. Targets that
 declare dependency verification also undergo passive same-version repair with
 an intentionally removed application plugin and exact-byte restoration checks.
 
+With the source helper selected, the manual workflow also extracts the signed
+source ZIP on that disposable runner and calls its real `CheckAsync`,
+`DownloadAsync`, and `ApplyAndRestartAsync` through the packaged probe. It checks
+the restarted target's version, ZIP ownership, retained user file, and completed
+update state. The helper verifies installed runtime dependencies before restart.
+This ZIP test requires the target to be the current published release.
+
 ## Retry an interrupted release
 
 Rerun the failed protected workflow for the same stable tag and source commit.

@@ -100,27 +100,29 @@ try {
         'Signed releases must retain the repository identity trusted by installed updaters after a GitHub rename.'
     Write-Host 'PASS workflow: signed release identity stays compatible with installed updaters'
 
-    $tokens = $null
-    $parseErrors = $null
-    $upgradeScript = [Management.Automation.Language.Parser]::ParseFile(
-        (Join-Path $repoRoot 'scripts\test-published-upgrade.ps1'), [ref]$tokens, [ref]$parseErrors)
-    $runnerGuard = $upgradeScript.EndBlock.Statements | Where-Object {
-        $_ -is [Management.Automation.Language.IfStatementAst]
-    } | Select-Object -First 1
-    Assert-Workflow ($null -ne $runnerGuard) 'The installer verification runner restriction is missing.'
-    foreach ($fixture in @(
-            @{ Actions = 'true'; OS = 'Windows'; Repository = 'CorontoSiete/streamlink-vlc-studio'; Allowed = $true },
-            @{ Actions = 'true'; OS = 'Windows'; Repository = 'CorontoSiete/Stream-Studio'; Allowed = $true },
-            @{ Actions = 'true'; OS = 'Windows'; Repository = 'Other/Stream-Studio'; Allowed = $false },
-            @{ Actions = 'false'; OS = 'Windows'; Repository = 'CorontoSiete/Stream-Studio'; Allowed = $false },
-            @{ Actions = 'true'; OS = 'Linux'; Repository = 'CorontoSiete/Stream-Studio'; Allowed = $false })) {
-        $env:GITHUB_ACTIONS = $fixture.Actions
-        $env:RUNNER_OS = $fixture.OS
-        $env:GITHUB_REPOSITORY = $fixture.Repository
-        $allowed = $true
-        try { & ([scriptblock]::Create($runnerGuard.Extent.Text)) }
-        catch { $allowed = $false }
-        Assert-Workflow ($allowed -eq $fixture.Allowed) 'Installer verification accepted an unsafe runner or rejected the renamed repository.'
+    foreach ($upgradeScriptName in @('test-published-upgrade.ps1', 'test-published-zip-upgrade.ps1')) {
+        $tokens = $null
+        $parseErrors = $null
+        $upgradeScript = [Management.Automation.Language.Parser]::ParseFile(
+            (Join-Path $repoRoot "scripts/$upgradeScriptName"), [ref]$tokens, [ref]$parseErrors)
+        $runnerGuard = $upgradeScript.EndBlock.Statements | Where-Object {
+            $_ -is [Management.Automation.Language.IfStatementAst]
+        } | Select-Object -First 1
+        Assert-Workflow ($null -ne $runnerGuard) 'The installer verification runner restriction is missing.'
+        foreach ($fixture in @(
+                @{ Actions = 'true'; OS = 'Windows'; Repository = 'CorontoSiete/streamlink-vlc-studio'; Allowed = $true },
+                @{ Actions = 'true'; OS = 'Windows'; Repository = 'CorontoSiete/Stream-Studio'; Allowed = $true },
+                @{ Actions = 'true'; OS = 'Windows'; Repository = 'Other/Stream-Studio'; Allowed = $false },
+                @{ Actions = 'false'; OS = 'Windows'; Repository = 'CorontoSiete/Stream-Studio'; Allowed = $false },
+                @{ Actions = 'true'; OS = 'Linux'; Repository = 'CorontoSiete/Stream-Studio'; Allowed = $false })) {
+            $env:GITHUB_ACTIONS = $fixture.Actions
+            $env:RUNNER_OS = $fixture.OS
+            $env:GITHUB_REPOSITORY = $fixture.Repository
+            $allowed = $true
+            try { & ([scriptblock]::Create($runnerGuard.Extent.Text)) }
+            catch { $allowed = $false }
+            Assert-Workflow ($allowed -eq $fixture.Allowed) 'Installer verification accepted an unsafe runner or rejected the renamed repository.'
+        }
     }
     Write-Host 'PASS workflow: installation verification allows both repository names only on disposable Windows Actions'
 

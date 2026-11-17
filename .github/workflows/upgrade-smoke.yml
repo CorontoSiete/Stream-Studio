@@ -50,6 +50,15 @@ jobs:
           HELPER_SOURCE: ${{ inputs.helper_source }}
         run: ./scripts/test-published-upgrade.ps1 -SourceTag $env:SOURCE_TAG -TargetTag $env:TARGET_TAG -HelperSource $env:HELPER_SOURCE
 
+      - name: Exercise published ZIP download, update, and restart
+        if: inputs.helper_source == 'source'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_TAG: ${{ inputs.source_tag }}
+          TARGET_TAG: ${{ inputs.target_tag }}
+        run: ./scripts/test-published-zip-upgrade.ps1 -SourceTag $env:SOURCE_TAG -TargetTag $env:TARGET_TAG
+
       - name: Retain installation and updater logs
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
