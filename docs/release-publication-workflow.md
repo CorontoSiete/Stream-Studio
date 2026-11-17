@@ -9,8 +9,8 @@ verification succeeds.
 
 The repository is now named `CorontoSiete/Stream-Studio`. Protocol 1 installed
 updaters pin `CorontoSiete/streamlink-vlc-studio` in the signed manifest, so the
-stable release job retains that release identity and uses GitHub's redirect to
-the renamed repository. Do not replace `RELEASE_REPOSITORY` with the current
+stable release job retains that release identity. Installed clients use GitHub's
+redirect to reach the renamed repository. Do not replace `RELEASE_REPOSITORY` with the current
 workflow repository name: existing clients would reject the signed manifest.
 The disposable installer verification accepts both names, while still requiring
 Windows GitHub Actions. Workflow regressions enforce both compatibility rules.
@@ -34,6 +34,13 @@ source ZIP on that disposable runner and calls its real `CheckAsync`,
 the restarted target's version, ZIP ownership, retained user file, and completed
 update state. The helper verifies installed runtime dependencies before restart.
 This ZIP test requires the target to be the current published release.
+
+`publish-release.ps1 -Repository` validates the signed release identity;
+`-GitHubRepository` selects the current GitHub destination for all API calls,
+uploads, and draft markers. The workflow passes `GITHUB_REPOSITORY` for that
+destination. Publication must avoid the old-address redirect: Actions integration
+tokens can read the redirected repository but fail release creation with HTTP 403.
+The optional destination defaults to `-Repository` for repositories without a rename.
 
 ## Retry an interrupted release
 

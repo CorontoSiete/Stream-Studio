@@ -127,7 +127,9 @@ function gh {
 }
 
 function Invoke-Publication {
+    param([string]$GitHubRepository = $repository)
     & $publisher -Tag $tag -Commit $commit -Repository $repository -ContractPath $contractPath `
+        -GitHubRepository $GitHubRepository `
         -ReleaseDirectory $releaseRoot -NotesPath (Join-Path $fixtureRoot 'notes.md')
 }
 
@@ -172,6 +174,24 @@ try {
     Assert-Publication (-not $publicationScenario.Releases[0].draft -and $publicationScenario.Assets.Count -eq 7) 'Complete release was not published.'
     Assert-Publication ($publicationScenario.Notes.Contains('`Setup.exe`; preserve $literal')) 'Release note literals were altered.'
     Write-Host 'PASS publication: signed local set, private staging, remote verification, literal release notes'
+
+    $publicationScenario = New-PublicationScenario
+    $publicationScenario.FailUpload = $true
+    Assert-PublicationFailure { Invoke-Publication -GitHubRepository 'fixture/renamed-studio' } 'exit code 19'
+    $publicationScenario.FailUpload = $false
+    Invoke-Publication -GitHubRepository 'fixture/renamed-studio'
+    Assert-Publication (-not $publicationScenario.Releases[0].draft -and $publicationScenario.Assets.Count -eq 7) `
+        'Publication did not resume through the renamed repository.'
+    foreach ($call in $publicationScenario.Calls) {
+        if ($call[0] -eq 'api') {
+            Assert-Publication ($call[1].StartsWith('repos/fixture/renamed-studio/')) 'Publication read through a repository redirect.'
+        } else {
+            Assert-Publication ((Get-FakeOption $call '--repo') -ceq 'fixture/renamed-studio') 'Publication wrote through a repository redirect.'
+        }
+    }
+    Assert-Publication ((Get-Content (Join-Path $releaseRoot 'UPDATE-MANIFEST.json') -Raw | ConvertFrom-Json).repository -ceq $repository) `
+        'Renamed publication changed the signed updater identity.'
+    Write-Host 'PASS publication: renamed GitHub destination retains signed identity across an interrupted upload'
 
     foreach ($failUpload in @($false, $true)) {
         $publicationScenario = New-PublicationScenario

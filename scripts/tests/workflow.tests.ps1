@@ -99,6 +99,9 @@ try {
     Assert-Workflow ($trustedRepository -ne '' -and $releaseRepository -ceq $trustedRepository) `
         'Signed releases must retain the repository identity trusted by installed updaters after a GitHub rename.'
     Write-Host 'PASS workflow: signed release identity stays compatible with installed updaters'
+    Assert-Workflow ([regex]::Matches($workflowText, '-GitHubRepository \$env:GITHUB_REPOSITORY').Count -eq 2) `
+        'Release preflight and publication must address the current GitHub repository directly.'
+    Write-Host 'PASS workflow: publication uses the current repository without changing the signed identity'
 
     foreach ($upgradeScriptName in @('test-published-upgrade.ps1', 'test-published-zip-upgrade.ps1')) {
         $tokens = $null

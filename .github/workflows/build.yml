@@ -367,7 +367,8 @@ jobs:
           .\scripts\publish-release.ps1 -Preflight `
             -Tag $env:RELEASE_TAG `
             -Commit $env:RELEASE_COMMIT `
-            -Repository $env:RELEASE_REPOSITORY
+            -Repository $env:RELEASE_REPOSITORY `
+            -GitHubRepository $env:GITHUB_REPOSITORY
 
       - name: Restore release runtime graph
         shell: pwsh
@@ -617,6 +618,7 @@ jobs:
             -Commit $env:RELEASE_COMMIT `
             -Repository $env:RELEASE_REPOSITORY `
             -ReleaseDirectory artifacts\release-set `
+            -GitHubRepository $env:GITHUB_REPOSITORY `
             -NotesPath $notesPath
 
       - name: Remove protected signing material
