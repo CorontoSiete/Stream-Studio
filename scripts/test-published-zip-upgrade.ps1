@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [ValidatePattern('^v\d+\.\d+\.\d+$')][string]$SourceTag = 'v1.8.12',
-    [ValidatePattern('^v\d+\.\d+\.\d+$')][string]$TargetTag = 'v1.8.13'
+    [ValidatePattern('^v\d+\.\d+\.\d+$')][string]$TargetTag = 'v1.8.14'
 )
 
 Set-StrictMode -Version Latest

@@ -79,6 +79,8 @@ internal static partial class LocalWebTestCatalog
         await AssertChatAtVideoBottom(core);
         // A deliberately moved overlay can cover the video controls. The stream menu
         // keeps fullscreen reachable without moving or hiding that overlay.
+        // WebView2 requires controller focus to grant fullscreen for this offscreen host.
+        controller.MoveFocus(CoreWebView2MoveFocusReason.Programmatic);
         await ClickBrowser(core, ".player-options summary");
         await ClickBrowser(core, "[data-action=fullscreen-menu]");
         await WaitBrowser(core, "document.fullscreenElement?.classList.contains('player')===true");
