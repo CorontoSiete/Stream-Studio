@@ -16,7 +16,7 @@
   &nbsp;·&nbsp;
   <a href="https://github.com/CorontoSiete/streamlink-vlc-studio/issues">Report an issue</a>
   &nbsp;·&nbsp;
-  <a href="https://discord.gg/29TBmNsa6p">Join the Stream Studio Discord</a>
+  <a href="https://discord.gg/29TBmNsa6p"><img src="docs/assets/discord.svg" alt="" width="20"> Join the Stream Studio Discord</a>
 </p>
 
 <p align="center">Windows 10 &amp; 11 · 64-bit</p>
