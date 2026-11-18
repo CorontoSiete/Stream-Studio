@@ -66,7 +66,7 @@ def split_notes(text, limit=3600):
     return chunks
 
 
-def build_payloads(release):
+def build_payloads(release, *, ping_everyone=True):
     url = release.get("html_url", "")
     if not url.startswith(RELEASE_PREFIX + "tag/") or release.get("draft"):
         raise ValueError("Only published Stream Studio releases can be announced.")
@@ -98,12 +98,16 @@ def build_payloads(release):
         }
         if release.get("published_at"):
             embed["timestamp"] = release["published_at"]
+        message = {"allowed_mentions": {"parse": []}, "embeds": [embed]}
         if index == 0:
             embed["fields"] = [
                 {"name": "Download for Windows", "value": f"[Get the installer]({installer})", "inline": True},
                 {"name": "Full changelog", "value": f"[View this release]({url})", "inline": True},
             ]
-        messages.append({"allowed_mentions": {"parse": []}, "embeds": [embed]})
+            if ping_everyone:
+                message["content"] = "@everyone"
+                message["allowed_mentions"]["parse"].append("everyone")
+        messages.append(message)
     return messages
 
 
@@ -113,7 +117,7 @@ def load_release(path=None):
     event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text(encoding="utf-8"))
     if event.get("release"):
         return event["release"]
-    tag = (event.get("inputs") or {}).get("release_tag", "").strip()
+    tag = (os.environ.get("DISCORD_RELEASE_TAG") or (event.get("inputs") or {}).get("release_tag", "")).strip()
     suffix = "tags/" + quote(tag, safe="") if tag else "latest"
     return request_json(
         f"https://api.github.com/repos/{REPOSITORY}/releases/{suffix}",
@@ -130,13 +134,16 @@ def main():
     webhook = os.environ.get("DISCORD_RELEASE_WEBHOOK_URL", "").strip()
     if not re.fullmatch(WEBHOOK_PATTERN, webhook):
         raise ValueError("DISCORD_RELEASE_WEBHOOK_URL is missing or is not a Discord webhook.")
-    if args.edit_message_id and not args.edit_message_id.isdecimal():
+    if args.edit_message_id is not None and not args.edit_message_id.isdecimal():
         raise ValueError("The message ID must contain only digits.")
     release = load_release(args.release_json)
-    messages = build_payloads(release)
+    messages = build_payloads(release, ping_everyone=args.edit_message_id is None)
     dry_run = args.dry_run or os.environ.get("DISCORD_DRY_RUN", "").lower() == "true"
     message_ids = []
-    if not dry_run:
+    if dry_run:
+        if not args.release_json:
+            request_json(webhook)
+    else:
         for index, payload in enumerate(messages):
             edit = args.edit_message_id if index == 0 else None
             endpoint = webhook + (f"/messages/{edit}" if edit else "") + "?wait=true"

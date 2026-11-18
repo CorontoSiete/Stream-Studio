@@ -3,24 +3,29 @@
 The **Announce Discord release** workflow posts published Stream Studio releases
 to the server's #announcements channel. Each post includes the release notes,
 Windows installer link, full release link, publication time, and Stream Studio's
-mint accent. It sends no mass mentions. Draft changes, commits, and builds do not
-trigger announcements.
+mint accent. The first post for each published release pings `@everyone`.
+Changelog continuation posts and announcement edits are silent. Only release
+publication triggers automatic announcements.
 
 The workflow needs the repository Actions secret DISCORD_RELEASE_WEBHOOK_URL.
 Use a Discord incoming webhook that can post only to #announcements. Never put
 its URL in source files, release notes, issue comments, or workflow logs.
 
-This is independent of the protected release build and runs after publication.
-A notification failure does not change the published release or in-app updater.
-The workflow has read-only repository access and no signing credentials.
+Both the protected build and the artifact recovery workflow call the announcement
+job after successful publication. This covers releases published with `GITHUB_TOKEN`,
+which GitHub excludes from triggering new `release` workflow runs. Releases
+published through the GitHub UI still use the `release` event. The announcement
+job has read-only repository access. If a notification fails, use the manual
+workflow below to retry that release. [GitHub workflow trigger rules](https://docs.github.com/en/actions/concepts/security/github_token#when-github_token-triggers-workflow-runs)
 
 ## Verify or backfill a release
 
 Open **Actions → Announce Discord release → Run workflow**. Enter a published
 release tag, or leave it blank for the latest release. Leave **Validate without
-posting to Discord** enabled to check the payload and secret configuration.
-Disable that option only when a real announcement is wanted. Before rerunning a
-failed send, inspect the channel so an uncertain response does not duplicate it.
+posting to Discord** enabled to check the payload and verify the webhook with
+Discord.
+Running with validation disabled posts an announcement and pings `@everyone`.
+Check the channel before retrying a failed send to avoid a duplicate ping.
 
 Ordinary release notes are included in full, split into separate posts when
 needed to respect Discord's limits. Exceptionally long notes beyond ten posts

@@ -1,5 +1,7 @@
 import importlib.util
+import json
 from pathlib import Path
+from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 from urllib.error import HTTPError, URLError
@@ -25,12 +27,13 @@ def published_release(body="## New features\n\nA useful improvement."):
 
 
 class ReleaseFeedTests(unittest.TestCase):
-    def test_notes_installer_and_no_mass_mentions(self):
+    def test_first_post_pings_everyone_and_includes_notes_and_installer(self):
         messages = release_feed.build_payloads(published_release(
             "# Stream Studio 1.8.12\n\n## Fixes\n\n@everyone playback works.\n<!-- internal marker -->"
         ))
         self.assertEqual(len(messages), 1)
-        self.assertEqual(messages[0]["allowed_mentions"], {"parse": []})
+        self.assertEqual(messages[0]["content"], "@everyone")
+        self.assertEqual(messages[0]["allowed_mentions"], {"parse": ["everyone"]})
         embed = messages[0]["embeds"][0]
         self.assertEqual(embed["description"], "## Fixes\n\n@everyone playback works.")
         self.assertIn("StreamlinkVlcStudio-Setup.exe", embed["fields"][0]["value"])
@@ -40,6 +43,9 @@ class ReleaseFeedTests(unittest.TestCase):
         messages = release_feed.build_payloads(published_release(notes))
         self.assertGreater(len(messages), 1)
         self.assertEqual("".join(message["embeds"][0]["description"] for message in messages), notes)
+        for message in messages[1:]:
+            self.assertNotIn("content", message)
+            self.assertEqual(message["allowed_mentions"], {"parse": []})
         for message in messages:
             self.assertLessEqual(
                 len(message["embeds"][0]["description"].encode("utf-16-le")) // 2, 3600
@@ -58,6 +64,36 @@ class ReleaseFeedTests(unittest.TestCase):
     def test_empty_notes_link_to_release(self):
         message = release_feed.build_payloads(published_release(""))[0]
         self.assertIn("release details", message["embeds"][0]["description"])
+
+    def test_editing_an_announcement_suppresses_mentions(self):
+        message = release_feed.build_payloads(published_release(), ping_everyone=False)[0]
+        self.assertNotIn("content", message)
+        self.assertEqual(message["allowed_mentions"], {"parse": []})
+
+    def test_workflow_dry_run_checks_webhook_without_posting(self):
+        webhook = "https://discord.com/api/webhooks/123/test-token"
+        environment = {"DISCORD_RELEASE_WEBHOOK_URL": webhook, "DISCORD_DRY_RUN": "true"}
+        with (patch.dict("os.environ", environment),
+              patch("sys.argv", ["announce-discord-release.py"]),
+              patch.object(release_feed, "load_release", return_value=published_release()),
+              patch.object(release_feed, "request_json") as request,
+              patch("builtins.print")):
+            release_feed.main()
+            request.assert_called_once_with(webhook)
+
+    def test_workflow_call_fetches_the_published_release_by_tag(self):
+        release = published_release()
+        with TemporaryDirectory() as directory:
+            event_path = Path(directory) / "event.json"
+            event_path.write_text(json.dumps({"inputs": {"tag": "v1.8.12"}}), encoding="utf-8")
+            environment = {"GITHUB_EVENT_PATH": str(event_path), "DISCORD_RELEASE_TAG": release["tag_name"],
+                           "GITHUB_TOKEN": "fixture"}
+            with (patch.dict("os.environ", environment),
+                  patch.object(release_feed, "request_json", return_value=release) as request):
+                self.assertEqual(release_feed.load_release(), release)
+                request.assert_called_once_with(
+                    f"https://api.github.com/repos/{release_feed.REPOSITORY}/releases/tags/v1.8.12", token="fixture"
+                )
 
     def test_network_errors_hide_credentials_and_do_not_retry_ambiguous_sends(self):
         private_url = "https://discord.com/api/webhooks/123/private-posting-key"
