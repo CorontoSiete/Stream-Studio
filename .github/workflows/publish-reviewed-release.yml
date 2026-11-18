@@ -112,3 +112,11 @@ jobs:
           ./scripts/publish-release.ps1 -Tag $env:RELEASE_TAG -Commit $env:RELEASE_COMMIT `
             -Repository $env:RELEASE_REPOSITORY -GitHubRepository $env:GITHUB_REPOSITORY `
             -ReleaseDirectory artifacts/recovered-release -NotesPath $notesPath
+
+  announce:
+    needs: publish
+    uses: ./.github/workflows/discord-releases.yml
+    with:
+      release_tag: ${{ inputs.tag }}
+    secrets:
+      DISCORD_RELEASE_WEBHOOK_URL: ${{ secrets.DISCORD_RELEASE_WEBHOOK_URL }}
