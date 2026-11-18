@@ -10,6 +10,7 @@ internal static partial class ApplicationTestCatalog
         ("VOD auto-download: Kick waits for completion, skips backlog, and remembers queued IDs", () => AutoDownloadCandidatesAsync(PlatformKind.Kick)),
         ("VOD auto-download: per-channel toggles synchronize cards and separate platforms", AutoDownloadTogglesAsync),
         ("VOD auto-download: paging and transient failures do not lose new broadcasts", AutoDownloadPagingAsync),
+        ("VOD auto-download: paging advances through empty and unrelated results", AutoDownloadEmptyPagesAsync),
         ("VOD auto-download: disabling during a completion check prevents queuing", AutoDownloadDisableAsync),
         ("VOD auto-download: closing cancels an in-flight completion check", AutoDownloadShutdownAsync),
         ("VOD auto-download: startup and timer work without browsing and stop on disposal", AutoDownloadTimerAsync),
@@ -158,6 +159,26 @@ internal static partial class ApplicationTestCatalog
         Assert.Equal(2, settings.Downloads.AutoDownloadChannels.Single().QueuedVideoIds.Count);
         Assert.Equal("next", twitch.Requests[1].Cursor);
         Assert.True(twitch.Requests.All(request => request.Type == TwitchVodTypeFilter.Archive));
+    });
+
+    private static Task AutoDownloadEmptyPagesAsync() => TestSta.RunOffscreenAsync(async () =>
+    {
+        var enabled = DateTimeOffset.UtcNow.AddDays(-1);
+        var unrelated = AutoVod(PlatformKind.Twitch, "101", enabled.AddHours(1), "anotherchannel");
+        var newBroadcast = AutoVod(PlatformKind.Twitch, "102", enabled.AddHours(1));
+        var twitch = new FakeTwitchVodService(
+            AutoTwitchResult() with { NextCursor = "second" },
+            AutoTwitchResult(unrelated) with { NextCursor = "third" },
+            AutoTwitchResult(newBroadcast));
+        var settings = new AppSettings();
+        settings.Downloads.AutoDownloadChannels = [new(PlatformKind.Twitch, "streamer", enabled)];
+        var service = new CardDownloadTestService();
+        await using var downloads = AutoDownloads(AutoDownloadDependencies(settings, service, twitch));
+
+        await downloads.CheckAutoDownloadsAsync();
+
+        Assert.Equal(3, twitch.CallCount);
+        Assert.Equal(newBroadcast.Id, service.Requests.Single().Target.MediaId);
     });
 
     private static Task AutoDownloadDisableAsync() => TestSta.RunOffscreenAsync(async () =>

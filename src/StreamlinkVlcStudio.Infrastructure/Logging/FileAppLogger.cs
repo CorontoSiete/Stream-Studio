@@ -421,18 +421,24 @@ public sealed partial class FileAppLogger : IAppLogger, IDisposable, IAsyncDispo
 
     internal static string Sanitize(string? value, int maximumCharacters)
     {
+        // These replacements consist of a captured prefix and literal text. Use
+        // match evaluators to avoid compiling regex replacement templates during logging.
+        static string RedactValue(Match match) => string.Concat(match.Groups[1].ValueSpan, "[REDACTED]");
+
         // Redact whole credential headers before escaping line breaks so cookie
         // attributes and non-Bearer authorization schemes cannot leave a secret behind.
-        var normalized = SensitiveHeaderPattern().Replace(value ?? "", "$1[REDACTED]");
-        normalized = UrlUserInfoPattern().Replace(normalized, "$1[REDACTED]@");
+        var normalized = SensitiveHeaderPattern().Replace(value ?? "", RedactValue);
+        normalized = UrlUserInfoPattern().Replace(normalized,
+            static match => string.Concat(match.Groups[1].ValueSpan, "[REDACTED]@"));
         // Quoted values can contain spaces, commas, and escaped quotes. Redact them
         // before the unquoted patterns so no suffix of the credential survives.
-        normalized = QuotedSensitiveAssignmentPattern().Replace(normalized, "$1[REDACTED]");
-        normalized = SensitiveQueryPattern().Replace(normalized, "$1[REDACTED]");
-        normalized = BearerTokenPattern().Replace(normalized, "$1 [REDACTED]");
-        normalized = OAuthPrefixPattern().Replace(normalized, "oauth:[REDACTED]");
-        normalized = SensitiveAssignmentPattern().Replace(normalized, "$1[REDACTED]");
-        normalized = JwtPattern().Replace(normalized, "[REDACTED-JWT]");
+        normalized = QuotedSensitiveAssignmentPattern().Replace(normalized, RedactValue);
+        normalized = SensitiveQueryPattern().Replace(normalized, RedactValue);
+        normalized = BearerTokenPattern().Replace(normalized,
+            static match => string.Concat(match.Groups[1].ValueSpan, " [REDACTED]"));
+        normalized = OAuthPrefixPattern().Replace(normalized, static _ => "oauth:[REDACTED]");
+        normalized = SensitiveAssignmentPattern().Replace(normalized, RedactValue);
+        normalized = JwtPattern().Replace(normalized, static _ => "[REDACTED-JWT]");
         normalized = normalized.Replace("\r\n", "\\n", StringComparison.Ordinal)
             .Replace("\r", "\\n", StringComparison.Ordinal)
             .Replace("\n", "\\n", StringComparison.Ordinal);

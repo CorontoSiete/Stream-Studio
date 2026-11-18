@@ -26,7 +26,7 @@ module.exports = async ({ cdp, evaluate, wait, capture, viewport, requests }) =>
   await choose('#discover-language', 'en');
   await wait(settled);
   await capture('twitch-category-english-desktop');
-  await choose('#platform', 'kick');
+  await choose('#discover-platform', 'kick');
   await wait(settled + " && document.querySelector('#cards').classList.contains('categories')");
   await click('#cards .card-main');
   await wait(settled + " && !document.querySelector('#cards').classList.contains('categories')");
@@ -36,7 +36,7 @@ module.exports = async ({ cdp, evaluate, wait, capture, viewport, requests }) =>
   await capture('kick-category-english-mobile');
   await choose('#discover-language', 'fr');
   await wait(settled + " && !document.querySelector('#empty-state').hidden");
-  await choose('#platform', 'twitch');
+  await choose('#discover-platform', 'twitch');
   await wait(settled + " && document.querySelector('#cards').classList.contains('categories')");
   await click('#cards .card:nth-child(2) .card-main');
   await wait(settled);
@@ -60,7 +60,7 @@ module.exports = async ({ cdp, evaluate, wait, capture, viewport, requests }) =>
   await click('#cards .card-main');
   await wait(settled);
   assert.equal(requests.at(-1).language, 'en', 'the original category keeps English after reconnecting');
-  await choose('#platform', 'kick');
+  await choose('#discover-platform', 'kick');
   await wait(settled + " && document.querySelector('#cards').classList.contains('categories')");
   await click('#cards .card-main');
   await wait(settled + " && !document.querySelector('#empty-state').hidden");

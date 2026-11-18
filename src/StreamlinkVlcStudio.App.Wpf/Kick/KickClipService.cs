@@ -71,5 +71,5 @@ internal sealed class KickClipService(
     }
 
     private const string TimeoutMessage = "Kick clip creation timed out. Check your channel clips before retrying. " +
-        "If sign-in or a browser check is needed, open Detect Kick follows in Settings first.";
+        "If sign-in or a browser check is needed, open Manage Kick sign-in in Settings first.";
 }

@@ -1,17 +1,28 @@
 # Web UI keyboard shortcuts
 
-Preferences → Keyboard shortcuts configures these actions for the signed-in web account:
+Preferences → Keyboard shortcuts follows desktop bindings while the web UI is open. The signed-in account can override each action.
 
 | Action | Default |
 | --- | --- |
-| Go back to the previous page | Escape |
-| Next stream tab | ] |
-| Previous stream tab | [ |
-| Toggle Multi-stream grid | G |
+| Go back to the previous page | Mouse4 |
+| Exit fullscreen or stop auto-scroll | Escape |
+| Next stream tab | Right arrow |
+| Previous stream tab | Left arrow |
+| Toggle Multi-stream grid | M |
+| Show / hide replay seek bar | Ctrl+S |
+| Pause / resume playback | Space |
+| Skip backward | NumPad4 |
+| Skip forward | NumPad6 |
+| Volume up | Up arrow |
+| Volume down | Down arrow |
 | Toggle always keep audio on for the selected stream | A |
-| Mute / unmute the selected stream | M |
+| Mute / unmute the selected stream | Shift+M when M is used by the grid |
 
-Focus a shortcut field and press the desired key, combination, or mouse side button (Mouse4/Mouse5). Arrow keys can be assigned to Next/Previous stream tab, including without modifiers. Shortcut changes apply immediately and save to the web account. Clear disables that action immediately; Restore defaults applies and saves all six defaults. Duplicate bindings and reserved search/playback keys are rejected. Tab continues moving between controls. Browser/system shortcuts may be intercepted outside the page. A failed account save is reported in the browser.
+Focus a shortcut field and press the desired key, combination, or mouse side button (Mouse4/Mouse5). Changes apply immediately and save to the web account. **Clear** disables the action. **Use desktop** resumes inheritance for that action, and **Restore defaults** removes all web overrides. Explicit web assignments take priority if a later desktop edit uses the same key. Older saved shortcut lists keep custom bindings and cleared actions. Entries matching the old defaults follow the current defaults.
+
+The skip sliders set each direction independently from 1 to 300 seconds. They follow the desktop skip distances until changed. The volume sliders set each direction from 1 to 100 percentage points, with a default step of 5. Reset each slider on its row or use **Restore defaults** to reset every shortcut and slider.
+
+Holding the middle mouse button over the library starts auto-scroll when the page can scroll. Release the button or use the fullscreen and auto-scroll dismissal shortcut to stop.
 
 The 2026-10-24 persistence fix removed a separate shortcut draft. That historical regression records Mouse4 and Left/Right, leaves Preferences without submitting the form, exercises Back and both stream directions, then checks the bindings after reload. Current shortcut edits use the same account save path as the other web preferences.
 
@@ -19,7 +30,7 @@ Back retraces application navigation: Following → Downloads → Back returns t
 
 Grid uses the existing Multi-stream action and keeps every player's menu switch synchronized, including fullscreen layout changes. Always keep audio on uses the selected stream's existing checkbox. Manual mute takes precedence over that setting. Muting does not change the saved volume, and the mute shortcut works on the selected stream even when another page is visible. Audio and grid behavior remain governed by the existing inactive-stream playback preferences.
 
-Shortcuts do not run while typing, using a select/range control, composing text or using a modal dialog. Holding a key does not repeatedly toggle an action. Chat move/resize handles retain their keyboard navigation and Escape cancellation. Video Space/K playback and F fullscreen shortcuts continue working; video M is handled by the configurable selected-stream binding, so changing or disabling it also disables the old key on a focused video.
+Shortcuts pause while typing, using a select or range control, composing text, or using a modal dialog. Holding a volume key adjusts the level repeatedly. Buttons and switches keep their native Space behavior when focused. Chat move and resize handles keep their keyboard navigation and Escape cancellation. F enters fullscreen from a focused video. Browsers and operating systems may intercept some keys before the web UI receives them.
 
 Checkboxes and switches allow navigation shortcuts while focused. A Brave regression was reproduced with Mouse4 bound to Back and Left/Right bound to stream selection: clicking Live only or Multi-stream left its checkbox focused, and the generic input guard silently blocked the shortcuts. The guard now distinguishes those controls from text fields, sliders, radio groups and selects. Trusted pointer/key regressions retain the checkbox's actual focus, check Back and both stream directions on library/player views, and verify that Space still toggles the switch. The earlier fixture moved focus to the library between actions and missed this case.
 
@@ -28,6 +39,7 @@ Mouse side buttons support the same modifiers, conflict checks, clear/reset and 
 Regression commands:
 
 ```powershell
+node scripts/tests/web-navigation.browser.cjs --desktop-hotkeys-only
 node scripts/tests/web-navigation.browser.cjs --hotkeys-only
 node scripts/tests/web-navigation.browser.cjs
 node scripts/tests/web-navigation.browser.cjs --search-only

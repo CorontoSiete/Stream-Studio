@@ -10,6 +10,7 @@ internal static partial class ApplicationTestCatalog
         await using var fixture = new VodDownloadTestCatalog.DownloadFixture(PlatformKind.Twitch);
         var item = await fixture.DownloadAsync();
         var settings = VodResumeTestCatalog.Settings();
+        settings.Downloads.Format = VodDownloadFormat.Hls;
         settings.Theme = theme;
         settings.Downloads.Quality = "720p";
         settings.Downloads.BandwidthLimitMegabytesPerSecond = 1.25;
@@ -192,10 +193,14 @@ internal static partial class ApplicationTestCatalog
         await using var model = CreateDownloadCardsMain(service, [], action => action());
         var original = model.Settings.Downloads;
         original.BandwidthLimitMegabytesPerSecond = 1.5;
-        original.Format = VodDownloadFormat.Mp4;
         Assert.Equal(VodDownloadFormat.Mp4, service.DownloadFormat);
         Assert.Equal(1_500_000L, service.BandwidthLimit);
-        model.Settings.Downloads = new DownloadSettings { Quality = "720p", BandwidthLimitMegabytesPerSecond = 0.25 };
+        model.Settings.Downloads = new DownloadSettings
+        {
+            Quality = "720p",
+            Format = VodDownloadFormat.Hls,
+            BandwidthLimitMegabytesPerSecond = 0.25
+        };
         Assert.Equal("720p", model.SelectedVodDownloadQuality);
         Assert.Equal(VodDownloadFormat.Hls, service.DownloadFormat);
         Assert.Equal(250_000L, service.BandwidthLimit);

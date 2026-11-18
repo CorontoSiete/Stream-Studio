@@ -16,7 +16,7 @@ for (const platform of ['twitch', 'kick']) {
     } });
     try {
       f.state.page = 'discover'; f.state.category = { id: '1', name: 'Category' };
-      f.document.querySelector('#platform').value = platform;
+      f.document.querySelector('#discover-platform').value = platform;
       const language = f.document.querySelector('#discover-language'); language.value = 'en';
       await f.load();
       const more = f.load(true);

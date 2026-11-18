@@ -14,7 +14,9 @@ internal sealed partial class LocalWebMedia
         for (var depth = 0; depth < 4; depth++)
         {
             string content;
-            if (uri == TrustedPlaylistUri && trustedPlaylist is not null) content = trustedPlaylist;
+            // Measure the same pinned master that the player receives. Only its
+            // selected media playlist needs to be fetched again as it grows.
+            if (depth == 0 && trustedPlaylist is { } rootPlaylist) content = rootPlaylist;
             else
             {
                 using var response = await FetchAsync(uri, "", token).ConfigureAwait(false);

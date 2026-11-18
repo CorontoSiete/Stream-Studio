@@ -21,7 +21,7 @@ public sealed class DockedChatMessageTextBlock : RichTextBox
     private static readonly Brush UsernameFallbackBrush = CreateFrozenBrush("#8AB4F8");
     private static readonly Brush MessageBrush = CreateFrozenBrush("#E8EAED");
     private static readonly Brush LinkBrush = CreateFrozenBrush("#8AB4F8");
-    private static readonly Brush NativeOverlayMessageBrush = CreateFrozenBrush("#FFFFFF");
+    private static readonly Brush NativeOverlayMessageBrush = CreateFrozenBrush("#EEEEEE");
     private static readonly Brush NativeOverlaySystemBrush = CreateFrozenBrush("#93C5FD");
     private static readonly Brush NativeOverlaySelectionBrush = CreateFrozenBrush("#CD2E78C9");
     private static readonly Brush[] NativeOverlayUsernameBrushes =

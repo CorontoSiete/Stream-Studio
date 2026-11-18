@@ -2,7 +2,7 @@
 
 Select a live Kick tab and click **Clip**. The app creates and publishes the latest 30 seconds in the background with a channel-and-timestamp title, then opens the confirmed public clip in the default browser. There is no editor window or browser audio. The app status bar reports progress and errors.
 
-Sign in once through **Detect Kick follows** in Settings. The background browser shares `%LOCALAPPDATA%\StreamStudio\KickFollowsWebView2` with follow detection. Website sign-in is separate from the Kick OAuth credentials under Accounts and from the default browser's sign-in. **Clear Kick sign-in** in follow detection clears this shared session. If sign-in expires or Kick requires a browser check, the status bar directs you back to Detect Kick follows. Playback media is allowed for the hidden editor but always muted; the follow importer still blocks media. VOD clipping is outside this change.
+Sign in through **Manage Kick sign-in** in Settings. The background browser shares `%LOCALAPPDATA%\StreamStudio\KickFollowsWebView2` with follow detection. This profile stores its Kick website session independently of the Kick OAuth credentials in Accounts and the session in your default browser. Use **Clear Kick sign-in** in that window to reset the shared session. If sign-in expires or Kick requires a browser check, the status bar directs you back to **Manage Kick sign-in**. The hidden editor is muted and can load playback media.
 
 ## Verified sources, 2026-09-26
 

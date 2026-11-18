@@ -11,6 +11,7 @@ using StreamlinkVlcStudio.App.Wpf.Twitch;
 using StreamlinkVlcStudio.Core;
 using StreamlinkVlcStudio.Core.Models;
 using StreamlinkVlcStudio.Core.Services;
+using StreamlinkVlcStudio.Infrastructure.Twitch;
 
 namespace StreamlinkVlcStudio.App.Wpf.Follows;
 
@@ -19,14 +20,27 @@ internal sealed class ChannelFollowService(
     Func<nint, Task<CoreWebView2Controller>>? controllerFactory = null,
     Func<PlatformKind, CancellationToken, Task<bool>>? signIn = null,
     TimeSpan? operationTimeout = null,
-    Func<CoreWebView2Controller, StreamTarget, Action, IDisposable?>? verificationFactory = null) : IChannelFollowService
+    Func<CoreWebView2Controller, StreamTarget, Action, IDisposable?>? verificationFactory = null,
+    TwitchChannelFollowLookup? twitchLookup = null) : IChannelFollowService
 {
     internal static string TwitchProfileDirectory => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         AppIdentity.ProductDirectoryName, "TwitchFollowsWebView2");
 
-    public Task<ChannelFollowResult?> GetFollowStatusAsync(StreamTarget target, CancellationToken cancellationToken = default) =>
-        RunAsync(target, null, cancellationToken);
+    public async Task<ChannelFollowResult?> GetFollowStatusAsync(StreamTarget target, CancellationToken cancellationToken = default)
+    {
+        owner.Dispatcher.VerifyAccess();
+        cancellationToken.ThrowIfCancellationRequested();
+        var accessToken = GetConnectedTwitchToken(target.Platform);
+        if (accessToken.Length == 0) return await RunAsync(target, null, cancellationToken);
+
+        if (!ChannelFollowResponseTracker.TryGetChannel(target, out var channel))
+            throw new InvalidOperationException("Select a Twitch broadcaster to check follow status.");
+        var result = await twitchLookup!.GetFollowStatusAsync(
+            channel with { BroadcasterId = target.BroadcasterId }, accessToken, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        return GetConnectedTwitchToken(target.Platform) == accessToken ? result : null;
+    }
 
     public Task<ChannelFollowResult?> FollowAsync(StreamTarget target, CancellationToken cancellationToken = default) =>
         RunAsync(target, true, cancellationToken);
@@ -39,6 +53,10 @@ internal sealed class ChannelFollowService(
         owner.Dispatcher.VerifyAccess();
         cancellationToken.ThrowIfCancellationRequested();
         var channel = new ChannelFollowResponseTracker(target).Target;
+        var accessToken = GetConnectedTwitchToken(channel.Platform);
+        var connectedUserId = desiredFollowing is not null && accessToken.Length != 0
+            ? (await twitchLookup!.ValidateAccountAsync(accessToken, cancellationToken)).UserId
+            : null;
         try
         {
             CoreWebView2Environment? environment = null;
@@ -71,8 +89,8 @@ internal sealed class ChannelFollowService(
                 ConfigureBrowser(core, channel.Platform);
                 for (var attempt = 0; attempt < 2; attempt++)
                 {
-                    var session = await GetSessionFingerprintAsync(core, channel.Platform, cancellationToken);
-                    if (session is null)
+                    var sessionToken = await GetSessionTokenAsync(core, channel.Platform, cancellationToken);
+                    if (sessionToken is null)
                     {
                         if (desiredFollowing is null) return null;
                         if (attempt != 0) throw new InvalidOperationException($"Sign in to {channel.Platform} before following a streamer.");
@@ -80,14 +98,22 @@ internal sealed class ChannelFollowService(
                         continue;
                     }
 
+                    if (connectedUserId is not null &&
+                        (await twitchLookup!.ValidateAccountAsync(sessionToken, cancellationToken)).UserId != connectedUserId)
+                    {
+                        if (attempt != 0) throw new InvalidOperationException(
+                            "The Twitch website is signed in to a different account. Use the Twitch account connected in Settings to change follows.");
+                        if (!await SignInAsync()) return null;
+                        continue;
+                    }
+
+                    var session = CreateSessionFingerprint(sessionToken);
+                    if (connectedUserId is not null) await VerifySessionAsync(cancellationToken);
+
                     ChannelFollowResult result;
                     try
                     {
-                        using var client = new ChannelFollowBrowserClient(core, target, operationTimeout, async ct =>
-                        {
-                            if (await GetSessionFingerprintAsync(core, channel.Platform, ct) != session)
-                                throw new InvalidOperationException($"The {channel.Platform} website session changed during the follow. Check the channel before retrying.");
-                        }, () =>
+                        using var client = new ChannelFollowBrowserClient(core, target, operationTimeout, VerifySessionAsync, () =>
                         {
                             verification ??= verificationFactory is not null
                                 ? verificationFactory(controller, channel, () => followLifetime.Cancel())
@@ -109,15 +135,22 @@ internal sealed class ChannelFollowService(
                         throw new InvalidOperationException($"The {channel.Platform} website session expired. Sign in again, then retry Follow.");
                     }
                     followLifetime.Token.ThrowIfCancellationRequested();
-                    var currentSession = await GetSessionFingerprintAsync(core, channel.Platform, followLifetime.Token);
-                    if (currentSession != session)
-                        throw new InvalidOperationException($"The {channel.Platform} website session changed during the follow. Check the channel before retrying.");
+                    await VerifySessionAsync(followLifetime.Token);
                     return result;
+
+                    async Task VerifySessionAsync(CancellationToken token)
+                    {
+                        var current = await GetSessionTokenAsync(core, channel.Platform, token);
+                        if (current is null || CreateSessionFingerprint(current) != session ||
+                            GetConnectedTwitchToken(channel.Platform) != accessToken)
+                            throw new InvalidOperationException($"The {channel.Platform} account or website session changed during the follow. Check the channel before retrying.");
+                    }
                 }
                 throw new InvalidOperationException($"The {channel.Platform} website session could not be verified. Sign in again, then retry Follow.");
 
                 Task<bool> SignInAsync() => signIn is not null ? signIn(channel.Platform, cancellationToken) :
-                    environment is not null ? ChannelFollowSignInWindow.ShowAsync(owner, environment, channel, cancellationToken) :
+                    environment is not null ? ChannelFollowSignInWindow.ShowAsync(
+                        owner, environment, channel, desiredFollowing != false, connectedUserId is not null, cancellationToken) :
                     throw new InvalidOperationException($"Sign in to {channel.Platform} before following a streamer.");
             }
             finally
@@ -140,7 +173,13 @@ internal sealed class ChannelFollowService(
         }
     }
 
-    internal static async Task<string?> GetSessionFingerprintAsync(CoreWebView2 core, PlatformKind platform, CancellationToken token)
+    private string GetConnectedTwitchToken(PlatformKind platform) =>
+        platform == PlatformKind.Twitch ? twitchLookup?.AccessToken ?? "" : "";
+
+    private static string CreateSessionFingerprint(string token) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token)));
+
+    private static async Task<string?> GetSessionTokenAsync(CoreWebView2 core, PlatformKind platform, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
         var address = platform == PlatformKind.Twitch ? "https://www.twitch.tv/" : "https://kick.com/";
@@ -149,8 +188,7 @@ internal sealed class ChannelFollowService(
         token.ThrowIfCancellationRequested();
         var values = cookies.Where(cookie => cookie.Name == name && !string.IsNullOrEmpty(cookie.Value))
             .Select(cookie => cookie.Value).Distinct(StringComparer.Ordinal).ToArray();
-        // Keep website credentials in the browser profile. Only an in-memory hash is compared between stages.
-        return values.Length == 1 ? Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(values[0]))) : null;
+        return values.Length == 1 ? values[0] : null;
     }
 
     internal static void ConfigureBrowser(CoreWebView2 core, PlatformKind platform)

@@ -253,13 +253,15 @@ public sealed partial class LibVlcPlaybackEngine : IPlaybackEngine
         string? nativeOverlayPositionStatePath,
         CancellationToken cancellationToken,
         VideoRendererMode rendererMode,
-        IPlaybackMediaSourceGateway? mediaSourceGateway = null)
+        IPlaybackMediaSourceGateway? mediaSourceGateway = null,
+        string? nativeOverlayAppDataDirectory = null)
     {
         var nativeOverlay = enableNativeOverlay
             ? await VlcOverlayPluginRuntimeFactory.TryPrepareAsync(
                     vlcDirectory,
                     chatSettings.VlcOverlayDirectory,
                     logger,
+                    appDataDirectory: nativeOverlayAppDataDirectory,
                     cancellationToken: cancellationToken)
                 .ConfigureAwait(false)
             : null;

@@ -33,7 +33,7 @@
                 <StackPanel Margin="24">
                     <TextBlock Text="Watch Stream Studio in a browser" FontSize="22" FontWeight="SemiBold"
                                TextWrapping="Wrap" Margin="0,0,0,16" />
-                    <TextBlock Text="Create a web account, then choose the Ethernet or Wi-Fi network shared with your other devices. Starting the server opens the sign-in page in your default browser. Keep the desktop app running."
+                    <TextBlock Text="Create a web account, then choose the Ethernet or Wi-Fi network shared with your other devices. Select Start server to open the sign-in page in your default browser. Keep the desktop app running."
                                TextWrapping="Wrap" Foreground="{DynamicResource StudioTextSecondaryBrush}" />
                     <TextBlock Text="Web accounts" FontSize="16" FontWeight="SemiBold" Margin="0,16,0,4" />
                     <TextBlock Text="Each account has its own browser playback, chat, shortcut and volume preferences. Desktop accounts, follows, downloads and watch history remain shared. Passwords need at least 12 characters."

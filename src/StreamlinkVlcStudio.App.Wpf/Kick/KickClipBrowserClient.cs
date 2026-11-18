@@ -55,16 +55,16 @@ internal sealed class KickClipBrowserClient : IDisposable
             core.Navigate(ChannelUri.AbsoluteUri);
             await navigation.Task.WaitAsync(TimeSpan.FromSeconds(30), token);
             if (!await OpenEditorAsync(waitUntilReady: true, token))
-                throw new InvalidOperationException("Kick's clip editor is not ready. Open Detect Kick follows in Settings to complete sign-in or any browser check, then try again.");
+                throw new InvalidOperationException("Kick's clip editor is not ready. Open Manage Kick sign-in in Settings to complete sign-in or any browser check, then try again.");
             while (!completion.Task.IsCompleted)
             {
                 token.ThrowIfCancellationRequested();
                 if (!tracker.IsChannelPage(core.Source))
-                    throw new InvalidOperationException("Kick left the selected stream. Open Detect Kick follows in Settings to check your sign-in, then try again.");
+                    throw new InvalidOperationException("Kick left the selected stream. Open Manage Kick sign-in in Settings to check your sign-in, then try again.");
                 var json = await core.ExecuteScriptAsync(KickClipEditorScript.Publish(
                     scriptKey, ChannelUri.AbsolutePath, title, tracker.HasDraft)).WaitAsync(token);
                 if (JsonSerializer.Deserialize<string>(json) == "signin")
-                    throw new InvalidOperationException("Sign in to Kick using Detect Kick follows in Settings, then click Clip again.");
+                    throw new InvalidOperationException("Sign in to Kick using Manage Kick sign-in in Settings, then click Clip again.");
                 await Task.WhenAny(completion.Task, Task.Delay(250, token));
             }
             token.ThrowIfCancellationRequested();

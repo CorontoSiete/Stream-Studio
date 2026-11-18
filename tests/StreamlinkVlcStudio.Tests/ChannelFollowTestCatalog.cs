@@ -12,6 +12,9 @@ internal static partial class ChannelFollowTestCatalog
         ("channel follow: unfollow verifies server state and rejects wrong targets and opposite writes", UnfollowContractsAsync),
         ("channel follow: each opened stream reads status once and toggles through unfollow and follow", StatusAndToggleAsync),
         ("channel follow: stream opening workflow checks background streams once and rechecks after closing", StatusOpenWorkflowAsync),
+        ("channel follow: opening Twitch streams checks the connected account without a website session", ConnectedTwitchStatusAsync),
+        ("channel follow: Twitch website writes require the same account as the connected follow status", ConnectedTwitchMutationAsync),
+        ("channel follow: changing the connected Twitch account refreshes open tabs", TwitchAccountSwitchAsync),
         ("channel follow: completed failed and unverified status attempts never repeat on selection", StatusAttemptsOnceAsync),
         ("channel follow: closing and reopening cancels old status reads and ignores late replies", StatusCloseAndReopenAsync),
         ("channel follow: clearing tabs and shutdown cancel all pending status reads", StatusCleanupAsync),
@@ -275,7 +278,7 @@ internal static partial class ChannelFollowTestCatalog
         await model.FollowSelectedChannelCommand.ExecuteAsync();
         Assert.Equal(1, service.Calls);
         model.SelectedTab = other;
-        Assert.Equal("Follow", model.FollowButtonText);
+        Assert.Equal("Follow\u2026", model.FollowButtonText);
         service.Completion.SetResult(new(PlatformKind.Twitch, "streamer"));
         await command;
         Assert.Equal(other, model.SelectedTab);
@@ -368,7 +371,7 @@ internal static partial class ChannelFollowTestCatalog
             }
             await command;
             Assert.Equal(false, model.IsSelectedChannelFollowed);
-            Assert.Equal("Follow", model.FollowButtonText);
+            Assert.Equal("Follow\u2026", model.FollowButtonText);
             Assert.SequenceEqual(new[] { "old" }, settings.FollowedChannels.KickImportedChannelSlugs);
             Assert.Equal(0, save.SaveCount);
             Assert.Equal(0, followed.CallCount);
@@ -454,17 +457,18 @@ internal static partial class ChannelFollowTestCatalog
             await System.Windows.Threading.Dispatcher.Yield(System.Windows.Threading.DispatcherPriority.DataBind);
             var button = (Button)window.FindName("TopFollowButton");
             Assert.Equal(model.FollowSelectedChannelCommand, button.Command);
-            Assert.Equal("Follow selected streamer", System.Windows.Automation.AutomationProperties.GetName(button));
+            Assert.Equal("Follow selected streamer, status unavailable", System.Windows.Automation.AutomationProperties.GetName(button));
             window.Measure(new Size(1100, 780));
             window.Arrange(new Rect(0, 0, 1100, 780));
             window.UpdateLayout();
-            Assert.Equal("Follow", button.Content);
-            Assert.Contains("streamer", (string)button.ToolTip);
+            Assert.Equal("Follow\u2026", button.Content);
+            Assert.Contains("Follow status unavailable", (string)button.ToolTip);
             var command = model.FollowSelectedChannelCommand.ExecuteAsync();
             service.Completion.SetResult(new(PlatformKind.Twitch, "streamer"));
             await command;
             await System.Windows.Threading.Dispatcher.Yield(System.Windows.Threading.DispatcherPriority.DataBind);
             Assert.Equal("Following", button.Content);
+            Assert.Equal("Unfollow selected streamer", System.Windows.Automation.AutomationProperties.GetName(button));
             Assert.True(button.MinWidth >= 82);
         }
         finally { window.DataContext = null; window.Close(); }
@@ -519,6 +523,7 @@ internal static partial class ChannelFollowTestCatalog
     private sealed class PendingImporter : IKickFollowedChannelsImporter
     {
         internal TaskCompletionSource<IReadOnlyList<string>?> Completion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public Task<IReadOnlyList<string>?> ImportAsync(CancellationToken cancellationToken = default) => Completion.Task;
+        public Task<IReadOnlyList<string>?> ImportAsync(CancellationToken cancellationToken = default, bool openSignInWindow = false) =>
+            Completion.Task;
     }
 }

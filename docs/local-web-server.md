@@ -1,6 +1,8 @@
 # LAN browser player
 
-Open **Settings → Advanced → Playback tools → LAN browser server…** in the desktop app. Add a web account with a username and a password of at least 12 characters. Select the private Ethernet or Wi-Fi address shared with the other device, choose a port (default `18443`), and select **Start server**. The app opens the sign-in page in the Windows default browser. On a TV, Linux computer, phone, or tablet, open the displayed **HTTPS** address and sign in with a web account. The browser may first require trusting the server's local HTTPS certificate. Keep Stream Studio running on the Windows host. Closing the control window leaves a running server available; **Stop server** or exiting the app closes it. Each application launch starts with the server off.
+Open **Settings → Advanced → Playback tools → LAN browser server…** in the desktop app. Add a web account with a username and a password of at least 12 characters. Select the private Ethernet or Wi-Fi address shared with the other device, choose a port (default `18443`), and select **Start server**. The app opens the sign-in page in the Windows default browser. On a TV, Linux computer, phone, or tablet, open the displayed **HTTPS** address and sign in with a web account. The browser may first require trusting the server's local HTTPS certificate. Keep Stream Studio running on the Windows host. Closing the control window leaves a running server available. **Stop server** or exiting the app closes it.
+
+After the first successful start, turn on **Start LAN browser server when Stream Studio opens** under **Settings → Advanced → Playback tools**. Stream Studio reuses the saved network address and HTTPS port the next time it opens. Open the saved HTTPS address on the device where you want to watch. If the saved address changes, choose the connected interface and select **Start server** again.
 
 ## If another device times out
 

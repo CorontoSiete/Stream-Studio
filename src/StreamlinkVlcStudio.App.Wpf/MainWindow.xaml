@@ -2315,6 +2315,7 @@
                                                             <Button Command="{Binding OpenCommand}"
                                                                     AutomationProperties.Name="{Binding DisplayName}"
                                                                     ContextMenuService.ShowOnDisabled="True"
+                                                                    ToolTipService.ShowOnDisabled="True"
                                                                     PreviewMouseDown="HomeStreamItemButton_PreviewMouseDown"
                                                                     Margin="0,0,0,6"
                                                                     Padding="0"
@@ -2370,6 +2371,7 @@
                                                                             </Trigger>
                                                                             <Trigger Property="IsEnabled" Value="False">
                                                                                 <Setter Property="Opacity" Value="0.55" />
+                                                                                <Setter Property="ToolTip" Value="{Binding StatusText}" />
                                                                             </Trigger>
                                                                         </ControlTemplate.Triggers>
                                                                     </ControlTemplate>
@@ -2451,21 +2453,19 @@
                                                                                        VerticalAlignment="Center" />
                                                                         </DockPanel>
                                                                         <TextBlock Text="{Binding CategoryName}"
+                                                                                   ToolTip="{Binding CategoryName}"
                                                                                    FontSize="11"
                                                                                    Foreground="{DynamicResource StudioAccentTextBrush}"
                                                                                    TextTrimming="CharacterEllipsis"
                                                                                    Margin="0,2,0,0"
                                                                                    Visibility="{Binding HasCategory, Converter={StaticResource BoolToVisibility}}" />
-                                                                        <TextBlock Text="{Binding Url}"
-                                                                                   FontSize="11"
-                                                                                   Foreground="{DynamicResource StudioTextMutedBrush}"
-                                                                                   TextTrimming="CharacterEllipsis"
-                                                                                   Margin="0,2,0,0" />
-                                                                        <TextBlock Text="{Binding StatusText}"
-                                                                                   FontSize="11"
-                                                                                   Foreground="{DynamicResource StudioTextSecondaryBrush}"
-                                                                                   TextTrimming="CharacterEllipsis"
-                                                                                   Margin="0,2,0,0" />
+                                                                        <controls:EmojiTextBlock SourceText="{Binding Title}"
+                                                                                                 ToolTip="{Binding Title}"
+                                                                                                 FontSize="11"
+                                                                                                 Foreground="{DynamicResource StudioTextSecondaryBrush}"
+                                                                                                 TextTrimming="CharacterEllipsis"
+                                                                                                 Margin="0,2,0,0"
+                                                                                                 Visibility="{Binding HasTitle, Converter={StaticResource BoolToVisibility}}" />
                                                                     </StackPanel>
 
                                                                     <WrapPanel Orientation="Horizontal" VerticalAlignment="Center">
@@ -4566,10 +4566,11 @@
                                                       Content="Windows toast notifications"
                                                       ContentTemplate="{StaticResource SettingsWrappedToggleContent}" />
                                             <TextBlock Text="Kick follows" Style="{StaticResource StudioFieldLabelStyle}" />
-                                            <TextBlock Text="Sign in to Kick to detect your followed channels, including channels that are offline."
+                                            <TextBlock Text="Detect live and offline follows using your saved Kick sign-in."
                                                        TextWrapping="Wrap" Margin="0,0,0,8" />
                                             <WrapPanel Margin="0,0,0,8">
                                                 <Button Content="Detect Kick follows" Command="{Binding ImportKickFollowsCommand}" Margin="0,0,8,6" />
+                                                <Button Content="Manage Kick sign-in" Command="{Binding ManageKickSignInCommand}" Margin="0,0,8,6" />
                                                 <Button Content="Clear imported follows" Command="{Binding ClearImportedKickFollowsCommand}" Margin="0,0,0,6" />
                                             </WrapPanel>
                                             <TextBlock Text="{Binding KickImportedFollowsSummary}" TextWrapping="Wrap" Margin="0,0,0,8" />
@@ -5463,7 +5464,13 @@
                                         <StackPanel>
                                             <ContentControl Content="Playback tools" Tag="{StaticResource StudioIconTools}" Style="{StaticResource StudioSectionHeading}" />
                                             <Button Content="LAN browser server…" Click="LocalWebServerButton_Click" Margin="0,0,0,8" HorizontalAlignment="Left" />
-                                            <TextBlock Text="Watch on a TV or Linux browser over your local network. HTTPS and a web account are required."
+                                            <CheckBox x:Name="AutoStartLocalWebServerCheckBox"
+                                                      IsChecked="{Binding Settings.AutoStartLocalWebServer}"
+                                                      Style="{StaticResource SettingsToggleStyle}"
+                                                      Content="Start LAN browser server when Stream Studio opens"
+                                                      ContentTemplate="{StaticResource SettingsWrappedToggleContent}"
+                                                      Margin="0,0,0,4" />
+                                            <TextBlock Text="Create a web account and start the server once to save its network address and HTTPS port for automatic startup."
                                                        TextWrapping="Wrap" Style="{StaticResource SettingsPageDescriptionStyle}" Margin="0,0,0,16" />
                                             <TextBlock Text="Streamlink executable" Style="{StaticResource StudioFieldLabelStyle}" />
                                             <DockPanel Margin="0,0,0,14">

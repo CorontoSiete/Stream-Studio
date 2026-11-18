@@ -113,7 +113,7 @@ Public streams and read-only live chat work without an account. Open **Settings 
 | --- | --- |
 | Load Twitch follows, browse Twitch VODs, send Twitch chat, or create Twitch clips | Select **Connect Twitch** and approve access in your browser. |
 | Send Kick chat and enable account-backed live-status checks | Select **Connect Kick** and approve access in your browser. |
-| Import the channels you follow on Kick | Open **Settings > General > Followed channels > Detect Kick follows**, sign in, and select **Import follows**. Repeat the import when your follows change. |
+| Import the channels you follow on Kick | Open **Settings > General > Followed channels > Detect Kick follows**. Stream Studio uses its saved Kick sign-in. If a Kick window opens, complete the sign-in or browser check and select **Import follows**. |
 | Claim available Twitch channel-point bonuses | In the Twitch account settings, select **Sign in for bonuses** and enable **Automatically claim Twitch bonuses**. |
 
 Kick follow import and Twitch bonuses require separate website sign-ins from the **Connect** buttons. Twitch bonus checks do not guarantee watch-time points; see the [channel-point reference](docs/REFERENCE.md#twitch-channel-point-bonuses) for details.
@@ -186,7 +186,7 @@ Connect or reconnect the appropriate account in **Settings > Accounts**. Chat se
 <summary><strong>My followed channels or past broadcasts are missing</strong></summary>
 
 - **Twitch:** select **Connect Twitch** again to refresh the account's permissions.
-- **Kick:** run **Detect Kick follows** again and select **Import follows**. Connecting Kick alone does not import followed channels.
+- **Kick:** run **Detect Kick follows** again to update your list. Use **Manage Kick sign-in** to switch accounts.
 
 </details>
 

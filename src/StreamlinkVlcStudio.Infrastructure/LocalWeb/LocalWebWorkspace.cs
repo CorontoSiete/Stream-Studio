@@ -16,10 +16,12 @@ namespace StreamlinkVlcStudio.Infrastructure.LocalWeb;
 public sealed record LocalWebDependencies
 {
     public required Func<CancellationToken, Task<AppSettings>> GetSettingsAsync { get; init; }
+    internal Func<CancellationToken, Task<LocalWebDesktopHotkeys>>? GetDesktopHotkeysAsync { get; init; }
     public required Func<Action<AppSettings>, CancellationToken, Task> ChangeSettingsAsync { get; init; }
     public required IStreamlinkService Streamlink { get; init; }
     public required IStreamSearchService Search { get; init; }
     public required IFollowedStreamsService Following { get; init; }
+    internal Func<bool, CancellationToken, Task<FollowedLiveStreamsResult?>>? GetDesktopFollowingAsync { get; init; }
     public required IBrowseService Browse { get; init; }
     public required ITwitchVodService TwitchVods { get; init; }
     public required IKickVodService KickVods { get; init; }
@@ -52,6 +54,8 @@ public sealed partial class LocalWebWorkspace(LocalWebDependencies services) : I
     private readonly AsyncOperationGate categoryViewerCountSlots = new(4);
     private readonly AsyncOperationGate followingHistorySlot = new();
     private FollowedChannel[] offlineFollowing = [];
+    private FollowedLiveStreamsResult? desktopFollowingSnapshot;
+    private long followingRevision;
     private readonly object playerGate = new();
     private bool disposed;
     private Task? disposalTask;
@@ -62,28 +66,47 @@ public sealed partial class LocalWebWorkspace(LocalWebDependencies services) : I
         ObjectDisposedException.ThrowIf(disposed, this);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, lifetime.Token);
         var token = linked.Token;
+        if (action == "hotkeys" && services.GetDesktopHotkeysAsync is { } getDesktopHotkeys)
+            return await getDesktopHotkeys(token).ConfigureAwait(false);
         var settings = await services.GetSettingsAsync(token).ConfigureAwait(false);
         switch (action)
         {
+            case "hotkeys":
+                return LocalWebDesktopHotkeys.Capture(settings.Hotkeys);
             case "settings":
                 return new
                 {
                     settings.DefaultQuality,
                     settings.LowLatency,
                     theme = settings.Theme.ToString(),
+                    desktopHotkeys = await DesktopHotkeysAsync(settings, token).ConfigureAwait(false),
                     qualities = Qualities,
                     browseLanguages = BrowseLanguages.Options,
                     accounts = new { twitch = !string.IsNullOrEmpty(settings.Chat.TwitchOAuthToken), kick = !string.IsNullOrEmpty(settings.Chat.KickOAuthToken) }
                 };
             case "following":
-                var following = await services.Following.GetLiveFollowedStreamsAsync(settings, token).ConfigureAwait(false);
-                Volatile.Write(ref offlineFollowing, (following.OfflineChannels ?? []).ToArray());
-                return new
-                {
-                    items = following.Streams.Select(s => Card(s.Target, s.DisplayName, s.Title, s.ThumbnailUrl, "Live", s.ViewerCount)).ToArray(),
-                    offline = (following.OfflineChannels ?? []).Select(s => Card(s.Target, s.DisplayName, "", s.ProfileImageUrl, "Offline", lastLiveAtUtc: s.LastLiveAtUtc)).ToArray(),
-                    message = string.Join(" ", following.Messages),
-                };
+                var following = services.GetDesktopFollowingAsync is { } getFollowing
+                    ? await getFollowing(true, token).ConfigureAwait(false) ?? new([], [])
+                    : await services.Following.GetLiveFollowedStreamsAsync(settings, token).ConfigureAwait(false);
+                return FollowingResponse(settings, following);
+            case "following/pins":
+                // The browser can miss a response. Compare against the revision it actually rendered.
+                var knownRevision = Integer(input, "revision", 0L);
+                if (services.GetDesktopFollowingAsync is { } getCurrentFollowing &&
+                    await getCurrentFollowing(false, token).ConfigureAwait(false) is { } currentFollowing &&
+                    (!ReferenceEquals(desktopFollowingSnapshot, currentFollowing) || knownRevision != followingRevision))
+                    return FollowingResponse(settings, currentFollowing);
+                return new { pinnedKeys = VisibleFollowingPins(settings, Volatile.Read(ref offlineFollowing)) };
+            case "following/pin":
+                var pinTarget = Target(input);
+                var pinSnapshot = Volatile.Read(ref offlineFollowing);
+                if (pinTarget.Kind != StreamTargetKind.Live || !pinSnapshot.Any(channel =>
+                    channel.Platform == pinTarget.Platform && channel.Channel.Equals(pinTarget.Channel, StringComparison.OrdinalIgnoreCase)))
+                    throw new ArgumentException("Select an offline channel from Following.");
+                if (!input.TryGetProperty("pinned", out var pinnedValue)) throw new ArgumentException("Specify whether to pin the channel.");
+                var pinned = Boolean(pinnedValue);
+                await services.ChangeSettingsAsync(s => s.FollowedChannels.SetOfflineChannelPinned(pinTarget, pinned), token).ConfigureAwait(false);
+                return new { pinnedKeys = VisibleFollowingPins(settings, pinSnapshot) };
             case "following/history":
                 // Only enrich the server's status snapshot. This independent read never registers
                 // targets or accepts client-supplied channel names, and cannot block playback/chat.
@@ -128,9 +151,7 @@ public sealed partial class LocalWebWorkspace(LocalWebDependencies services) : I
                 }
                 return new { recorded = true };
             case "search":
-                var search = await services.Search.SearchAsync(new(RequiredText(input, "query", 250), Quality(input, settings), 30,
-                    StreamSearchMode.ChannelDiscovery, Platform(input)), settings, token).ConfigureAwait(false);
-                return new { items = search.Channels.Select(s => Card(s.Target, s.DisplayName, s.Title, s.ThumbnailUrl, s.State.ToString(), s.ViewerCount)).ToArray(), search.Message };
+                return await SearchChannelsAsync(RequiredText(input, "query", 250), settings, token).ConfigureAwait(false);
             case "categories":
                 var categories = await services.Browse.GetCategoriesAsync(new(Platform(input), Optional(input, "query", 100), Optional(input, "cursor", 2048)), settings, token).ConfigureAwait(false);
                 return new { items = categories.Items.Select(c => new { c.Id, c.Name, thumbnailUrl = CategoryArtworkUrl(c), c.ViewerCount }).ToArray(), categories.NextCursor, categories.Message };
@@ -324,6 +345,52 @@ public sealed partial class LocalWebWorkspace(LocalWebDependencies services) : I
             p.Target.Channel.Equals(target.Channel, StringComparison.OrdinalIgnoreCase)))
             // Replace pending reads too: a late status response cannot overwrite a confirmed mutation.
             player.FollowStatus = Task.FromResult(new FollowState(result.IsFollowing));
+    }
+
+    private async Task<object> SearchChannelsAsync(string query, AppSettings settings, CancellationToken token)
+    {
+        var search = await services.Search.SearchAsync(new(query, PageSize: 30, Mode: StreamSearchMode.ChannelDiscovery),
+            settings, token).ConfigureAwait(false);
+        var channels = search.Channels.ToArray();
+        var missingKickMetadata = Enumerable.Range(0, channels.Length).Where(index =>
+            channels[index] is { Platform: PlatformKind.Kick, IsLive: true } channel &&
+            (channel.ViewerCount is null || string.IsNullOrWhiteSpace(channel.Title) || string.IsNullOrWhiteSpace(channel.CategoryName))).ToArray();
+        if (missingKickMetadata.Length > 0)
+        {
+            // Kick search can omit live broadcast details that the channel profile includes.
+            using var budget = CancellationTokenSource.CreateLinkedTokenSource(token);
+            budget.CancelAfter(TimeSpan.FromSeconds(3));
+            try
+            {
+                await Parallel.ForEachAsync(missingKickMetadata,
+                    new ParallelOptions { MaxDegreeOfParallelism = 4, CancellationToken = budget.Token },
+                    async (index, cancellation) =>
+                    {
+                        var channel = channels[index];
+                        try
+                        {
+                            var profile = await services.ChannelProfiles.GetAsync(channel.Target, cancellation).ConfigureAwait(false);
+                            channels[index] = channel with
+                            {
+                                Title = string.IsNullOrWhiteSpace(channel.Title) ? profile.Title : channel.Title,
+                                CategoryName = string.IsNullOrWhiteSpace(channel.CategoryName) ? profile.Category : channel.CategoryName,
+                                ViewerCount = channel.ViewerCount ?? (profile.Viewers is >= 0 and <= int.MaxValue ? (int?)profile.Viewers : null)
+                            };
+                        }
+                        catch (Exception error) when (error is HttpRequestException or IOException or InvalidDataException or JsonException or DecoderFallbackException ||
+                            error is OperationCanceledException && !token.IsCancellationRequested)
+                        {
+                            // Keep the channel suggestion with the details available from search.
+                        }
+                    }).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!token.IsCancellationRequested)
+            {
+                // Use the details that arrived within the search budget.
+            }
+        }
+        token.ThrowIfCancellationRequested();
+        return new { items = channels.Select(s => Card(s.Target, s.DisplayName, s.Title, s.ThumbnailUrl, s.State.ToString(), s.ViewerCount)).ToArray(), search.Message };
     }
 
     private async Task<object> VodsAsync(JsonElement input, AppSettings settings, CancellationToken token)
@@ -610,6 +677,33 @@ public sealed partial class LocalWebWorkspace(LocalWebDependencies services) : I
             .ServeAsync(context, resourceId).ConfigureAwait(false);
     }
 
+    private object FollowingResponse(AppSettings settings, FollowedLiveStreamsResult following)
+    {
+        var offline = (following.OfflineChannels ?? []).ToArray();
+        var items = following.Streams.Select(s => Card(s.Target, s.DisplayName, s.Title, s.ThumbnailUrl, "Live", s.ViewerCount)).ToArray();
+        var offlineCards = offline.Select(s => Card(s.Target, s.DisplayName, "", s.ProfileImageUrl, "Offline", lastLiveAtUtc: s.LastLiveAtUtc)).ToArray();
+        Volatile.Write(ref offlineFollowing, offline);
+        if (services.GetDesktopFollowingAsync is not null && !ReferenceEquals(desktopFollowingSnapshot, following))
+        {
+            desktopFollowingSnapshot = following;
+            followingRevision++;
+        }
+        return new
+        {
+            items,
+            offline = offlineCards,
+            revision = followingRevision,
+            pinnedKeys = VisibleFollowingPins(settings, offline),
+            message = string.Join(" ", following.Messages),
+        };
+    }
+
+    private static string[] VisibleFollowingPins(AppSettings settings, FollowedChannel[] offline)
+    {
+        var pinnedKeys = settings.FollowedChannels.PinnedOfflineChannelKeys.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return pinnedKeys.Count == 0 ? [] : offline.Select(channel => channel.Target.StateKey).Where(pinnedKeys.Contains).ToArray();
+    }
+
     private object Card(StreamTarget target, string name, string title, string thumbnail, string state, int? viewers = null,
         DateTimeOffset? lastLiveAtUtc = null) =>
         new
@@ -665,6 +759,9 @@ public sealed partial class LocalWebWorkspace(LocalWebDependencies services) : I
     }
     private Player GetPlayer(JsonElement input) => players.TryGetValue(RequiredText(input, "player", 64), out var player) ? player : throw new ArgumentException("Player not found.");
     private static PlatformKind Platform(JsonElement input) => Optional(input, "platform", 10).ToLowerInvariant() switch { "kick" => PlatformKind.Kick, "twitch" or "" => PlatformKind.Twitch, _ => throw new ArgumentException() };
+    private Task<LocalWebDesktopHotkeys> DesktopHotkeysAsync(AppSettings settings, CancellationToken token) =>
+        services.GetDesktopHotkeysAsync?.Invoke(token) ?? Task.FromResult(LocalWebDesktopHotkeys.Capture(settings.Hotkeys));
+
     private static string Quality(JsonElement input, AppSettings settings)
     {
         var quality = Optional(input, "quality", 20);

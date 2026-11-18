@@ -44,6 +44,7 @@ internal sealed class StreamSearchViewModel : HomeFeatureViewModel
 
     protected override Task WaitForOperationsAsync() => streamSearchController.DrainAsync(Timeout.InfiniteTimeSpan);
     private static readonly TimeSpan DefaultStreamSearchDebounceInterval = TimeSpan.FromMilliseconds(250);
+    private const int StreamSearchMetadataConcurrency = 4;
     private const int StreamSearchViewerCountConcurrency = 4;
     private readonly IStreamlinkService streamlinkService;
     private readonly IViewerCountService? viewerCountService;
@@ -212,8 +213,7 @@ internal sealed class StreamSearchViewModel : HomeFeatureViewModel
             StatusMessage = StreamSearchStatus;
             IsStreamSearchRunning = false;
 
-            // Optional details are independent: a slow artwork provider must not
-            // hold back another channel's artwork or the viewer-count requests.
+            // Load optional stream details and viewer counts independently.
             var metadataTask = metadataRequired ? Task.CompletedTask : LoadStreamSearchResultMetadataAsync(
                 probes, searchCancellation.Token, probe =>
                 {
@@ -320,12 +320,24 @@ internal sealed class StreamSearchViewModel : HomeFeatureViewModel
             return probes;
         }
 
+        using var throttle = new SemaphoreSlim(StreamSearchMetadataConcurrency);
         return await Task.WhenAll(probes.Select(async probe =>
         {
-            var updated = await LoadStreamSearchResultMetadataAsync(probe, cancellationToken);
-            cancellationToken.ThrowIfCancellationRequested();
-            onUpdated?.Invoke(updated);
-            return updated;
+            await throttle.WaitAsync(cancellationToken);
+            try
+            {
+                var updated = await LoadStreamSearchResultMetadataAsync(probe, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                if (updated != probe)
+                {
+                    onUpdated?.Invoke(updated);
+                }
+                return updated;
+            }
+            finally
+            {
+                throttle.Release();
+            }
         }));
     }
 
@@ -338,7 +350,13 @@ internal sealed class StreamSearchViewModel : HomeFeatureViewModel
             return await LoadTwitchVodMetadataAsync(probe, cancellationToken);
         }
 
-        if (probe.Channel is not null || probe.Target.Kind != StreamTargetKind.Live)
+        if (probe.Target.Kind != StreamTargetKind.Live || probe.Channel is { IsLive: false })
+        {
+            return probe;
+        }
+
+        if (probe.Channel is { } channel &&
+            !string.IsNullOrWhiteSpace(channel.Title) && !string.IsNullOrWhiteSpace(channel.CategoryName))
         {
             return probe;
         }
@@ -351,7 +369,7 @@ internal sealed class StreamSearchViewModel : HomeFeatureViewModel
 
         try
         {
-            var metadata = await metadataService.GetLiveStreamMetadataAsync(
+            var metadata = await metadataService.GetLiveSearchMetadataAsync(
                 probe.Target,
                 Settings,
                 cancellationToken);

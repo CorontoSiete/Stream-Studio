@@ -41,6 +41,17 @@ public sealed class FollowedChannelsSettings : NotifyPropertyChangedObject
         set => SetProperty(ref pinnedOfflineChannelKeys, NormalizeChannelKeys(value));
     }
 
+    public void SetOfflineChannelPinned(StreamTarget target, bool pinned)
+    {
+        var key = target.StateKey;
+        var keys = PinnedOfflineChannelKeys;
+        if (keys.Contains(key, StringComparer.OrdinalIgnoreCase) == pinned) return;
+
+        PinnedOfflineChannelKeys = pinned
+            ? [.. keys, key]
+            : keys.Where(existing => !string.Equals(existing, key, StringComparison.OrdinalIgnoreCase)).ToList();
+    }
+
     private static List<string> NormalizeChannelKeys(IEnumerable<string>? values)
     {
         var keys = new List<string>();

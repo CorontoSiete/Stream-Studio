@@ -1632,8 +1632,8 @@ internal static partial class ApplicationTestCatalog
             Assert.Equal(13, presentation.SystemFontSize);
             Assert.Equal(20, presentation.MessageFontCellHeight);
             Assert.Equal(17, presentation.SystemFontCellHeight);
-            Assert.Equal(2, presentation.LineGap);
-            Assert.Equal(2, presentation.MessageGap);
+            Assert.Equal(3, presentation.LineGap);
+            Assert.Equal(4, presentation.MessageGap);
             Assert.Equal(24, presentation.EmoteHeight);
             Assert.Equal(96, presentation.EmoteMaxWidth);
             Assert.Equal(1, presentation.ShadowOffset);
@@ -1656,10 +1656,10 @@ internal static partial class ApplicationTestCatalog
             Assert.Equal("Segoe UI", block.FontFamily.Source);
             Assert.Equal(FontWeights.Bold, block.FontWeight);
             Assert.Equal(LineStackingStrategy.BlockLineHeight, block.Document.LineStackingStrategy);
-            Assert.Equal(22d, block.Document.LineHeight);
+            Assert.Equal(23d, block.Document.LineHeight);
             Assert.Equal("#FFFDE68A", ((SolidColorBrush)runs[0].Foreground).Color.ToString());
             Assert.True(runs.Skip(1).All(run =>
-                ((SolidColorBrush)run.Foreground).Color == Colors.White));
+                ((SolidColorBrush)run.Foreground).Color == Color.FromRgb(0xEE, 0xEE, 0xEE)));
             Assert.True(block.Effect is System.Windows.Media.Effects.DropShadowEffect
             {
                 BlurRadius: 0,
@@ -1680,7 +1680,7 @@ internal static partial class ApplicationTestCatalog
             Assert.Equal("system: replay chat unavailable", string.Concat(systemRuns.Select(run => run.Text)));
             Assert.Equal(FontWeights.Normal, systemBlock.FontWeight);
             Assert.Equal(13d, systemBlock.FontSize);
-            Assert.Equal(19d, systemBlock.Document.LineHeight);
+            Assert.Equal(20d, systemBlock.Document.LineHeight);
             Assert.True(systemRuns.All(run =>
                 ((SolidColorBrush)run.Foreground).Color == Color.FromRgb(0x93, 0xC5, 0xFD)));
 
@@ -1814,7 +1814,7 @@ internal static partial class ApplicationTestCatalog
                 Assert.Equal(24d, emote.Height);
                 Assert.Equal(96d, emote.Width);
                 Assert.Equal(96d, emote.MaxWidth);
-                Assert.Equal(26d, block.Document.LineHeight);
+                Assert.Equal(27d, block.Document.LineHeight);
                 Assert.Equal(new Thickness(0), badge.Margin);
                 Assert.Equal(new Thickness(0), emote.Margin);
             }
@@ -1836,7 +1836,7 @@ internal static partial class ApplicationTestCatalog
         Assert.Equal(10, at720p.Presentation.MessageFontSize);
         Assert.Equal(16, at720p.Presentation.EmoteHeight);
         Assert.Equal(64, at720p.Presentation.EmoteMaxWidth);
-        Assert.Equal(1, at720p.Presentation.MessageGap);
+        Assert.Equal(3, at720p.Presentation.MessageGap);
 
         Assert.Equal(340, at1080p.FrameWidth);
         Assert.Equal(292, at1080p.FrameHeight);
@@ -1847,7 +1847,7 @@ internal static partial class ApplicationTestCatalog
         Assert.Equal(30, at2160p.Presentation.MessageFontSize);
         Assert.Equal(48, at2160p.Presentation.EmoteHeight);
         Assert.Equal(192, at2160p.Presentation.EmoteMaxWidth);
-        Assert.Equal(4, at2160p.Presentation.MessageGap);
+        Assert.Equal(8, at2160p.Presentation.MessageGap);
         Assert.Equal(2, at2160p.Presentation.ShadowOffset);
         return Task.CompletedTask;
     }),

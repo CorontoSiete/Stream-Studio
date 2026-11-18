@@ -72,11 +72,11 @@ public sealed class StreamSearchResultViewModel : ObservableObject, IHomeStreamO
 
     internal void UpdateMetadata(StreamMetadataResult? value)
     {
-        if (channel is not null || value?.State != StreamMetadataState.Available || metadata == value) return;
+        if (value?.State != StreamMetadataState.Available || metadata == value) return;
         metadata = value;
         Target = Target with
         {
-            CategoryName = FirstNonEmpty(value.CategoryName, Target.CategoryName),
+            CategoryName = CategoryName,
             ProfileImageUrl = FirstNonEmpty(Target.ProfileImageUrl, value.ProfileImageUrl)
         };
         OnPropertyChanged(nameof(Target));
@@ -85,6 +85,8 @@ public sealed class StreamSearchResultViewModel : ObservableObject, IHomeStreamO
         OnPropertyChanged(nameof(HasThumbnail));
         OnPropertyChanged(nameof(CategoryName));
         OnPropertyChanged(nameof(HasCategory));
+        OnPropertyChanged(nameof(Title));
+        OnPropertyChanged(nameof(HasTitle));
     }
 
     public PlatformKind Platform => Target.Platform;
@@ -101,9 +103,13 @@ public sealed class StreamSearchResultViewModel : ObservableObject, IHomeStreamO
 
     public bool HasThumbnail => !string.IsNullOrWhiteSpace(ThumbnailUrl);
 
-    public string CategoryName => FirstNonEmpty(channel?.CategoryName, metadata?.CategoryName);
+    public string CategoryName => FirstNonEmpty(channel?.CategoryName, metadata?.CategoryName, Target.CategoryName);
 
     public bool HasCategory => !string.IsNullOrWhiteSpace(CategoryName);
+
+    public string Title => FirstNonEmpty(channel?.Title, metadata?.Title);
+
+    public bool HasTitle => !string.IsNullOrWhiteSpace(Title);
 
     public string Url => Target.Url;
 

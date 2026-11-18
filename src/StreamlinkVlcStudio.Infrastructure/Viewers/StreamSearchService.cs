@@ -30,8 +30,8 @@ public sealed class StreamSearchService : IStreamSearchService
                     login
                     displayName
                     profileImageURL(width: 150)
-                    stream { id viewersCount game { name } }
-                    broadcastSettings { title }
+                    stream { id title viewersCount game { name } }
+                    broadcastSettings { title game { name } }
                   }
                 }
               }
@@ -209,7 +209,7 @@ public sealed class StreamSearchService : IStreamSearchService
         var twitchTask = platform is null or PlatformKind.Twitch
             ? SearchTwitchChannelsAsync(discoveryQuery, request.PageSize, settings, cancellationToken)
             : Task.FromResult(new TwitchSearchLoad([], []));
-        var kickTask = platform is null or PlatformKind.Kick
+        var kickTask = (platform is null or PlatformKind.Kick) && discoveryQuery.Length >= MinimumDiscoveryQueryLength
             ? SearchKickChannelsAsync(discoveryQuery, request.PageSize, cancellationToken)
             : Task.FromResult(new KickSearchLoad([], []));
         await Task.WhenAll(twitchTask, kickTask).ConfigureAwait(false);
@@ -218,10 +218,9 @@ public sealed class StreamSearchService : IStreamSearchService
         var kick = await kickTask.ConfigureAwait(false);
         var messages = twitch.Messages.Concat(kick.Messages).Distinct(StringComparer.Ordinal).ToArray();
 
-        // Broadcast browsing needs provider-confirmed channel identities, including
-        // offline channels. It never guesses an exact match or probes live playback.
+        // Keep provider-confirmed channel identities, including offline channels, and
+        // interleave equally relevant matches by their rank within each provider.
         var channels = twitch.Channels.Concat(kick.Channels)
-            .Select((channel, index) => channel with { Order = index })
             .GroupBy(channel => $"{channel.Platform}:{channel.Channel}", StringComparer.OrdinalIgnoreCase)
             .Select(group => SelectBestDiscovery(group, discoveryQuery))
             .OrderBy(channel => MatchRank(channel, discoveryQuery))
@@ -540,14 +539,15 @@ public sealed class StreamSearchService : IStreamSearchService
                 _ => null
             };
             var viewers = TryGetInt32(stream, "viewersCount");
+            var broadcastSettings = GetObjectProperty(item, "broadcastSettings");
             yield return new DiscoveredChannel(
                 PlatformKind.Twitch,
                 target.Channel,
                 FirstNonEmpty(GetOptionalString(item, "displayName"), target.Channel),
                 target.Url,
                 GetOptionalString(item, "profileImageURL"),
-                TryReadNestedString(item, "broadcastSettings", "title"),
-                TryReadNestedString(stream, "game", "name"),
+                FirstNonEmpty(GetOptionalString(stream, "title"), GetOptionalString(broadcastSettings, "title")),
+                FirstNonEmpty(TryReadNestedString(stream, "game", "name"), TryReadNestedString(broadcastSettings, "game", "name")),
                 isLive,
                 order++,
                 isLive == true && viewers is { } count ? Math.Max(0, count) : null);
@@ -586,42 +586,37 @@ public sealed class StreamSearchService : IStreamSearchService
             return false;
         }
 
-        var user = item.TryGetProperty("user", out var userElement) && userElement.ValueKind == JsonValueKind.Object
-            ? userElement
-            : default;
-        var livestream = item.TryGetProperty("livestream", out var livestreamElement) && livestreamElement.ValueKind == JsonValueKind.Object
-            ? livestreamElement
-            : default;
+        var user = GetObjectProperty(item, "user");
+        var livestream = GetObjectProperty(item, "livestream");
 
         var isLive = TryGetBool(item, "isLive") ??
             TryGetBool(item, "is_live") ??
-            (livestream.ValueKind == JsonValueKind.Object ? TryGetBool(livestream, "is_live") : null) ??
+            TryGetBool(livestream, "is_live") ??
             false;
-        var viewerCount = livestream.ValueKind == JsonValueKind.Object
-            ? TryGetInt32(livestream, "viewer_count")
-            : null;
+        var viewerCount = TryGetInt32(livestream, "viewer_count");
 
         channel = new DiscoveredChannel(
             PlatformKind.Kick,
             target.Channel,
             FirstNonEmpty(
-                user.ValueKind == JsonValueKind.Object ? GetOptionalString(user, "username") : "",
+                GetOptionalString(user, "username"),
                 GetOptionalString(item, "username"),
                 target.Channel),
             target.Url,
             FirstNonEmpty(
-                user.ValueKind == JsonValueKind.Object ? GetOptionalString(user, "profilePic") : "",
-                user.ValueKind == JsonValueKind.Object ? GetOptionalString(user, "profile_pic") : "",
+                GetOptionalString(user, "profilePic"),
+                GetOptionalString(user, "profile_pic"),
                 GetOptionalString(item, "profile_pic"),
                 GetOptionalString(item, "thumbnail")),
             FirstNonEmpty(
-                GetOptionalString(item, "stream_title"),
-                livestream.ValueKind == JsonValueKind.Object ? GetOptionalString(livestream, "session_title") : ""),
+                GetOptionalString(livestream, "session_title"),
+                GetOptionalString(item, "stream_title")),
             FirstNonEmpty(
-                TryReadFirstArrayObjectString(item, "recentCategories", "name"),
+                TryReadFirstArrayObjectString(livestream, "categories", "name"),
+                TryReadNestedString(livestream, "category", "name"),
                 TryReadFirstArrayObjectString(item, "categories", "name"),
                 TryReadNestedString(item, "category", "name"),
-                livestream.ValueKind == JsonValueKind.Object ? TryReadNestedString(livestream, "category", "name") : ""),
+                isLive ? "" : TryReadFirstArrayObjectString(item, "recentCategories", "name")),
             isLive,
             order,
             viewerCount is { } value ? Math.Max(0, value) : null);

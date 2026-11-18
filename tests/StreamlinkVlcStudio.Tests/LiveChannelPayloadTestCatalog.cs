@@ -104,6 +104,7 @@ internal static class LiveChannelPayloadTestCatalog
             Assert.Equal("Title", result.Count.StreamTitle);
             Assert.Equal(StreamMetadataState.Available, result.Metadata.State);
             Assert.Equal("Category", result.Metadata.CategoryName);
+            Assert.Equal("Title", result.Metadata.Title);
             Assert.Equal("https://example.invalid/profile.jpg", result.Metadata.ProfileImageUrl);
         }
     }

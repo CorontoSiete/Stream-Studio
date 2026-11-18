@@ -29,8 +29,8 @@ internal sealed class FollowedChannelsViewModel : HomeFeatureViewModel
         followedChannelsRefreshInterval = dependencies.FollowedChannelsRefreshInterval ?? DefaultFollowedChannelsRefreshInterval;
         kickFollowedChannelsText = FormatKickFollowedChannelsText(Settings.FollowedChannels.KickChannelSlugs);
         RefreshFollowedChannelsCommand = CreateCommand(RefreshFollowedChannelsAsync, () => followedStreamsService is not null);
-        ImportKickFollowsCommand = CreateCommand(ImportKickFollowsAsync,
-            () => kickFollowedChannelsImporter is not null && Volatile.Read(ref kickFollowImportBusy) == 0);
+        ImportKickFollowsCommand = CreateCommand(() => ImportKickFollowsAsync(openSignInWindow: false), CanImportKickFollows);
+        ManageKickSignInCommand = CreateCommand(() => ImportKickFollowsAsync(openSignInWindow: true), CanImportKickFollows);
         ClearImportedKickFollowsCommand = CreateCommand(ClearImportedKickFollowsAsync,
             () => Volatile.Read(ref kickFollowImportBusy) == 0);
         LiveFollowedChannels.CollectionChanged += LiveFollowedChannelsOnCollectionChanged;
@@ -90,6 +90,7 @@ internal sealed class FollowedChannelsViewModel : HomeFeatureViewModel
     private DateTimeOffset? followedChannelsLastUpdatedAt;
     private bool isFollowedChannelsRefreshing;
     private Task? activeFollowedChannelsRefreshTask;
+    private Task? activeFollowedChannelsStatusTask;
     private FollowedLiveStreamsResult? displayedFollowedResult;
     private string activeFollowedChannelsRefreshKey = "";
     private int followedChannelsRefreshGeneration;
@@ -99,6 +100,7 @@ internal sealed class FollowedChannelsViewModel : HomeFeatureViewModel
     public ObservableCollection<OfflineFollowedChannelViewModel> OfflineFollowedChannels { get; } = [];
     public AsyncRelayCommand RefreshFollowedChannelsCommand { get; }
     public AsyncRelayCommand ImportKickFollowsCommand { get; }
+    public AsyncRelayCommand ManageKickSignInCommand { get; }
     public AsyncRelayCommand ClearImportedKickFollowsCommand { get; }
 
     public string FollowedChannelsStatus
@@ -173,6 +175,8 @@ internal sealed class FollowedChannelsViewModel : HomeFeatureViewModel
 
     public bool IsKickFollowChangeBusy => Volatile.Read(ref kickFollowImportBusy) != 0;
 
+    private bool CanImportKickFollows() => kickFollowedChannelsImporter is not null && !IsKickFollowChangeBusy;
+
     internal bool TryBeginKickFollowChange() => Interlocked.CompareExchange(ref kickFollowImportBusy, 1, 0) == 0;
 
     internal void NotifyKickFollowChange()
@@ -180,6 +184,7 @@ internal sealed class FollowedChannelsViewModel : HomeFeatureViewModel
         if (disposed) return;
         OnPropertyChanged(nameof(IsKickFollowChangeBusy));
         ImportKickFollowsCommand.RaiseCanExecuteChanged();
+        ManageKickSignInCommand.RaiseCanExecuteChanged();
         ClearImportedKickFollowsCommand.RaiseCanExecuteChanged();
     }
 
@@ -210,34 +215,56 @@ internal sealed class FollowedChannelsViewModel : HomeFeatureViewModel
 
             var generation = Interlocked.Increment(ref followedChannelsRefreshGeneration);
             var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var statusReady = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             // Publish before starting: synchronous providers and property-change callbacks
             // can reenter refresh while the operation is being started.
             activeFollowedChannelsRefreshTask = completion.Task;
+            activeFollowedChannelsStatusTask = statusReady.Task;
             activeFollowedChannelsRefreshKey = key;
             backgroundOperationController.Track(completion.Task);
-            _ = CompleteFollowedChannelsRefreshAsync(completion, generation, followedChannelsRefreshCancellation.Token);
+            _ = CompleteFollowedChannelsRefreshAsync(completion, statusReady, generation, followedChannelsRefreshCancellation.Token);
             return completion.Task;
         }
     }
 
+    internal async Task<FollowedLiveStreamsResult?> GetWebFollowingAsync(bool refresh, CancellationToken cancellationToken)
+    {
+        if (refresh)
+        {
+            _ = RefreshFollowedChannelsAsync();
+            var status = activeFollowedChannelsStatusTask;
+            while (status is not null)
+            {
+                await status.WaitAsync(cancellationToken);
+                if (ReferenceEquals(status, activeFollowedChannelsStatusTask)) break;
+                status = activeFollowedChannelsStatusTask;
+            }
+        }
+        return displayedFollowedResult;
+    }
+
     internal async Task CompleteFollowedChannelsRefreshAsync(
-        TaskCompletionSource completion, int generation, CancellationToken cancellationToken)
+        TaskCompletionSource completion, TaskCompletionSource statusReady, int generation, CancellationToken cancellationToken)
     {
         try
         {
-            await RefreshFollowedChannelsCoreAsync(generation, cancellationToken);
+            await RefreshFollowedChannelsCoreAsync(statusReady, generation, cancellationToken);
             completion.TrySetResult();
         }
         catch (Exception ex)
         {
             completion.TrySetException(ex);
         }
+        finally
+        {
+            statusReady.TrySetResult();
+        }
     }
 
     internal bool IsCurrentFollowedRefresh(int generation) =>
         !disposed && generation == Volatile.Read(ref followedChannelsRefreshGeneration);
 
-    internal async Task RefreshFollowedChannelsCoreAsync(int generation, CancellationToken cancellationToken)
+    internal async Task RefreshFollowedChannelsCoreAsync(TaskCompletionSource statusReady, int generation, CancellationToken cancellationToken)
     {
         if (followedStreamsService is null)
         {
@@ -345,6 +372,7 @@ internal sealed class FollowedChannelsViewModel : HomeFeatureViewModel
                     : offlineMessages.Count == 0 ? offlineStatusPrefix : $"{offlineStatusPrefix} {string.Join(' ', offlineMessages)}";
 
                 IsFollowedChannelsRefreshing = !isComplete;
+                if (isComplete) statusReady.TrySetResult();
             }
 
             // Channel membership and live notifications are ready. Optional website metadata
@@ -453,14 +481,10 @@ internal sealed class FollowedChannelsViewModel : HomeFeatureViewModel
 
     private void ToggleOfflineChannelPin(FollowedChannel channel)
     {
-        if (disposed || !OfflineFollowedChannels.Any(card =>
-                string.Equals(card.Target.StateKey, channel.Target.StateKey, StringComparison.OrdinalIgnoreCase))) return;
-
-        var pinnedKeys = Settings.FollowedChannels.PinnedOfflineChannelKeys.ToList();
-        if (pinnedKeys.RemoveAll(key => string.Equals(key, channel.Target.StateKey, StringComparison.OrdinalIgnoreCase)) == 0)
-            pinnedKeys.Add(channel.Target.StateKey);
-        // Replace the list so autosave observes the edit and in-flight saves retain a stable snapshot.
-        Settings.FollowedChannels.PinnedOfflineChannelKeys = pinnedKeys;
+        if (disposed) return;
+        var card = OfflineFollowedChannels.FirstOrDefault(card =>
+            string.Equals(card.Target.StateKey, channel.Target.StateKey, StringComparison.OrdinalIgnoreCase));
+        if (card is not null) Settings.FollowedChannels.SetOfflineChannelPinned(card.Target, !card.IsPinned);
     }
 
     private void ApplyOfflineChannelPins()
@@ -644,7 +668,7 @@ internal sealed class FollowedChannelsViewModel : HomeFeatureViewModel
         }
     }
 
-    internal async Task ImportKickFollowsAsync()
+    private async Task ImportKickFollowsAsync(bool openSignInWindow)
     {
         if (kickFollowedChannelsImporter is null) return;
         if (!TryBeginKickFollowChange()) return;
@@ -652,12 +676,13 @@ internal sealed class FollowedChannelsViewModel : HomeFeatureViewModel
         try
         {
             NotifyKickFollowChange();
-            KickFollowImportStatus = "Sign in to Kick and import your follows in the opened window.";
-            var channels = await kickFollowedChannelsImporter.ImportAsync(token);
+            KickFollowImportStatus = openSignInWindow ? "" : "Checking your saved Kick session for followed channels…";
+            var channels = await kickFollowedChannelsImporter.ImportAsync(token, openSignInWindow);
             token.ThrowIfCancellationRequested();
             if (channels is null)
             {
-                KickFollowImportStatus = "Detection canceled. Your saved follows were kept.";
+                if (!openSignInWindow)
+                    KickFollowImportStatus = "Detection canceled. Your saved follows were kept.";
                 return;
             }
             await SaveImportedKickFollowsAsync(channels, DateTimeOffset.UtcNow, token);
@@ -668,7 +693,7 @@ internal sealed class FollowedChannelsViewModel : HomeFeatureViewModel
         catch (OperationCanceledException) when (token.IsCancellationRequested) { }
         catch (Exception ex) when (!disposed)
         {
-            KickFollowImportStatus = $"Kick follows could not be imported: {ex.Message}";
+            KickFollowImportStatus = ex.Message;
         }
         finally
         {

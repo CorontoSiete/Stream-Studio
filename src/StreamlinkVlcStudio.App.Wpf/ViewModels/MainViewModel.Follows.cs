@@ -24,22 +24,35 @@ public sealed partial class MainViewModel
     private bool IsCheckingSelectedChannelFollowStatus => SelectedTab is { } tab &&
         channelFollowStatusChecks.TryGetValue(tab, out var cancellation) && cancellation is not null;
 
-    public bool IsSelectedChannelFollowed => ChannelFollowResponseTracker.TryGetChannel(SelectedTab?.Target, out var channel) &&
-        channelFollowStates.TryGetValue(channel.StateKey, out var following) && following;
+    private bool? SelectedChannelFollowStatus => ChannelFollowResponseTracker.TryGetChannel(SelectedTab?.Target, out var channel) &&
+        channelFollowStates.TryGetValue(channel.StateKey, out var following) ? following : null;
+
+    public bool IsSelectedChannelFollowed => SelectedChannelFollowStatus == true;
 
     public string FollowButtonText => ChannelFollowResponseTracker.TryGetChannel(SelectedTab?.Target, out var channel)
         ? channel.StateKey == followingStateKey ? isUnfollowing ? "Unfollowing\u2026" : "Following\u2026"
-            : IsCheckingSelectedChannelFollowStatus ? "Checking\u2026" : IsSelectedChannelFollowed ? "Following" : "Follow"
+            : IsCheckingSelectedChannelFollowStatus ? "Checking\u2026"
+            : SelectedChannelFollowStatus switch { true => "Following", false => "Follow", null => "Follow\u2026" }
         : "Follow";
 
     public string FollowButtonToolTip => ChannelFollowResponseTracker.TryGetChannel(SelectedTab?.Target, out var channel)
         ? IsCheckingSelectedChannelFollowStatus ? $"Checking whether you follow {channel.Channel} on {channel.Platform}"
-            : IsSelectedChannelFollowed
-                ? $"Unfollow {channel.Channel} with your {channel.Platform} website account"
-                : $"Follow {channel.Channel} with your {channel.Platform} website account"
+            : SelectedChannelFollowStatus switch
+            {
+                true => $"Unfollow {channel.Channel} with your {channel.Platform} website account",
+                false => $"Follow {channel.Channel} with your {channel.Platform} website account",
+                null => $"Follow status unavailable. Select to follow {channel.Channel} or sign in to {channel.Platform}."
+            }
         : "Select a Twitch or Kick broadcaster to follow";
 
-    public string FollowButtonAccessibleName => IsSelectedChannelFollowed ? "Unfollow selected streamer" : "Follow selected streamer";
+    public string FollowButtonAccessibleName => IsCheckingSelectedChannelFollowStatus ? "Checking follow status"
+        : SelectedChannelFollowStatus switch
+        {
+            true => "Unfollow selected streamer",
+            null when ChannelFollowResponseTracker.TryGetChannel(SelectedTab?.Target, out _) =>
+                "Follow selected streamer, status unavailable",
+            _ => "Follow selected streamer"
+        };
 
     private bool CanFollowSelectedChannel() => channelFollowService is not null &&
         ChannelFollowResponseTracker.TryGetChannel(SelectedTab?.Target, out var channel) &&
@@ -60,7 +73,7 @@ public sealed partial class MainViewModel
         if (disposed || channelFollowService is null || channelFollowStatusChecks.ContainsKey(tab) ||
             !ChannelFollowResponseTracker.TryGetChannel(tab.Target, out var channel)) return;
         // An outstanding follow/unfollow will supply the authoritative state for this channel.
-        if (channel.StateKey == followingStateKey)
+        if (channel.StateKey == followingStateKey && activeChannelFollowCancellation?.IsCancellationRequested != true)
         {
             channelFollowStatusChecks.Add(tab, null);
             return;
@@ -88,6 +101,8 @@ public sealed partial class MainViewModel
             catch (OperationCanceledException) when (cancellation.IsCancellationRequested || disposed) { }
             catch (Exception ex) when (!disposed)
             {
+                if (channelFollowStatusChecks.TryGetValue(tab, out var current) && ReferenceEquals(current, cancellation))
+                    channelFollowStates.Remove(channel.StateKey);
                 logger.Write(AppLogLevel.Warning, "Follow", $"Could not check follow status for {channel.Channel} on {channel.Platform}.", ex);
             }
             finally
@@ -100,6 +115,25 @@ public sealed partial class MainViewModel
                 cancellation.Dispose();
             }
         }
+    }
+
+    private void RefreshTwitchChannelFollowStatuses()
+    {
+        if (channelFollowService is null) return;
+        const string twitchPrefix = nameof(PlatformKind.Twitch) + ":";
+        if (followingStateKey.StartsWith(twitchPrefix, StringComparison.Ordinal) &&
+            activeChannelFollowCancellation is { } operation)
+            CancellationSourceCleanup.Cancel(operation);
+        foreach (var key in channelFollowStates.Keys.Where(key => key.StartsWith(twitchPrefix, StringComparison.Ordinal)).ToArray())
+            channelFollowStates.Remove(key);
+        var tabs = Tabs.Where(tab => tab.Target.Platform == PlatformKind.Twitch).ToArray();
+        foreach (var tab in tabs)
+        {
+            if (channelFollowStatusChecks.Remove(tab, out var cancellation) && cancellation is not null)
+                CancellationSourceCleanup.Cancel(cancellation);
+        }
+        foreach (var tab in tabs) CheckOpenedChannelFollowStatus(tab);
+        RaiseFollowButtonState();
     }
 
     private void RemoveClosedChannelFollowStatusChecks()

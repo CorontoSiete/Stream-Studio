@@ -1,9 +1,10 @@
 'use strict';
 const assert = require('node:assert/strict');
 
-module.exports = async ({ cdp, evaluate, wait, capture, viewport, settingsFixture, getSavedSettings }) => {
+module.exports = async ({ cdp, evaluate, wait, capture, viewport, settingsFixture, desktopHotkeyMode, getSavedSettings }) => {
   const key = async (key, modifiers = 0, code = '', repeat = false) => {
-    const windowsVirtualKeyCode = ({ Escape: 27, Tab: 9, Enter: 13, Shift: 16, ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, '[': 219, ']': 221, '/': 191 })[key] || key.toUpperCase().charCodeAt(0);
+    const windowsVirtualKeyCode = ({ Escape: 27, Tab: 9, Enter: 13, Shift: 16, ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, '[': 219, ']': 221, '/': 191 })[key] ||
+      (/^F\d+$/.test(key) ? 111 + Number(key.slice(1)) : key.toUpperCase().charCodeAt(0));
     code ||= key.length === 1 && /[a-z]/i.test(key) ? 'Key' + key.toUpperCase() : key;
     await cdp('Input.dispatchKeyEvent', { type: 'keyDown', key, code, windowsVirtualKeyCode, modifiers, autoRepeat: repeat });
     await cdp('Input.dispatchKeyEvent', { type: 'keyUp', key, code, windowsVirtualKeyCode, modifiers });
@@ -51,6 +52,129 @@ module.exports = async ({ cdp, evaluate, wait, capture, viewport, settingsFixtur
     await wait("document.readyState==='complete' && !document.querySelector('#studio').hidden && document.querySelector('#cards').getAttribute('aria-busy')==='false'");
     await focus('#library');
   };
+
+  if (desktopHotkeyMode) {
+    const slider = id => '#hotkey-' + id + '-amount';
+    const amount = id => evaluate(`Number(document.querySelector('${slider(id)}').value)`);
+    const setAmount = (id, value) => evaluate(`(()=>{const range=document.querySelector('${slider(id)}');range.value=${value};range.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+    await page('settings');
+    await click('#reset-hotkeys'); await save();
+    assert.equal(await amount('skipBackward'), 2);
+    assert.equal(await amount('skipForward'), 4);
+    assert.equal(await amount('volumeUp'), 5);
+    assert.equal(await amount('volumeDown'), 5);
+    await record('togglePause', 'p'); await click('#hotkey-volumeUp + button'); await save();
+    assert.deepEqual(Object.keys(getSavedSettings().hotkeys).sort(), ['togglePause', 'volumeUp'], 'only edited bindings are saved');
+    Object.assign(settingsFixture.desktopHotkeys.bindings, {
+      togglePause: 'R', volumeUp: 'U', volumeDown: 'D', grid: 'M', nextTab: 'Right', previousTab: 'Left',
+      back: 'Mouse4', dismiss: 'Alt+X'
+    });
+    await wait("document.querySelector('#hotkey-grid').value==='M' && document.querySelector('#hotkey-dismiss').value==='Alt + X'");
+    assert.equal(await savedValue('togglePause'), 'P');
+    assert.equal(await savedValue('volumeUp'), 'Not assigned');
+    assert.equal(await savedValue('mute'), 'Shift + M');
+    for (const width of [320, 1440]) {
+      await viewport(width);
+      await evaluate("document.querySelector('.hotkeys-panel').scrollIntoView({block:'start'})");
+      await capture('desktop-shortcuts-' + width);
+      assert.ok(await evaluate("document.documentElement.scrollWidth<=innerWidth && [...document.querySelectorAll('.hotkey-controls input,.hotkey-controls button:not([hidden])')].every(e=>{const r=e.getBoundingClientRect();return r.width>0&&r.left>=0&&r.right<=innerWidth})"), 'shortcut controls fit viewport ' + width);
+    }
+    await focus('#library');
+    const vod = await open('https://www.twitch.tv/videos/123');
+    await focus(`#player-${vod} video`);
+    await key('p'); await wait(`${selectedVideo}.paused`);
+    await key('r'); assert.equal(await evaluate(`${selectedVideo}.paused`), true, 'web override wins while connected');
+    await key(' '); assert.equal(await evaluate(`${selectedVideo}.paused`), true, 'the old pause key is inactive on the video');
+    await evaluate(`${selectedVideo}.volume=0.5`);
+    await key('u'); assert.equal(await evaluate(`${selectedVideo}.volume`), 0.5, 'a cleared binding stays disabled');
+    await page('settings'); await click('#hotkey-togglePause ~ button:last-child');
+    await click('#hotkey-volumeUp ~ button:last-child'); await save();
+    assert.equal(await savedValue('togglePause'), 'R');
+    assert.equal(await savedValue('volumeUp'), 'U');
+    assert.deepEqual(getSavedSettings().hotkeys, {});
+    await evaluate(`document.querySelector('[aria-controls=player-${vod}]').click()`);
+    await focus(`#player-${vod} video`);
+    await key('r'); await wait(`!${selectedVideo}.paused`);
+    await key('r'); await wait(`${selectedVideo}.paused`);
+    await key('u'); await key('u', 0, 'KeyU', true); assert.equal(await evaluate(`${selectedVideo}.volume`), 0.6);
+    await key('d'); assert.equal(await evaluate(`${selectedVideo}.volume`), 0.55);
+    await key('s', 2); assert.ok(await evaluate(`document.querySelector('#player-${vod} .video-seek-area').hidden`));
+    await key('s', 2); assert.equal(await evaluate(`document.querySelector('#player-${vod} .video-seek-area').hidden`), false);
+    await evaluate(`${selectedVideo}.currentTime=20`);
+    await key('ArrowLeft', 0, 'Numpad4');
+    assert.equal(await evaluate(`${selectedVideo}.currentTime`), 18, 'Num Lock off still invokes the keypad skip');
+    await key('6', 0, 'Numpad6');
+    assert.equal(await evaluate(`${selectedVideo}.currentTime`), 22, 'keypad skip uses the desktop forward interval');
+    await key('f'); await wait('!!document.fullscreenElement');
+    await key('x', 1); await wait('!document.fullscreenElement');
+
+    await page('settings');
+    await evaluate("window.scrollTo(0,0)");
+    const anchor = await evaluate("(()=>{const r=document.querySelector('#library').getBoundingClientRect(); return {x:r.right-30,y:r.top+180}})()");
+    await cdp('Input.dispatchMouseEvent', { type: 'mousePressed', button: 'middle', buttons: 4, clickCount: 1, ...anchor });
+    await cdp('Input.dispatchMouseEvent', { type: 'mouseMoved', buttons: 4, x: anchor.x, y: anchor.y + 100 });
+    await wait("document.body.classList.contains('library-auto-scroll') && scrollY > 20");
+    await key('x', 1);
+    assert.equal(await evaluate("document.body.classList.contains('library-auto-scroll')"), false);
+    await cdp('Input.dispatchMouseEvent', { type: 'mouseReleased', button: 'middle', buttons: 0, clickCount: 1, ...anchor });
+
+    await focus(slider('skipBackward')); await key('ArrowRight');
+    assert.equal(await amount('skipBackward'), 3, 'the slider retains native arrow-key adjustment');
+    await setAmount('skipForward', 7);
+    await setAmount('volumeUp', 12);
+    await setAmount('volumeDown', 6);
+    assert.equal(await evaluate("document.querySelector('#hotkey-volumeUp-amount + output').value"), '12%');
+    await save();
+    assert.equal(getSavedSettings().skipBackwardSeconds, 3);
+    assert.equal(getSavedSettings().skipForwardSeconds, 7);
+    assert.equal(getSavedSettings().volumeUpStep, 12);
+    assert.equal(getSavedSettings().volumeDownStep, 6);
+
+    settingsFixture.desktopHotkeys.skipBackwardSeconds = 8;
+    await reload(); await page('settings');
+    assert.equal(await amount('skipBackward'), 3, 'web override survives a desktop edit and reload');
+    assert.equal(await amount('skipForward'), 7);
+    assert.equal(await amount('volumeUp'), 12);
+    assert.equal(await amount('volumeDown'), 6);
+    for (const width of [320, 1440]) {
+      await viewport(width);
+      await evaluate("document.querySelector('#hotkey-skipBackward').scrollIntoView({block:'center'})");
+      await capture('hotkey-sliders-' + width);
+      assert.ok(await evaluate("document.documentElement.scrollWidth<=innerWidth && [...document.querySelectorAll('.hotkey-amount input,.hotkey-amount button:not([hidden])')].every(e=>{const r=e.getBoundingClientRect();return r.width>0&&r.left>=0&&r.right<=innerWidth})"), 'sliders and reset controls fit viewport ' + width);
+    }
+
+    const adjustedVod = await open('https://www.twitch.tv/videos/123');
+    await focus(`#player-${adjustedVod} video`);
+    await evaluate(`${selectedVideo}.pause();${selectedVideo}.currentTime=20;${selectedVideo}.volume=0.5`);
+    await key('ArrowLeft', 0, 'Numpad4');
+    assert.equal(await evaluate(`${selectedVideo}.currentTime`), 17);
+    await key('6', 0, 'Numpad6');
+    assert.equal(await evaluate(`${selectedVideo}.currentTime`), 24);
+    await key('u'); assert.equal(await evaluate(`${selectedVideo}.volume`), 0.62);
+    await key('d'); assert.equal(await evaluate(`${selectedVideo}.volume`), 0.56);
+    await evaluate(`${selectedVideo}.volume=0.96`);
+    await key('u'); assert.equal(await evaluate(`${selectedVideo}.volume`), 1);
+    await evaluate(`${selectedVideo}.volume=0.05`);
+    await key('d'); assert.equal(await evaluate(`${selectedVideo}.volume`), 0);
+
+    await page('settings');
+    await click(slider('skipBackward') + ' ~ button');
+    await click(slider('volumeUp') + ' ~ button');
+    await save();
+    assert.equal(await amount('skipBackward'), 8, 'reset restores the current desktop distance');
+    assert.equal(await amount('skipForward'), 7);
+    assert.equal(await amount('volumeUp'), 5);
+    assert.equal(await amount('volumeDown'), 6);
+    await click('#reset-hotkeys'); await reload(); await page('settings');
+    assert.equal(await amount('skipBackward'), 8);
+    assert.equal(await amount('skipForward'), 4);
+    assert.equal(await amount('volumeUp'), 5);
+    assert.equal(await amount('volumeDown'), 5);
+
+    assert.equal(await evaluate('window.visualErrors.length'), 0);
+    console.log('PASS desktop shortcut inheritance, per-action overrides, directional sliders, persistence, clamping, reset, fullscreen and auto-scroll dismissal.');
+    return;
+  }
 
   // Reproduce the reported Brave workflow using actual mouse/key events and
   // account-backed shortcut persistence between navigation and reload.
@@ -184,7 +308,7 @@ module.exports = async ({ cdp, evaluate, wait, capture, viewport, settingsFixtur
     await viewport(width); await focus('#hotkey-grid');
     await evaluate("document.querySelector('#notice button')?.click();document.querySelector('.hotkeys-panel').scrollIntoView({block:'start'})");
     await capture('preferences-' + width);
-    assert.ok(await evaluate("document.documentElement.scrollWidth<=innerWidth && [...document.querySelectorAll('.hotkey-controls input,.hotkey-controls button')].every(e=>{const r=e.getBoundingClientRect();return r.width>0&&r.left>=0&&r.right<=innerWidth})"), 'shortcut controls fit viewport ' + width);
+    assert.ok(await evaluate("document.documentElement.scrollWidth<=innerWidth && [...document.querySelectorAll('.hotkey-controls input,.hotkey-controls button:not([hidden])')].every(e=>{const r=e.getBoundingClientRect();return r.width>0&&r.left>=0&&r.right<=innerWidth})"), 'shortcut controls fit viewport ' + width);
   }
   await viewport(1440); await focus('#library');
   await key('x'); assert.equal(await selected(), second);

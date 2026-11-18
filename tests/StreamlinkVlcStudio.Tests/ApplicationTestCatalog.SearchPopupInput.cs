@@ -2,7 +2,14 @@ internal static partial class ApplicationTestCatalog
 {
     private static Task SearchPopupTextInputAsync() => WithSearchInputWindowAsync((window, main, popup, button) =>
     {
-        var title = FindVisualDescendants<EmojiTextBlock>(button).Single();
+        var result = main.StreamSearchResults.Single();
+        var title = FindVisualDescendants<EmojiTextBlock>(button).Single(block => block.SourceText == result.Title);
+        Assert.True(title.IsVisible);
+        var visibleText = FindVisualDescendants<TextBlock>(button).Where(block => block.IsVisible)
+            .Select(ResponsiveSearchText).ToArray();
+        Assert.True(visibleText.Contains(result.CategoryName));
+        Assert.Equal(false, visibleText.Contains(result.Url));
+        Assert.Equal(false, visibleText.Contains(result.StatusText));
         var run = title.Inlines.OfType<Run>().First();
         AssertSearchInputStaysOpen(window, main, popup, run);
 
@@ -14,7 +21,8 @@ internal static partial class ApplicationTestCatalog
 
     private static Task SearchPopupEmojiInputAsync() => WithSearchInputWindowAsync((window, main, popup, button) =>
     {
-        var title = FindVisualDescendants<EmojiTextBlock>(button).Single();
+        var title = FindVisualDescendants<EmojiTextBlock>(button)
+            .Single(block => block.SourceText == main.StreamSearchResults.Single().Title);
         // Exercise the same content boundary even on machines whose emoji
         // font falls back to text rather than producing an inline image.
         var emoji = new InlineUIContainer(new Image { Width = 14, Height = 14 });

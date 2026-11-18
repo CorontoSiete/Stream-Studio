@@ -52,7 +52,10 @@ internal static partial class ChannelFollowTestCatalog
                 {
                     model.SelectedTab = tab;
                     Assert.Equal(outcome == "following", model.IsSelectedChannelFollowed);
-                    Assert.Equal(outcome == "following" ? "Following" : "Follow", model.FollowButtonText);
+                    Assert.Equal(outcome switch { "following" => "Following", "not-following" => "Follow", _ => "Follow\u2026" },
+                        model.FollowButtonText);
+                    if (outcome is not ("following" or "not-following"))
+                        Assert.Contains("Follow status unavailable", model.FollowButtonToolTip);
                     Assert.True(model.FollowSelectedChannelCommand.CanExecute(null));
                     model.SelectedTab = null;
                 }

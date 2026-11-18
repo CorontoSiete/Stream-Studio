@@ -95,6 +95,7 @@ internal static partial class ApplicationTestCatalog
         await using var fixture = new VodDownloadTestCatalog.DownloadFixture(PlatformKind.Kick);
         var item = await fixture.DownloadAsync();
         var settings = VodResumeTestCatalog.Settings();
+        settings.Downloads.Format = VodDownloadFormat.Hls;
         var dispatcher = Dispatcher.CurrentDispatcher;
         var permitDeletion = false;
         await using var model = new MainViewModel(new MainViewModelDependencies

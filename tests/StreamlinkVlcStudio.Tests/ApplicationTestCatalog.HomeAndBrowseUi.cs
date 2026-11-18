@@ -1284,6 +1284,7 @@ internal static partial class ApplicationTestCatalog
                 settings.RecentStreams.Count == 1 &&
                 viewModel.RecentStreams.Count == 1 &&
                 settings.RecentStreams[0].ThumbnailUrl == "https://static-cdn.jtvnw.net/previews-ttv/live_user_albralelie-440x248.jpg" &&
+                viewModel.RecentStreams[0].ThumbnailUrl == settings.RecentStreams[0].ThumbnailUrl &&
                 settingsService.SaveCount > 0,
             TimeSpan.FromMilliseconds(500));
 

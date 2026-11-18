@@ -16,6 +16,17 @@ module.exports = async ({ cdp, evaluate, wait, capture, viewport, address }) => 
       overflow: document.documentElement.scrollWidth > innerWidth
     };
   })()`);
+  const verifyLibraryNav = async () => {
+    assert.deepEqual(await evaluate(`(() => {
+      const header = document.querySelector('.topbar');
+      const brandRight = header.querySelector('#brand').getBoundingClientRect().right;
+      const headerRight = header.getBoundingClientRect().right;
+      return [...header.querySelectorAll('.topbar-actions .library-nav button')].filter(button => {
+        const rect = button.getBoundingClientRect();
+        return button.getAttribute('aria-label') && rect.width >= 44 && rect.height >= 44 && rect.left >= brandRight && rect.right <= headerRight;
+      }).map(button => button.dataset.page);
+    })()`), ['recent', 'downloads', 'settings'], 'all library buttons fit on the right side of the header');
+  };
   const clickToggle = async () => {
     const point = await evaluate(`(() => {
       const r = document.querySelector('#sidebar-toggle').getBoundingClientRect();
@@ -31,6 +42,7 @@ module.exports = async ({ cdp, evaluate, wait, capture, viewport, address }) => 
     expanded: 'true', channelsVisible: false, overflow: false
   });
   assert.equal(await evaluate("document.querySelector('#sidebar-toggle').getAttribute('aria-controls')"), 'studio-sidebar');
+  await verifyLibraryNav();
   await capture('sidebar-expanded');
   await clickToggle();
   await wait("document.querySelector('#studio').classList.contains('sidebar-collapsed')");
@@ -85,6 +97,11 @@ module.exports = async ({ cdp, evaluate, wait, capture, viewport, address }) => 
   await viewport(375);
   const phone = await evaluate("(() => { const sidebar=document.querySelector('#studio-sidebar').getBoundingClientRect(); return { sidebarWidth: sidebar.width, sidebarBottom: sidebar.bottom, clientWidth: document.documentElement.clientWidth, viewportHeight: innerHeight, workspaceLeft: document.querySelector('.workspace').getBoundingClientRect().left, scrollWidth: document.documentElement.scrollWidth }; })()");
   assert.ok(phone.sidebarWidth === phone.clientWidth && phone.sidebarBottom === phone.viewportHeight && phone.workspaceLeft === 0 && phone.scrollWidth <= phone.clientWidth, 'phone keeps its bottom navigation and full-width workspace: ' + JSON.stringify(phone));
+  await viewport(320);
+  await evaluate("document.querySelector('.topbar [data-page=recent]').click()");
+  await wait("document.querySelector('#studio').dataset.page==='recent' && document.querySelector('#cards').getAttribute('aria-busy')==='false'");
+  assert.equal(await evaluate("document.querySelector('.library-nav [aria-current=page]').dataset.page"), 'recent');
+  await verifyLibraryNav();
   await viewport(1440);
   await clickToggle();
   await wait("!document.querySelector('#studio').classList.contains('sidebar-collapsed')");

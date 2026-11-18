@@ -220,9 +220,8 @@ public sealed class LocalWebServer : IAsyncDisposable
                     return;
                 }
                 if (!path.StartsWith("/api/", StringComparison.Ordinal)) { response.StatusCode = 404; return; }
-                // Provider metadata reads have their own bounded concurrency. Keep slow history
-                // and category pagination from holding up playback, chat and navigation.
-                var independentRead = path is "/api/categories/viewers" or "/api/following/history";
+                // Keep independent metadata and preference reads separate from playback and navigation.
+                var independentRead = path is "/api/categories/viewers" or "/api/following/history" or "/api/hotkeys";
                 if (!independentRead && !await current.Commands.WaitAsync(0, linked.Token).ConfigureAwait(false)) { response.StatusCode = 429; return; }
                 try
                 {
@@ -309,7 +308,7 @@ public sealed class LocalWebServer : IAsyncDisposable
     {
         var assembly = typeof(LocalWebServer).Assembly;
         var result = new Dictionary<string, (byte[], string)>();
-        foreach (var name in new[] { "index.html", "app.js", "app.css", "twitch-logo.svg", "kick-logo.svg", "hls.min.js", "hls.LICENSE.txt", "hls.APACHE-2.0.txt" })
+        foreach (var name in new[] { "index.html", "app.js", "app.css", "studio-logo.svg", "twitch-logo.svg", "kick-logo.svg", "hls.min.js", "hls.LICENSE.txt", "hls.APACHE-2.0.txt" })
         {
             using var stream = assembly.GetManifestResourceStream($"StreamlinkVlcStudio.Infrastructure.LocalWeb.Assets.{name}");
             if (stream is null) continue;

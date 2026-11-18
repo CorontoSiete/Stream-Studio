@@ -1046,7 +1046,8 @@ public partial class MainWindow : Window
             settings.Downloads.Directory ?? VodDownloadService.GetDefaultDownloadDirectory(),
             streamlinkService, logger, twitchSubOnlyVodResolver, settings.Downloads.PreviousDirectories);
         var kickClipService = new Kick.KickClipService(this);
-        var channelFollowService = new Follows.ChannelFollowService(this);
+        var channelFollowService = new Follows.ChannelFollowService(this, twitchLookup:
+            new(() => settings.Chat.TwitchOAuthToken));
         var liveNotificationService = new ToastLiveNotificationService(logger);
         var appUpdateService = new StagedAppUpdateService(logger);
         this.liveNotificationService = liveNotificationService;
@@ -1112,7 +1113,10 @@ public partial class MainWindow : Window
 
         // Present post-update notes after any setup dialog has finished, so the
         // dialog cannot cover the changelog while its viewed version is saved.
-        if (!shutdownStarted) viewModel.Initialize();
+        if (shutdownStarted) return;
+        viewModel.Initialize();
+        if (settings.AutoStartLocalWebServer)
+            await StartLocalWebServerAsync(settings, settings.LocalWebServerEndpoint, automatic: true);
     }
 
     private async void MainWindowClosing(object? sender, CancelEventArgs e)
@@ -1146,6 +1150,8 @@ public partial class MainWindow : Window
 
         shutdownStarted = true;
         await StopLocalWebServerAsync();
+        localWebCertificates?.Dispose();
+        localWebCertificates = null;
         twitchChannelPoints?.Dispose();
         twitchChannelPoints = null;
         twitchWebsiteBrowser?.Dispose();

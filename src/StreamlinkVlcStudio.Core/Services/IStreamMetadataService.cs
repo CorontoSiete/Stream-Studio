@@ -9,6 +9,12 @@ public interface IStreamMetadataService
         StreamTarget target,
         AppSettings settings,
         CancellationToken cancellationToken = default);
+
+    Task<StreamMetadataResult> GetLiveSearchMetadataAsync(
+        StreamTarget target,
+        AppSettings settings,
+        CancellationToken cancellationToken = default) =>
+        GetLiveStreamMetadataAsync(target, settings, cancellationToken);
 }
 
 public enum StreamMetadataState
@@ -25,4 +31,5 @@ public sealed record StreamMetadataResult(
     string DisplayName,
     string Message,
     string CategoryName = "",
-    string ProfileImageUrl = "");
+    string ProfileImageUrl = "",
+    string Title = "");

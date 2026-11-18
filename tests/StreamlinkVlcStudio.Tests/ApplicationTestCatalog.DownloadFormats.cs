@@ -17,7 +17,11 @@ internal static partial class ApplicationTestCatalog
             var selector = (ComboBox)window.FindName("VodDownloadFormatComboBox");
             Assert.Equal("VOD download format", AutomationProperties.GetName(selector));
             Assert.Equal(2, selector.Items.Count);
-            Assert.Equal(VodDownloadFormat.Hls, selector.SelectedValue);
+            Assert.Equal(VodDownloadFormat.Mp4, selector.SelectedValue);
+            Assert.Equal(VodDownloadFormat.Mp4, service.DownloadFormat);
+            selector.SetCurrentValue(ComboBox.SelectedValueProperty, VodDownloadFormat.Hls);
+            Assert.Equal(VodDownloadFormat.Hls, model.Settings.Downloads.Format);
+            Assert.Equal(VodDownloadFormat.Hls, service.DownloadFormat);
             selector.SetCurrentValue(ComboBox.SelectedValueProperty, VodDownloadFormat.Mp4);
             Assert.Equal(VodDownloadFormat.Mp4, model.Settings.Downloads.Format);
             Assert.Equal(VodDownloadFormat.Mp4, service.DownloadFormat);

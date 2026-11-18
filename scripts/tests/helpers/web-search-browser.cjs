@@ -35,13 +35,16 @@ module.exports = async ({ cdp, evaluate, wait, capture, viewport, searchFixture:
   assert.equal(fixture.requests.length, initialRequests, 'typing is debounced');
   await ready(1);
   assert.equal(fixture.requests.length, initialRequests + 1, 'one request for the typing burst');
-  assert.equal(fixture.requests.at(-1).query, 'North');
+  assert.deepEqual(fixture.requests.at(-1), { query: 'North' }, 'channel search does not require a platform');
+  assert.equal(await evaluate("document.querySelector('#search-form select:not([hidden])')"), null);
   assert.ok(await evaluate("document.querySelector('#query').getAttribute('aria-expanded')==='true' && document.querySelector('#search-options mark').textContent==='North'"));
   await cdp('Accessibility.enable');
   const accessibility = await cdp('Accessibility.getFullAXTree');
   const combobox = accessibility.nodes.find(item => item.role?.value === 'combobox' && item.name?.value === 'Channel, category, or video URL');
   assert.ok(combobox?.properties.some(item => item.name === 'expanded' && item.value.value === true), 'the browser accessibility tree exposes the named, expanded combobox');
-  assert.ok(accessibility.nodes.some(item => item.role?.value === 'option' && item.name?.value.includes('Watch Northstar on Twitch')), 'results have actionable accessible names');
+  const northstar = accessibility.nodes.find(item => item.role?.value === 'option' && item.name?.value.includes('Watch Northstar on Twitch'));
+  assert.ok(northstar, 'results have actionable accessible names');
+  assert.match(northstar.description?.value || '', /Taking the scenic route.*Outdoors/, 'broadcast title and category are announced');
   await enter();
   assert.equal(getOpen().openCount, 0, 'Enter without an explicitly selected channel keeps the suggestions open');
   await unchanged();
@@ -56,40 +59,40 @@ module.exports = async ({ cdp, evaluate, wait, capture, viewport, searchFixture:
   assert.equal(getOpen().lastOpen.key, 'mountain', 'keyboard selection opens the returned server key');
   assert.ok(await evaluate("document.querySelector('#search-dropdown').hidden && document.activeElement.tagName==='VIDEO'"));
   const player = await evaluate("document.querySelector('.player').id");
-  await type('all'); await ready(4);
+  await type('all'); await ready(6);
   await escape();
   assert.equal(await evaluate("document.querySelector('.player').id"), player, 'Escape leaves playback intact');
   assert.ok(await evaluate("document.querySelector('#studio').classList.contains('watching')"));
-  await type('all'); await ready(4); await capture('channel-dropdown-during-playback');
+  await type('all'); await ready(6); await capture('channel-dropdown-during-playback');
   await click('#page-title');
   assert.ok(await evaluate("document.querySelector('#search-dropdown').hidden"), 'outside click closes suggestions');
   await evaluate("document.querySelector('[data-action=close]').click();document.querySelector('[data-page=following]').click()"); await pageReady('following');
   await evaluate("window.originalCards=[...document.querySelectorAll('#cards .card')]");
 
   const rankedNames = ['Largest audience', 'Equal audience first', 'Equal audience second', 'Small audience', 'Zero viewers', 'Unknown count', 'Missing count', 'Offline first', 'Unavailable channel', 'Offline last'];
+  const rankedRows = rankedNames.flatMap(name => ['Twitch', 'Kick'].map(provider => [name, provider]));
   const assertRanking = async () => {
-    assert.deepEqual(await evaluate("[...document.querySelectorAll('.search-option-copy strong')].map(e=>e.textContent)"), rankedNames,
+    assert.deepEqual(await evaluate("[...document.querySelectorAll('.search-option')].map(row=>[row.querySelector('strong').textContent,row.querySelector('.search-provider').textContent])"), rankedRows,
       'live channels lead by descending viewer count; ties, unknown counts and non-live results retain provider order');
-    assert.ok(await evaluate("document.querySelectorAll('.search-option')[4].querySelector('.search-viewers').textContent==='0 viewers' && [5,6].every(i=>!document.querySelectorAll('.search-option')[i].querySelector('.search-viewers'))"),
-      'zero viewers is a known count and missing counts are not displayed as zero');
+    assert.ok(await evaluate("document.querySelectorAll('.search-option')[9].querySelector('.search-viewers').textContent==='0 viewers' && [10,11,12,13,14,15].every(i=>!document.querySelectorAll('.search-option')[i].querySelector('.search-viewers'))"),
+      'Kick zero viewers is shown and unknown or offline counts are hidden');
   };
-  for (const provider of ['twitch', 'kick']) {
-    await evaluate(`document.querySelector('#platform').value=${JSON.stringify(provider)};document.querySelector('#platform').dispatchEvent(new Event('change'))`);
-    await type('ranked'); await ready(10); await assertRanking(); await unchanged();
-    if (provider === 'twitch') await capture('channel-dropdown-ranked');
-    await down(); await enter();
-    await wait("document.querySelector('#players video')?.currentTime>0.1");
-    assert.equal(getOpen().lastOpen.key, 'rank-' + provider + '-4', 'keyboard selection opens the first sorted channel on ' + provider);
-    await evaluate("document.querySelector('[data-action=close]').click()");
-    await wait("!document.querySelector('#players video')");
-    await type('ranked'); await ready(10); await assertRanking();
-    await click('.search-option:nth-child(3)');
-    await wait("document.querySelector('#players video')?.currentTime>0.1");
-    assert.equal(getOpen().lastOpen.key, 'rank-' + provider + '-7', 'pointer selection opens the sorted row on ' + provider);
-    await evaluate("document.querySelector('[data-action=close]').click()");
-    await wait("!document.querySelector('#players video')");
-  }
-  await evaluate("document.querySelector('#platform').value='twitch';document.querySelector('#platform').dispatchEvent(new Event('change'))");
+  await type('ranked'); await ready(20); await assertRanking(); await unchanged();
+  await capture('channel-dropdown-ranked');
+  await down(); await enter();
+  await wait("document.querySelector('#players video')?.currentTime>0.1");
+  assert.equal(getOpen().lastOpen.key, 'rank-twitch-4', 'keyboard selection opens the first sorted channel');
+  await evaluate("document.querySelector('[data-action=close]').click()");
+  await wait("!document.querySelector('#players video')");
+  await type('ranked'); await ready(20);
+  await down(); await down();
+  assert.ok(await evaluate("getComputedStyle(document.querySelector('.search-option[aria-selected=true][data-provider=kick] .search-viewers')).visibility==='visible'"),
+    'the Kick viewer count stays visible on the active row');
+  await click('.search-option:nth-child(2)');
+  await wait("document.querySelector('#players video')?.currentTime>0.1");
+  assert.equal(getOpen().lastOpen.key, 'rank-kick-4', 'the Kick channel with the same login opens its own stream');
+  await evaluate("document.querySelector('[data-action=close]').click()");
+  await wait("!document.querySelector('#players video')");
   await type('');
 
   fixture.hold.add('slow');
@@ -107,11 +110,22 @@ module.exports = async ({ cdp, evaluate, wait, capture, viewport, searchFixture:
   await type('late'); await sleep(310); await type('North'); release('late'); await ready(1);
   assert.equal(await evaluate("document.querySelector('.search-option-copy strong').textContent"), 'Northstar', 'late successful responses cannot replace current suggestions');
   await evaluate('window.fetch=window.originalFetch');
-  await type('all'); await ready(4);
-  await evaluate("document.querySelector('#platform').value='kick';document.querySelector('#platform').dispatchEvent(new Event('change'))"); await ready(2);
-  assert.ok(await evaluate("[...document.querySelectorAll('.search-option')].every(e=>e.dataset.provider==='kick') && document.querySelector('#search-context').textContent==='Kick'"));
-  assert.equal(fixture.requests.at(-1).platform, 'kick');
-  await evaluate("document.querySelector('#platform').value='twitch';document.querySelector('#platform').dispatchEvent(new Event('change'))"); await ready(4);
+  await type('all'); await ready(6);
+  assert.equal(await evaluate("document.querySelector('#search-context').textContent"), 'Twitch and Kick');
+  assert.equal(await evaluate("document.querySelector('.search-option[data-provider=kick] .search-viewers').textContent"), '4.3K viewers');
+  const metadata = await evaluate(`[...${options}].map(row => [
+    row.querySelector('strong').textContent,
+    row.querySelector('.search-option-description')?.textContent ?? null,
+    row.querySelector('.search-option-category')?.textContent ?? null
+  ])`);
+  assert.deepEqual(metadata, [
+    ['Northstar', 'Taking the scenic route. Come along for the adventure.', 'Outdoors'],
+    ['Pixelquest', 'A new world, a fresh save. Let’s explore.', 'Adventure games'],
+    ['Afterhours', 'Late-night sessions · good music, good company', 'Music'],
+    ['Buildspace', 'Making something from nothing. Live creative session.', null],
+    ['Slowmornings', null, 'Just Chatting'],
+    ['Sundayclub', 'Browse past broadcasts and highlights', null]
+  ]);
   await type('empty'); await ready(0);
   assert.ok(await evaluate("document.querySelector('#search-feedback').textContent.includes('No channels found')"));
   await capture('channel-dropdown-empty'); await unchanged();
@@ -122,7 +136,9 @@ module.exports = async ({ cdp, evaluate, wait, capture, viewport, searchFixture:
 
   await type('hostile'); await ready(1);
   assert.equal(await evaluate("document.querySelector('.search-option-copy strong').textContent"), '<img src=x onerror=window.injected=true>');
-  assert.ok(await evaluate("!window.injected && !document.querySelector('#search-options script,#search-options img[onerror],#search-options img[src^=javascript]')"));
+  assert.equal(await evaluate("document.querySelector('.search-option-description').textContent"), '<script>window.injected=true</script>');
+  assert.equal(await evaluate("document.querySelector('.search-option-category').textContent"), '<svg onload=window.injected=true>Music</svg>');
+  assert.ok(await evaluate("!window.injected && !document.querySelector('#search-options script,#search-options [onload],#search-options img[onerror],#search-options img[src^=javascript]')"));
   await type(''); await sleep(300);
   assert.ok(await evaluate("document.querySelector('#search-dropdown').hidden && !document.querySelector('#query').hasAttribute('aria-activedescendant')"));
   const beforeIme = fixture.requests.length;
@@ -134,7 +150,7 @@ module.exports = async ({ cdp, evaluate, wait, capture, viewport, searchFixture:
 
   const metrics = [];
   for (const width of [320, 375, 390, 650, 768, 900, 1024, 1440, 1920]) {
-    await viewport(width); await type('all'); await ready(4);
+    await viewport(width); await type('all'); await ready(6);
     await wait("[...document.querySelectorAll('.search-option .avatar img')].every(i=>i.complete&&i.naturalWidth>0)");
     const measure = await evaluate("(()=>{const d=document.querySelector('#search-dropdown'),r=d.getBoundingClientRect();return {width:innerWidth,left:r.left,right:r.right,bottom:r.bottom,height:innerHeight,overflow:document.documentElement.scrollWidth>innerWidth,rows:[...document.querySelectorAll('.search-option')].map(e=>({height:e.getBoundingClientRect().height,right:e.getBoundingClientRect().right}))}})()");
     assert.ok(measure.left >= 0 && measure.right <= width && measure.bottom <= measure.height && !measure.overflow, JSON.stringify(measure));
@@ -157,10 +173,15 @@ module.exports = async ({ cdp, evaluate, wait, capture, viewport, searchFixture:
   assert.equal(await evaluate("document.querySelector('#query').value"), 'Slowmornings');
   await type('North'); await ready(1); await down(); await enter(); await pageReady('vods');
   assert.equal(await evaluate("document.querySelector('#query').value"), 'Northstar');
-  await type('ranked'); await ready(10); await assertRanking();
+  await type('ranked'); await ready(20); await assertRanking();
   const beforeRankedVideos = getOpen().openCount;
-  await down(); await enter(); await pageReady('vods');
+  const beforeVodRequests = fixture.vodRequests.length;
+  await enter();
+  assert.equal(fixture.vodRequests.length, beforeVodRequests, 'Enter without a selection keeps the mixed list open');
+  await down(); await down(); await enter(); await pageReady('vods');
   assert.equal(await evaluate("document.querySelector('#query').value"), 'rank4', 'Videos uses the selected sorted channel');
+  assert.equal(fixture.vodRequests.at(-1).platform, 'kick');
+  assert.equal(fixture.vodRequests.at(-1).channel, 'rank4');
   assert.equal(getOpen().openCount, beforeRankedVideos, 'a live search result on Videos still browses its videos');
 
   await viewport(1440); await click('[data-page=discover]'); await pageReady('discover');
@@ -193,5 +214,5 @@ module.exports = async ({ cdp, evaluate, wait, capture, viewport, searchFixture:
     if (action !== 'disconnect') { await click('[data-page=following]'); await pageReady('following'); }
   }
   assert.deepEqual(await evaluate('window.visualErrors'), []);
-  console.log('PASS automatic dropdown: live-first viewer ranking on Twitch/Kick and Videos; stable ties/offline order; zero/unknown counts; sorted keyboard/pointer selection; trusted typing/debounce; stable library; live playback; keyboard/touch selection; offline/videos/categories/URLs/downloads; cancellation and stale success; provider switch; empty/error/retry; hostile metadata; IME; focus/Escape/outside dismissal; disconnect; 30-result scrolling; 9 widths from 320–1920px; zero JavaScript errors.');
+  console.log('PASS automatic dropdown: Twitch and Kick titles and categories, mixed viewer ranking, same-name channel routing, Kick viewer counts, Videos selection, debounce, cancellation, keyboard/touch selection, mobile layout and zero JavaScript errors.');
 };

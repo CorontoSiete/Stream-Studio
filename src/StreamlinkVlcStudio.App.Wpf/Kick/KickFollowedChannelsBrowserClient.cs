@@ -37,8 +37,7 @@ internal sealed class KickFollowedChannelsBrowserClient(
                 if (status == 200 && root.TryGetProperty("body", out var body) && body.ValueKind == JsonValueKind.String)
                     completion.TrySetResult(body.GetString()!);
                 else
-                    completion.TrySetException(errorFactory?.Invoke(error, status) ??
-                        new InvalidOperationException(ErrorMessage(error, status)));
+                    completion.TrySetException(errorFactory?.Invoke(error, status) ?? CreateReadError(error, status));
             }
             catch (JsonException) { /* Ignore unrelated website messages. */ }
             catch (InvalidOperationException) { /* Ignore unrelated website messages. */ }
@@ -70,14 +69,16 @@ internal sealed class KickFollowedChannelsBrowserClient(
         Uri.TryCreate(address, UriKind.Absolute, out var uri) && uri.Scheme == "https" &&
         uri.Host == "kick.com" && uri.IsDefaultPort && uri.UserInfo.Length == 0;
 
-    private static string ErrorMessage(string? error, int status) => (error, status) switch
+    private static Exception CreateReadError(string? error, int status) => (error, status) switch
     {
-        ("signin", _) or (_, 401) => "Sign in to Kick in this window, then select Import follows.",
-        (_, 403) => "Kick refused the request. Complete any browser check or sign in again, then retry.",
-        (_, 429) => "Kick is limiting requests. Wait a little before importing again.",
-        ("account", _) => "The Kick session changed during detection. Import again to read one account's follows.",
-        ("origin", _) => "Return to Kick before importing follows.",
-        ("size", _) => "Kick's follow-list response was too large. Nothing was imported.",
-        _ => "The Kick follow list could not be read. Check your connection and sign-in, then retry."
+        ("signin", _) or (_, 401) => new KickFollowAccessRequiredException("Sign in to Kick in this window, then select Import follows."),
+        (_, 403) => new KickFollowAccessRequiredException("Kick refused access. Complete any browser check or sign in again, then select Import follows."),
+        (_, 429) => new InvalidOperationException("Kick is limiting requests. Wait a little before importing again."),
+        ("account", _) => new InvalidOperationException("The Kick session changed during detection. Import again to read one account's follows."),
+        ("origin", _) => new InvalidOperationException("Return to Kick before importing follows."),
+        ("size", _) => new InvalidOperationException("Kick's follow-list response was too large. Nothing was imported."),
+        _ => new InvalidOperationException("The Kick follow list could not be read. Check your connection and retry.")
     };
 }
+
+internal sealed class KickFollowAccessRequiredException(string message) : InvalidOperationException(message);

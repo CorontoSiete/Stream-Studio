@@ -103,7 +103,7 @@ test('live controls wait for a real range and ignore invalid seek input', async 
   } finally { f.disconnect(); }
 });
 
-test('a live playlist update does not move the slider beneath an active drag', async () => {
+test('a live seek keeps its range during a drag and updates after a release outside the slider', async () => {
   const f = fixture();
   try {
     const p = await f.open();
@@ -111,7 +111,7 @@ test('a live playlist update does not move the slider beneath an active drag', a
     p.hls.latestLevelDetails = { live: true, fragmentStart: 100, edge: 160 };
     refresh(p);
     const slider = p.element.querySelector('.video-seek');
-    slider.dispatchEvent(new Event('pointerdown'));
+    slider.dispatchEvent(Object.assign(new Event('pointerdown'), { button: 0, pointerId: 1 }));
     slider.value = 120;
     p.hls.latestLevelDetails = { live: true, fragmentStart: 130, edge: 190 };
     p.hls.emit('levelUpdated');
@@ -120,7 +120,8 @@ test('a live playlist update does not move the slider beneath an active drag', a
     assert.equal(Number(slider.value), 120);
     slider.dispatchEvent(new Event('input'));
     assert.equal(p.video.currentTime, 130, 'clamp to the current range even while the displayed range is frozen');
-    slider.dispatchEvent(new Event('change'));
+    f.window.dispatchEvent(Object.assign(new Event('pointerup'), { pointerId: 1 }));
+    await new Promise(resolve => setTimeout(resolve, 0));
     assert.equal(Number(slider.min), 130);
     assert.equal(Number(slider.max), 190);
   } finally { f.disconnect(); }

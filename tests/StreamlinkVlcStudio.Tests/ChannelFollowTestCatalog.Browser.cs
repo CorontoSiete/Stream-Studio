@@ -395,9 +395,10 @@ internal static partial class ChannelFollowTestCatalog
         private CoreWebView2WebResourceRequestedEventArgs? pendingRequest;
         private CoreWebView2Deferral? pendingDeferral;
 
-        internal ChannelFollowService Service(Func<PlatformKind, CancellationToken, Task<bool>>? signIn = null) =>
+        internal ChannelFollowService Service(Func<PlatformKind, CancellationToken, Task<bool>>? signIn = null,
+            TwitchChannelFollowLookup? twitchLookup = null) =>
             new(Owner, CreateControllerAsync, signIn ?? ((_, _) => Task.FromResult(false)), TimeSpan.FromSeconds(10),
-                (controller, target, cancel) => VerificationFactory?.Invoke(controller, target, cancel));
+                (controller, target, cancel) => VerificationFactory?.Invoke(controller, target, cancel), twitchLookup);
 
         internal void SetCookie(string value)
         {

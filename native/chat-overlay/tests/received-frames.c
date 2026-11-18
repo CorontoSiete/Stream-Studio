@@ -147,6 +147,42 @@ static uint64_t picture_hash(picture_t *picture, uint32_t w, uint32_t h)
 }
 
 #ifndef BASELINE_RECEIVE
+static void check_input_hover_notifications(filter_t *filter)
+{
+    filter_sys_t *sys = filter->p_sys;
+    snprintf(sys->event_pipe_name, sizeof(sys->event_pipe_name),
+             "\\\\.\\pipe\\svs_hover_%lu", GetCurrentProcessId());
+    HANDLE server = CreateNamedPipeA(sys->event_pipe_name, PIPE_ACCESS_INBOUND,
+                                    PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_NOWAIT,
+                                    1, 0, 4096, 0, NULL);
+    assert(server != INVALID_HANDLE_VALUE);
+
+    sys->input_hovered = true;
+    subpicture_Delete(Filter(filter, 1));
+    overlay_event_v1 event;
+    DWORD received;
+    assert(ReadFile(server, &event, sizeof(event), &received, NULL) && received == sizeof(event));
+    assert(event.type == MYO_EVENT_CHAT_INPUT_HOVER && event.value == 1);
+    assert(DisconnectNamedPipe(server));
+    assert(!ConnectNamedPipe(server, NULL) && GetLastError() == ERROR_PIPE_LISTENING);
+
+    HANDLE busy = CreateFileA(sys->event_pipe_name, GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
+    assert(busy != INVALID_HANDLE_VALUE);
+    sys->input_hovered = false;
+    subpicture_Delete(Filter(filter, 2));
+    assert(sys->input_hover_reported && sys->input_hover_retry_ms > 0);
+    CloseHandle(busy);
+    assert(DisconnectNamedPipe(server));
+    assert(!ConnectNamedPipe(server, NULL) && GetLastError() == ERROR_PIPE_LISTENING);
+
+    sys->input_hover_retry_ms = 0;
+    subpicture_Delete(Filter(filter, 3));
+    assert(ReadFile(server, &event, sizeof(event), &received, NULL) && received == sizeof(event));
+    assert(event.type == MYO_EVENT_CHAT_INPUT_HOVER && event.value == 0);
+    CloseHandle(server);
+    puts("Chat input hover clears after a busy event pipe becomes available.");
+}
+
 static void regression(void)
 {
     filter_t filter = {0}; start(&filter, 0);
@@ -230,6 +266,7 @@ static void regression(void)
     assert(!sys->frame && !sys->have_frame && sys->blank_until_frame);
     send_frame(pipe, &hdr, pixels); barrier(&filter, pipe);
     assert(sys->have_frame && !sys->blank_until_frame && FrameBufferMatches(sys->frame, &hdr, pixels));
+    check_input_hover_notifications(&filter);
     CloseHandle(pipe);
     Close((vlc_object_t *)&filter);
     assert(picture_hash(held->p_region->p_picture, hdr.w, hdr.h) == old_hash);

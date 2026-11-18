@@ -6,7 +6,7 @@ internal static partial class VodDownloadFormatTestCatalog
     [
         ("VOD formats: existing Twitch downloads convert to MP4 and back without internet", () => RoundTripAsync(PlatformKind.Twitch)),
         ("VOD formats: existing Kick downloads convert to MP4 and back without internet", () => RoundTripAsync(PlatformKind.Kick)),
-        ("VOD formats: new downloads finish as MP4 with real video and audio", NewMp4DownloadAsync),
+        ("VOD formats: new downloads default to MP4 with real video and audio", NewMp4DownloadAsync),
         ("VOD formats: unused original media is removed immediately after conversion commits", UnusedConversionCleanupAsync),
         ("VOD formats: each media generation remains until its final playback owner closes", PlaybackGenerationsCleanupAsync),
         ("VOD formats: Windows path casing cannot bypass playback protection or obsolete-media cleanup", PlaybackFolderCaseCleanupAsync),
@@ -88,7 +88,7 @@ internal static partial class VodDownloadFormatTestCatalog
         RequireFfmpeg();
         await using var fixture = new DownloadFixture(PlatformKind.Twitch);
         await UseRealMediaAsync(fixture);
-        await fixture.Service.ChangeDownloadFormatAsync(VodDownloadFormat.Mp4, fixture.Options);
+        await fixture.Service.ChangeDownloadFormatAsync(new DownloadSettings().Format, fixture.Options);
         var item = await fixture.DownloadAsync();
         Assert.Equal(VodDownloadFormat.Mp4, item.Format);
         Assert.True(string.IsNullOrEmpty(item.Error), item.Error);

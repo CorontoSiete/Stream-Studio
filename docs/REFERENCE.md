@@ -496,7 +496,7 @@ Hover over the timeline to preview its timestamp without seeking. Twitch archive
 ## Home Page Followed Channels
 
 - Twitch: the home page uses Twitch Helix `streams/followed`, which requires a Twitch user token with `user:read:follows`. Reconnect Twitch after upgrading if your saved token was created before this feature.
-- Kick: open **Settings > General > Followed channels > Detect Kick follows**, sign in to Kick in the opened window, then select **Import follows**. Detection reads every page of your website follow list, including offline channels, and saves it automatically. Re-run detection after following or unfollowing channels; a successful import replaces the previous imported list. **Additional Kick channels** remains available for manual entries and is preserved when importing or clearing imported follows.
+- To import Kick follows, open **Settings > General > Followed channels > Detect Kick follows**. Stream Studio uses its saved Kick website session to import every page, including offline channels. Complete any sign-in or browser check that opens and select **Import follows**. Run detection after following or unfollowing channels to replace the imported list. Use **Manage Kick sign-in** to switch accounts and **Additional Kick channels** to enter extra channels.
 - Kick detection uses a separate, persistent WebView2 website session because Kick's public OAuth API does not expose the user's follow list. Your existing **Connect Kick** authorization is still used for chat and live-status checks; connect Kick in Accounts for those checks. Website credentials stay in the browser profile under `%LOCALAPPDATA%\StreamStudio\KickFollowsWebView2`, separate from settings. **Clear Kick sign-in** in the detection window clears that browser session. The website endpoint is unofficial and can change; failed, canceled, or incomplete imports keep the previous list. See [verified contract and validation](kick-follow-import.md).
 - Live followed channels load at startup and refresh every minute while the app is open, even when another page or stream tab is selected. Every applied refresh re-requests the live-card thumbnails instead of reusing the app's previous decoded images.
 - **Following** includes an expandable **Offline followed channels** section below **Live now**, refreshed with the live list. Select an offline channel to browse its Twitch or Kick videos. Incomplete or failed API responses are reported instead of being treated as offline channels.
@@ -558,7 +558,7 @@ Example:
   - Enter a live Kick channel URL in the app's home search bar, or open a followed Kick channel.
   - Confirm Streamlink resolves and plays.
   - Test low-latency on/off if buffering occurs.
-  - Sign in to Kick once through `Detect Kick follows` in Settings. Select a live Kick tab and click `Clip`. Confirm no editor window or audio appears, and the published 30-second clip opens in your default browser with an automatic title. Kick website sign-in is shared with follow detection and is separate from Kick OAuth. Errors appear in the app status bar. VOD tabs remain disabled.
+  - Sign in to Kick through `Manage Kick sign-in` in Settings. Select a live Kick tab and click `Clip`. Confirm no editor window or audio appears, and the published 30-second clip opens in your default browser with an automatic title. Follow detection and clipping use the same Kick website session. Errors appear in the app status bar. VOD tabs remain disabled.
 
 - Multiple tabs:
   - Click two or more live streams.

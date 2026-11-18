@@ -22,7 +22,7 @@ for (const platform of ['Twitch', 'Kick']) for (const media of ['hls', 'native']
       assert.equal(Number(slider.min), 0);
       assert.equal(Number(slider.max), 7200, 'uses the archive, not the thirty seconds seen since opening');
       assert.equal(Number(slider.value), 7200, 'live has no fabricated offset into the separate VOD');
-      slider.dispatchEvent(new Event('pointerdown'));
+      slider.dispatchEvent(Object.assign(new Event('pointerdown'), { button: 0, pointerId: 1 }));
       slider.value = 10;
       slider.dispatchEvent(new Event('input'));
       slider.value = 0;
@@ -30,6 +30,10 @@ for (const platform of ['Twitch', 'Kick']) for (const media of ['hls', 'native']
       assert.equal(f.requests.filter(r => r.url === '/api/open').length, 1, 'dragging previews without repeatedly opening players');
       f.target({ isVod: true, isLiveArchive: true });
       slider.dispatchEvent(new Event('change'));
+      await settle(f);
+      assert.equal(f.requests.filter(r => r.url === '/api/open').length, 1, 'a premature change must not commit before release');
+      f.window.dispatchEvent(Object.assign(new Event('pointerup'), { pointerId: 1 }));
+      await new Promise(resolve => setTimeout(resolve, 0));
       await settle(f);
       const archive = f.state.players[0];
       assert.equal(archive.isLiveArchive, true);
@@ -134,8 +138,10 @@ test('cancelling a drag leaves the live player at live', async () => {
   try {
     const p = await f.open(); await settle(f);
     const slider = p.element.querySelector('.video-seek');
-    slider.dispatchEvent(new Event('pointerdown')); slider.value = 15; slider.dispatchEvent(new Event('input'));
-    slider.dispatchEvent(new Event('pointercancel')); slider.dispatchEvent(new Event('change'));
+    slider.dispatchEvent(Object.assign(new Event('pointerdown'), { button: 0, pointerId: 1 }));
+    slider.value = 15; slider.dispatchEvent(new Event('input'));
+    f.window.dispatchEvent(Object.assign(new Event('pointercancel'), { pointerId: 1 }));
+    slider.dispatchEvent(new Event('change'));
     await settle(f);
     assert.equal(f.requests.filter(r => r.url === '/api/open').length, 1);
     slider.value = 900; slider.dispatchEvent(new Event('input')); slider.dispatchEvent(new Event('change'));

@@ -37,8 +37,8 @@ internal sealed class KickClipPublicationTracker
         if (status is < 200 or >= 300)
             throw new InvalidOperationException(status switch
             {
-                401 => "Sign in to Kick using Detect Kick follows in Settings, then click Clip again.",
-                403 => "Kick refused clipping. Check your sign-in using Detect Kick follows in Settings and any channel restrictions.",
+                401 => "Sign in to Kick using Manage Kick sign-in in Settings, then click Clip again.",
+                403 => "Kick refused clipping. Check your sign-in using Manage Kick sign-in in Settings and any channel restrictions.",
                 429 => "Kick is limiting clip creation. Wait before trying again.",
                 _ => $"Kick clip creation failed (HTTP {status}). Check your channel clips before retrying."
             });

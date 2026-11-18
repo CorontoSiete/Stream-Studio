@@ -16,6 +16,7 @@ internal static class StreamSearchTestCatalog
             var settings = new AppSettings();
             settings.Chat.TwitchOAuthToken = token;
             var websiteRequests = 0;
+            var websiteQuery = "";
             using var httpClient = new HttpClient(new AsyncHttpMessageHandler(async (request, cancellationToken) =>
             {
                 if (request.RequestUri!.Host == "kick.com")
@@ -31,6 +32,7 @@ internal static class StreamSearchTestCatalog
                 using var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(cancellationToken));
                 Assert.Equal("timmy", body.RootElement.GetProperty("variables").GetProperty("query").GetString());
                 Assert.Equal(10, body.RootElement.GetProperty("variables").GetProperty("first").GetInt32());
+                websiteQuery = body.RootElement.GetProperty("query").GetString()!;
                 websiteRequests++;
                 return JsonResponse(WebsiteResponse(
                     new
@@ -38,10 +40,10 @@ internal static class StreamSearchTestCatalog
                         login = "iitztimmy",
                         displayName = "iiTzTimmy",
                         profileImageURL = "https://static-cdn.jtvnw.net/timmy.png",
-                        stream = new { id = "123", viewersCount = 4052, game = new { name = "VALORANT" } },
-                        broadcastSettings = new { title = "Ranked matches" }
+                        stream = new { id = "123", title = "Ranked matches", viewersCount = 4052, game = new { name = "VALORANT" } },
+                        broadcastSettings = new { title = "Older title", game = new { name = "Older category" } }
                     },
-                    new { login = "timmy", displayName = "timmy", stream = (object?)null },
+                    new { login = "timmy", displayName = "timmy", stream = (object?)null, broadcastSettings = new { game = new { name = "Just Chatting" } } },
                     new { login = "IITZTIMMY", displayName = "iiTzTimmy", stream = (object?)null },
                     new { login = "../invalid", stream = (object?)null },
                     new { displayName = "Not a channel" },
@@ -53,6 +55,8 @@ internal static class StreamSearchTestCatalog
             var result = await service.SearchAsync(new StreamSearchRequest("  @Timmy  "), settings);
 
             Assert.Equal(1, websiteRequests);
+            Assert.Contains("stream { id title viewersCount game { name } }", websiteQuery);
+            Assert.Contains("broadcastSettings { title game { name } }", websiteQuery);
             var timmy = result.Channels.First();
             Assert.Equal("iitztimmy", timmy.Channel);
             Assert.Equal("iiTzTimmy", timmy.DisplayName);
@@ -67,6 +71,7 @@ internal static class StreamSearchTestCatalog
             Assert.Equal(2, result.Channels.Count(channel => channel.Platform == PlatformKind.Twitch));
             var offline = result.Channels.Single(channel => channel.Platform == PlatformKind.Twitch && channel.Channel == "timmy");
             Assert.Equal(StreamSearchChannelState.Offline, offline.State);
+            Assert.Equal("Just Chatting", offline.CategoryName);
             Assert.Equal(false, offline.CanPlay);
             Assert.Equal(0, streamlink.ProbeRequests.Count);
             Assert.Equal(false, result.Message.Contains("OAuth", StringComparison.Ordinal));
@@ -125,7 +130,7 @@ internal static class StreamSearchTestCatalog
                         Assert.Equal("/helix/search/channels", request.RequestUri.AbsolutePath);
                         Assert.Equal(settings.Chat.TwitchOAuthToken, request.Headers.Authorization?.Parameter);
                         helixRequests++;
-                        return JsonResponse("""{"data":[{"broadcaster_login":"timmy","display_name":"Timmy","is_live":false}]}""");
+                        return JsonResponse("""{"data":[{"broadcaster_login":"timmy","display_name":"Timmy","is_live":false,"game_name":"Just Chatting"}]}""");
                     case "kick.com":
                         return JsonResponse("""{"channels":[]}""");
                     default:
@@ -138,7 +143,9 @@ internal static class StreamSearchTestCatalog
 
             Assert.Equal(1, websiteRequests);
             Assert.Equal(1, helixRequests);
-            Assert.Equal(StreamSearchChannelState.Offline, result.Channels.Single(channel => channel.Platform == PlatformKind.Twitch).State);
+            var channel = result.Channels.Single(channel => channel.Platform == PlatformKind.Twitch);
+            Assert.Equal(StreamSearchChannelState.Offline, channel.State);
+            Assert.Equal("Just Chatting", channel.CategoryName);
             Assert.Equal(false, result.Message.Contains("unavailable", StringComparison.OrdinalIgnoreCase) &&
                 result.Message.Contains("Twitch channel search", StringComparison.Ordinal));
         }

@@ -4,7 +4,7 @@ namespace StreamlinkVlcStudio.Core.Services;
 
 public interface IChannelFollowService
 {
-    /// <summary>Reads website follow state without prompting for sign-in. Null means no verified session.</summary>
+    /// <summary>Reads follow state for the platform account without prompting for sign-in. Null means the state is unknown.</summary>
     Task<ChannelFollowResult?> GetFollowStatusAsync(StreamTarget target, CancellationToken cancellationToken = default);
 
     /// <summary>Follows the broadcaster using the platform website account, with server confirmation.</summary>

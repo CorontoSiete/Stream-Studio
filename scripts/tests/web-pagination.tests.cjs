@@ -13,8 +13,7 @@ function pages(responses) {
     return { ok: true, text: async () => JSON.stringify({ items: response.keys.map(key => ({ key, title: key })), nextCursor: response.next }) };
   } });
   f.state.page = 'vods';
-  f.document.querySelector('#query').value = 'streamer';
-  f.document.querySelector('#platform').value = 'kick';
+  f.state.vodChannel = { platform: 'kick', channel: 'streamer' };
   return f;
 }
 

@@ -8,7 +8,8 @@ internal static partial class ApplicationTestCatalog
         await using var fixture = new VodDownloadTestCatalog.DownloadFixture(platform);
         var entered = fixture.BlockSegment();
         var dispatcher = Dispatcher.CurrentDispatcher;
-        await using var model = CreateDownloadCardsMain(fixture.Service, [fixture.Target], action => dispatcher.BeginInvoke(action));
+        await using var model = CreateDownloadCardsMain(fixture.Service, [fixture.Target],
+            action => dispatcher.BeginInvoke(action), VodDownloadFormat.Hls);
         model.Initialize();
         if (platform == PlatformKind.Kick) model.SelectKickVodPlatformCommand.Execute(null);
         await model.SearchTwitchVodsCommand.ExecuteAsync();
@@ -64,7 +65,8 @@ internal static partial class ApplicationTestCatalog
         fixture.Handler.NetworkAvailable = false;
         var requestCount = fixture.Handler.RequestCount;
         var dispatcher = Dispatcher.CurrentDispatcher;
-        await using var model = CreateDownloadCardsMain(fixture.Service, [fixture.Target], action => dispatcher.BeginInvoke(action));
+        await using var model = CreateDownloadCardsMain(fixture.Service, [fixture.Target],
+            action => dispatcher.BeginInvoke(action), VodDownloadFormat.Hls);
         model.Initialize();
         await TestWait.UntilAsync(() => model.VodDownloads.Count == 1, TimeSpan.FromSeconds(3));
         model.SelectKickVodPlatformCommand.Execute(null);
@@ -358,9 +360,11 @@ internal static partial class ApplicationTestCatalog
     private static StreamTarget DownloadCardTarget(int index) => VodDownloadUrlParser.Parse($"https://www.twitch.tv/videos/{100 + index}") with
     { Channel = "streamer", DisplayTitle = $"Recorded broadcast {index}", MediaDuration = TimeSpan.FromHours(2) };
 
-    private static MainViewModel CreateDownloadCardsMain(IVodDownloadService service, IReadOnlyList<StreamTarget> targets, Action<Action> dispatch)
+    private static MainViewModel CreateDownloadCardsMain(IVodDownloadService service, IReadOnlyList<StreamTarget> targets,
+        Action<Action> dispatch, VodDownloadFormat? format = null)
     {
         var settings = VodResumeTestCatalog.Settings();
+        if (format is { } selectedFormat) settings.Downloads.Format = selectedFormat;
         var model = new MainViewModel(new MainViewModelDependencies
         {
             Settings = settings,

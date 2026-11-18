@@ -181,7 +181,8 @@ internal static partial class LocalWebTestCatalog
             if (action == "following" && HoldFollowing is { } hold) await hold.Task.WaitAsync(token);
             if (action == "following" && FailFollowing) throw new IOException("Test-only provider failure.");
             if (Experience && ExperienceResult(action, input) is { } experienceResult) return experienceResult;
-            if (LastLive && action is "following" or "following/history") return await LastLiveResult(action, token);
+            if (LastLive && action is "following" or "following/history" or "following/pins" or "following/pin")
+                return await LastLiveResult(action, input, token);
             if (CategoryArtwork && CategoryArtworkResult(action, input) is { } artworkResult) return artworkResult;
             object result = action switch
             {

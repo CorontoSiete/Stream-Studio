@@ -100,7 +100,8 @@
 #define EMOTE_RENDER_H    24
 #define EMOTE_MAX_W       96
 #define MAX_LAYOUT_RUNS   192
-#define LINE_GAP_PX       2
+#define LINE_GAP_PX       3
+#define MESSAGE_GAP_PX    4
 #define CHAT_INPUT_H      30
 #define CHAT_INPUT_GAP    6
 #define CHAT_INPUT_MARGIN 8
@@ -7513,6 +7514,7 @@ static const COLORREF kPalette[] = {
 };
 static const COLORREF kSystemColor = RGB(0x93, 0xC5, 0xFD);  /* light blue */
 static const COLORREF kChatLinkColor = RGB(0x8A, 0xB4, 0xF8);
+static const COLORREF kChatTextColor = RGB(0xEE, 0xEE, 0xEE);
 static const COLORREF kShadowColor = RGB(0x00, 0x00, 0x00);
 static const COLORREF kWhiteColor  = RGB(0xFF, 0xFF, 0xFF);
 
@@ -8581,7 +8583,7 @@ static void draw_input_box(renderer_t *r)
 
     wchar_t display[384];
     display[0] = L'\0';
-    COLORREF color = focused ? kWhiteColor : RGB(0xB7, 0xC3, 0xCF);
+    COLORREF color = focused ? kChatTextColor : RGB(0xB7, 0xC3, 0xCF);
     bool showing_notice = notice[0] != '\0';
     bool showing_placeholder = false;
 
@@ -9495,7 +9497,7 @@ static int build_message_runs(renderer_t *r, const chat_msg_t *m,
     *has_emote = false;
     HFONT font = m->is_system ? r->font_sys : r->font_msg;
     COLORREF prefix_color = m->is_system ? kSystemColor : user_color(m->user);
-    COLORREF body_color = m->is_system ? kSystemColor : kWhiteColor;
+    COLORREF body_color = m->is_system ? kSystemColor : kChatTextColor;
     int count = 0;
 
     if (!m->is_system && m->badge_count > 0) {
@@ -10110,8 +10112,9 @@ static int visible_message_limit(renderer_t *r)
     const int line_gap = scale_reference_px(LINE_GAP_PX);
     const int input_h = scale_reference_px(CHAT_INPUT_H);
     const int input_gap = scale_reference_px(CHAT_INPUT_GAP);
-    int line_h = text_height_for_font(r, r->font_msg) + line_gap + scale_reference_px(2);
-    if (line_h < 1) line_h = scale_reference_px(g_font_size_px) + line_gap + scale_reference_px(2);
+    const int message_gap = scale_reference_px(MESSAGE_GAP_PX);
+    int line_h = text_height_for_font(r, r->font_msg) + line_gap + message_gap;
+    if (line_h < 1) line_h = scale_reference_px(g_font_size_px) + line_gap + message_gap;
 
     int available_h = r->height - padding - top_clearance
                     - input_h - input_gap;
@@ -10177,6 +10180,7 @@ static void render_chat(renderer_t *r) {
     const int input_gap = scale_reference_px(CHAT_INPUT_GAP);
     const int emote_render_h = scale_reference_px(EMOTE_RENDER_H);
     const int line_gap = scale_reference_px(LINE_GAP_PX);
+    const int message_gap = scale_reference_px(MESSAGE_GAP_PX);
     const int max_text_width = r->width - padding * 2;
     int y = r->height - padding - input_h - input_gap;
     message_render_info_t infos[QUEUE_CAP];
@@ -10211,7 +10215,7 @@ static void render_chat(renderer_t *r) {
             info_n++;
         }
         release_layout_runs(runs, run_n);
-        y -= scale_reference_px(2);
+        y -= message_gap;
     }
 
     draw_text_selection_highlights(

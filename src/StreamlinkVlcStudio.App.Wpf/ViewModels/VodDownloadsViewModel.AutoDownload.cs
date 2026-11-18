@@ -109,7 +109,11 @@ internal sealed partial class VodDownloadsViewModel
                 token.ThrowIfCancellationRequested();
                 var current = CurrentAutoDownloadChannel(channel);
                 if (current is null) return;
-                if (!video.Channel.Equals(channel.Channel, StringComparison.OrdinalIgnoreCase)) continue;
+                if (!video.Channel.Equals(channel.Channel, StringComparison.OrdinalIgnoreCase))
+                {
+                    allVideosAreOlder = false;
+                    continue;
+                }
                 var started = video.MediaStartedAtUtc ?? video.MediaPublishedAtUtc;
                 if (started is null || video.MediaDuration <= TimeSpan.Zero)
                 {
@@ -145,7 +149,8 @@ internal sealed partial class VodDownloadsViewModel
                         $"A VOD for {channel.Platform}:{channel.Channel} is not ready to queue; the next check will retry.");
                 }
             }
-            if (allVideosAreOlder || videos.Count == 0) return;
+            // A filtered or empty page does not establish that the next page is old.
+            if (allVideosAreOlder) return;
         } while (!string.IsNullOrWhiteSpace(cursor) && cursors.Add(cursor));
     }
 }

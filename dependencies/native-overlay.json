@@ -10,14 +10,14 @@
   "files": [
     {
       "path": "src/StreamlinkVlcStudio.Infrastructure/Vlc/BundledOverlay/build/libmyoverlay_plugin.dll",
-      "length": 1087344,
-      "sha256": "C52D1660C74A938AF2EED244FDDA796C72A693FCAE446BEA53A653FA46B7F609",
+      "length": 1087326,
+      "sha256": "808B353C7784EEA941A726BE0BBAC49419486B1C30D1222BC9E50FD81C4EEE16",
       "authenticode": "NotSigned"
     },
     {
       "path": "src/StreamlinkVlcStudio.Infrastructure/Vlc/BundledOverlay/build/vlc_chat_overlay.exe",
       "length": 507779,
-      "sha256": "14E52E52CBB68F1E81D25BB6D772D12DB7E1DB70951B69E0AB71208B5080071D",
+      "sha256": "A8CD8EC82E2835E1BE2A33E64CCBC7AD68F7C0D1D9D1F0D238703A0E0700821D",
       "authenticode": "NotSigned"
     }
   ]

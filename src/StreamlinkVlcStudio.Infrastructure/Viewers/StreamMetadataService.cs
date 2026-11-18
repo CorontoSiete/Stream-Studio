@@ -5,6 +5,7 @@ using StreamlinkVlcStudio.Core.Services;
 using StreamlinkVlcStudio.Core.Settings;
 using StreamlinkVlcStudio.Infrastructure.Chat;
 using StreamlinkVlcStudio.Infrastructure.Http;
+using StreamlinkVlcStudio.Infrastructure.Twitch;
 using static StreamlinkVlcStudio.Core.Json.JsonElementReader;
 using static StreamlinkVlcStudio.Core.Text.StringValues;
 
@@ -20,6 +21,7 @@ public sealed class StreamMetadataService : IStreamMetadataService
     private readonly HttpClient httpClient;
     private readonly LiveChannelSnapshotProvider snapshotProvider;
     private readonly IKickTokenProvider kickTokenProvider;
+    private readonly KickWebsiteJsonReader kickWebsiteJsonReader;
 
     public StreamMetadataService(IAppLogger logger)
         : this(
@@ -49,6 +51,7 @@ public sealed class StreamMetadataService : IStreamMetadataService
         this.httpClient = httpClient;
         this.snapshotProvider = snapshotProvider;
         this.kickTokenProvider = kickTokenProvider;
+        kickWebsiteJsonReader = new KickWebsiteJsonReader(httpClient, logger, "Search", TimeSpan.FromSeconds(12));
     }
 
     public Task<StreamMetadataResult> GetLiveStreamMetadataAsync(
@@ -66,6 +69,111 @@ public sealed class StreamMetadataService : IStreamMetadataService
                 "",
                 $"Stream metadata is not supported for {target.Platform}."))
         };
+    }
+
+    public async Task<StreamMetadataResult> GetLiveSearchMetadataAsync(
+        StreamTarget target,
+        AppSettings settings,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var metadata = target.Platform switch
+            {
+                PlatformKind.Twitch => await ReadTwitchSearchMetadataAsync(target.Channel, cancellationToken).ConfigureAwait(false),
+                PlatformKind.Kick => await ReadKickSearchMetadataAsync(target.Channel, cancellationToken).ConfigureAwait(false),
+                _ => null
+            };
+            if (metadata is not null)
+            {
+                return metadata;
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.Write(AppLogLevel.Warning, "Search", $"Public stream details could not be loaded for {target.DisplayName}.", ex);
+        }
+
+        return await GetLiveStreamMetadataAsync(target, settings, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<StreamMetadataResult?> ReadTwitchSearchMetadataAsync(string login, CancellationToken cancellationToken)
+    {
+        var payload = JsonSerializer.Serialize(new
+        {
+            query = """
+                query StreamStudioSearchMetadata($login: String!) {
+                  user(login: $login) {
+                    login displayName profileImageURL(width: 150)
+                    stream { title game { name } }
+                    broadcastSettings { title game { name } }
+                  }
+                }
+                """,
+            variables = new { login }
+        });
+        using var document = await new TwitchGraphQlTransport(httpClient).SendAsync(
+            payload, TwitchGraphQlTransport.PublicClientId, TwitchGraphQlTransport.CreateDeviceId(), cancellationToken).ConfigureAwait(false);
+        var user = GetObjectProperty(GetObjectProperty(document.RootElement, "data"), "user");
+        if (user.ValueKind != JsonValueKind.Object ||
+            !string.Equals(GetOptionalString(user, "login"), login, StringComparison.OrdinalIgnoreCase) ||
+            !user.TryGetProperty("stream", out var stream))
+        {
+            return null;
+        }
+
+        if (stream.ValueKind == JsonValueKind.Null)
+        {
+            return new(StreamMetadataState.Offline, "", "", "Twitch stream is offline.");
+        }
+        if (stream.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        var broadcast = GetObjectProperty(user, "broadcastSettings");
+        return new(StreamMetadataState.Available, "", GetOptionalString(user, "displayName"), "Twitch stream details loaded.",
+            FirstNonEmpty(TryReadNestedString(stream, "game", "name"), TryReadNestedString(broadcast, "game", "name")),
+            GetOptionalString(user, "profileImageURL"),
+            FirstNonEmpty(GetOptionalString(stream, "title"), GetOptionalString(broadcast, "title")));
+    }
+
+    private async Task<StreamMetadataResult?> ReadKickSearchMetadataAsync(string channel, CancellationToken cancellationToken)
+    {
+        var slug = Uri.EscapeDataString(channel);
+        var body = await kickWebsiteJsonReader.ReadAsync(
+            $"https://kick.com/api/v2/channels/{slug}", $"https://kick.com/{slug}", cancellationToken).ConfigureAwait(false);
+        if (body is null)
+        {
+            return null;
+        }
+
+        using var document = JsonDocument.Parse(body);
+        var root = document.RootElement;
+        if (root.ValueKind != JsonValueKind.Object ||
+            !string.Equals(GetOptionalString(root, "slug"), channel, StringComparison.OrdinalIgnoreCase) ||
+            !root.TryGetProperty("livestream", out var stream))
+        {
+            return null;
+        }
+
+        if (stream.ValueKind == JsonValueKind.Null || TryGetBool(stream, "is_live") == false)
+        {
+            return new(StreamMetadataState.Offline, "", "", "Kick stream is offline.");
+        }
+        if (stream.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        var user = GetObjectProperty(root, "user");
+        return new(StreamMetadataState.Available, "", GetOptionalString(user, "username"), "Kick stream details loaded.",
+            TryReadFirstArrayObjectString(stream, "categories", "name"), NormalizeImageUrl(GetOptionalString(user, "profile_pic")),
+            GetOptionalString(stream, "session_title"));
     }
 
     private async Task<StreamMetadataResult> GetTwitchStreamMetadataAsync(
@@ -239,7 +347,8 @@ public sealed class StreamMetadataService : IStreamMetadataService
                 FirstNonEmpty(GetOptionalString(item, "user_name"), target.Channel),
                 "Twitch stream metadata updated.",
                 GetOptionalString(item, "game_name"),
-                GetOptionalString(item, "profile_image_url"));
+                GetOptionalString(item, "profile_image_url"),
+                GetOptionalString(item, "title"));
         }
 
         return new(
@@ -252,6 +361,10 @@ public sealed class StreamMetadataService : IStreamMetadataService
             TryReadNestedString(item, "category", "name"),
             NormalizeImageUrl(FirstNonEmpty(
                 GetOptionalString(item, "profile_picture"),
-                GetOptionalString(item, "profile_pic"))));
+                GetOptionalString(item, "profile_pic"))),
+            FirstNonEmpty(
+                GetOptionalString(item, "stream_title"),
+                GetOptionalString(payload.Stream, "stream_title"),
+                GetOptionalString(payload.Stream, "title")));
     }
 }

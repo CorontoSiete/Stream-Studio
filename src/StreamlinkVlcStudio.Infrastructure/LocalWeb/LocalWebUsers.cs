@@ -16,14 +16,25 @@ internal sealed record LocalWebHotkey(string Key, bool Ctrl, bool Alt, bool Shif
 
 internal sealed record LocalWebPreferences
 {
+    private const int MinimumVolumeStep = 1;
+    private const int MaximumVolumeStep = 100;
+    private static readonly HashSet<string> HotkeyActions = new(
+        ["back", "dismiss", "nextTab", "previousTab", "grid", "toggleSeekBar", "togglePause",
+            "skipBackward", "skipForward", "volumeUp", "volumeDown", "keepAudio", "mute"], StringComparer.Ordinal);
+
     public string Quality { get; init; } = "best";
     public bool LowLatency { get; init; } = true;
     public string Layout { get; init; } = "docked";
     public int Size { get; init; } = 16;
     public int Opacity { get; init; } = 90;
-    public bool KeepInactive { get; init; }
+    public bool KeepInactive { get; init; } = true;
     public bool PauseInactiveVod { get; init; } = true;
     public Dictionary<string, LocalWebHotkey?> Hotkeys { get; init; } = new(StringComparer.Ordinal);
+    public bool HotkeysAreOverrides { get; init; }
+    public int? SkipBackwardSeconds { get; init; }
+    public int? SkipForwardSeconds { get; init; }
+    public int? VolumeUpStep { get; init; }
+    public int? VolumeDownStep { get; init; }
     public Dictionary<string, double> Volumes { get; init; } = new(StringComparer.OrdinalIgnoreCase);
     public Dictionary<string, WebChatOverlayLayout> ChatLayouts { get; init; } = new(StringComparer.OrdinalIgnoreCase);
     public Dictionary<string, string> CategoryLanguages { get; init; } = new(StringComparer.OrdinalIgnoreCase);
@@ -61,12 +72,23 @@ internal sealed record LocalWebPreferences
                 case "opacity": next = next with { Opacity = Integer(property.Value, 0, 100) }; break;
                 case "keepInactive": next = next with { KeepInactive = Boolean(property.Value) }; break;
                 case "pauseInactiveVod": next = next with { PauseInactiveVod = Boolean(property.Value) }; break;
-                case "hotkeys": next = next with { Hotkeys = ReadHotkeys(property.Value) }; break;
+                case "hotkeys": next = next with { Hotkeys = ReadHotkeys(property.Value), HotkeysAreOverrides = true }; break;
+                case "skipBackwardSeconds":
+                    next = next with { SkipBackwardSeconds = IntegerOrNull(property.Value, HotkeySettings.MinimumSkipSeconds, HotkeySettings.MaximumSkipSeconds) };
+                    break;
+                case "skipForwardSeconds":
+                    next = next with { SkipForwardSeconds = IntegerOrNull(property.Value, HotkeySettings.MinimumSkipSeconds, HotkeySettings.MaximumSkipSeconds) };
+                    break;
+                case "volumeUpStep": next = next with { VolumeUpStep = IntegerOrNull(property.Value, MinimumVolumeStep, MaximumVolumeStep) }; break;
+                case "volumeDownStep": next = next with { VolumeDownStep = IntegerOrNull(property.Value, MinimumVolumeStep, MaximumVolumeStep) }; break;
                 default: throw new ArgumentException("Unknown preference.");
             }
         }
         return next;
     }
+
+    private static int? IntegerOrNull(JsonElement value, int min, int max) =>
+        value.ValueKind == JsonValueKind.Null ? null : Integer(value, min, max);
 
     internal static WebChatOverlayLayout ReadLayout(JsonElement input)
     {
@@ -87,13 +109,12 @@ internal sealed record LocalWebPreferences
 
     private static Dictionary<string, LocalWebHotkey?> ReadHotkeys(JsonElement value)
     {
-        if (value.ValueKind != JsonValueKind.Object || value.EnumerateObject().Count() > 6)
+        if (value.ValueKind != JsonValueKind.Object || value.EnumerateObject().Count() > HotkeyActions.Count)
             throw new ArgumentException("Invalid shortcuts.");
         var result = new Dictionary<string, LocalWebHotkey?>(StringComparer.Ordinal);
-        var allowed = new HashSet<string>(["back", "nextTab", "previousTab", "grid", "keepAudio", "mute"], StringComparer.Ordinal);
         foreach (var entry in value.EnumerateObject())
         {
-            if (!allowed.Contains(entry.Name) || !result.TryAdd(entry.Name, null)) throw new ArgumentException("Invalid shortcuts.");
+            if (!HotkeyActions.Contains(entry.Name) || !result.TryAdd(entry.Name, null)) throw new ArgumentException("Invalid shortcuts.");
             if (entry.Value.ValueKind == JsonValueKind.Null) continue;
             if (entry.Value.ValueKind != JsonValueKind.Object) throw new ArgumentException("Invalid shortcuts.");
             if (entry.Value.EnumerateObject().Count() != 5 ||
@@ -107,7 +128,7 @@ internal sealed record LocalWebPreferences
             var binding = new LocalWebHotkey(key,
                 Boolean(ctrl), Boolean(alt), Boolean(shift), Boolean(meta));
             if ((binding.Ctrl || binding.Meta) && !binding.Alt && key == "k" ||
-                !binding.Ctrl && !binding.Alt && !binding.Meta && (key == "/" || !binding.Shift && key is "k" or "f") ||
+                !binding.Ctrl && !binding.Alt && !binding.Meta && (key == "/" || !binding.Shift && key is "f" or "Enter") ||
                 result.Values.Contains(binding)) throw new ArgumentException("Invalid shortcuts.");
             result[entry.Name] = binding;
         }
@@ -120,9 +141,35 @@ internal sealed record LocalWebPreferences
         if (key.Length > 0 && Rune.TryGetRuneAt(key, 0, out var rune) && rune.Utf16SequenceLength == key.Length)
             return !Rune.IsWhiteSpace(rune) && Rune.GetUnicodeCategory(rune) is not
                 (UnicodeCategory.Control or UnicodeCategory.Format or UnicodeCategory.PrivateUse or UnicodeCategory.OtherNotAssigned);
-        return key is "Escape" or "Backspace" or "Delete" or "Insert" or "Home" or "End" or "PageUp" or "PageDown" or
+        return key is "Space" or "Enter" or "Escape" or "Backspace" or "Delete" or "Insert" or "Home" or "End" or "PageUp" or "PageDown" or
             "ArrowLeft" or "ArrowRight" or "ArrowUp" or "ArrowDown" or "Mouse4" or "Mouse5" or
-            ['F', >= '1' and <= '9'] or ['F', '1', >= '0' and <= '2'];
+            "Cancel" or "Clear" or "Pause" or "CapsLock" or "PrintScreen" or "NumLock" or "ScrollLock" or "ContextMenu" or
+            "Help" or "Select" or "Execute" or "Sleep" or "Standby" or "WakeUp" or "Convert" or "NonConvert" or
+            "Accept" or "ModeChange" or "KanaMode" or "HangulMode" or "HanjaMode" or "KanjiMode" or
+            "BrowserBack" or "BrowserForward" or "BrowserRefresh" or "BrowserStop" or "BrowserSearch" or "BrowserFavorites" or "BrowserHome" or
+            "AudioVolumeMute" or "AudioVolumeDown" or "AudioVolumeUp" or "MediaTrackNext" or "MediaTrackPrevious" or "MediaStop" or
+            "MediaPlayPause" or "LaunchMail" or "LaunchMediaPlayer" or "LaunchApplication1" or "LaunchApplication2" or
+            "NumpadAdd" or "NumpadSubtract" or "NumpadMultiply" or "NumpadDivide" or "NumpadDecimal" or "NumpadComma" or
+            ['N', 'u', 'm', 'p', 'a', 'd', >= '0' and <= '9'] or
+            ['F', >= '1' and <= '9'] or ['F', '1', >= '0' and <= '9'] or ['F', '2', >= '0' and <= '4'];
+    }
+
+    internal LocalWebPreferences MigrateHotkeys()
+    {
+        if (HotkeysAreOverrides) return this;
+        var upgraded = Copy() with { HotkeysAreOverrides = true };
+        // The old browser saved the entire effective map on every edit. Values
+        // matching its original defaults are the only ones without evidence of an override.
+        var legacyDefaults = new[] { ("back", "Escape"), ("nextTab", "]"), ("previousTab", "["), ("grid", "g"),
+            ("keepAudio", "a"), ("mute", "m") };
+        if (legacyDefaults.All(binding => Hotkeys.ContainsKey(binding.Item1)))
+        {
+            foreach (var (action, key) in legacyDefaults)
+            {
+                if (upgraded.Hotkeys[action] == new LocalWebHotkey(key, false, false, false, false)) upgraded.Hotkeys.Remove(action);
+            }
+        }
+        return upgraded;
     }
 
     internal static void Validate(LocalWebPreferences preferences)
@@ -130,6 +177,10 @@ internal sealed record LocalWebPreferences
         if (!LocalWebWorkspace.Qualities.Contains(preferences.Quality, StringComparer.Ordinal) ||
             preferences.Layout is not ("docked" or "overlay" or "hidden") ||
             preferences.Size is < 12 or > 32 || preferences.Opacity is < 0 or > 100 ||
+            preferences.SkipBackwardSeconds is < HotkeySettings.MinimumSkipSeconds or > HotkeySettings.MaximumSkipSeconds ||
+            preferences.SkipForwardSeconds is < HotkeySettings.MinimumSkipSeconds or > HotkeySettings.MaximumSkipSeconds ||
+            preferences.VolumeUpStep is < MinimumVolumeStep or > MaximumVolumeStep ||
+            preferences.VolumeDownStep is < MinimumVolumeStep or > MaximumVolumeStep ||
             preferences.Hotkeys is null || preferences.Volumes is null || preferences.ChatLayouts is null || preferences.CategoryLanguages is null ||
             preferences.Volumes.Count > 512 || preferences.ChatLayouts.Count > 512)
             throw new InvalidDataException("Saved web preferences are invalid.");
@@ -206,7 +257,7 @@ public sealed class LocalWebUserStore
                 throw new InvalidDataException("Saved web accounts are invalid.");
             LocalWebPreferences.Validate(user.Preferences);
         }
-        return new(path, saved.Users);
+        return new(path, saved.Users.Select(user => user with { Preferences = user.Preferences.MigrateHotkeys() }).ToList());
     }
 
     public IReadOnlyList<LocalWebUserSummary> ListUsers()

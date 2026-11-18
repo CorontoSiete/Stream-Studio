@@ -50,7 +50,7 @@ public sealed partial class StreamlinkService
         var index = line.IndexOf(prefix, StringComparison.OrdinalIgnoreCase);
         if (index < 0) return false;
         var available = line[(index + prefix.Length)..].Split(['\r', '\n'], 2)[0];
-        var names = StreamAliasesPattern().Replace(available, "")
+        var names = StreamAliasesPattern().Replace(available, static _ => string.Empty)
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         return names.Length > 0 && names.All(name =>
             name.Equals("audio_only", StringComparison.OrdinalIgnoreCase) || name.Equals("audio", StringComparison.OrdinalIgnoreCase));

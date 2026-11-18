@@ -178,8 +178,11 @@ struct filter_sys_t
     bool         blank_until_frame;
     bool         show_placeholder;
     bool         hidden;        /* true => render in-plugin "show chat" button */
+    HWND         video_host;    /* HWND supplied before creating this video output */
     bool         mouse_over_chat;
     bool         input_hovered;
+    bool         input_hover_reported; /* last state written to the controller */
+    ULONGLONG    input_hover_retry_ms;
     bool         dragging;
     bool         selecting_text;
     bool         text_selection_moved;
@@ -676,6 +679,21 @@ static bool PointInRect( int32_t px, int32_t py, int32_t x, int32_t y,
 {
     return px >= x && py >= y
         && px < x + (int32_t)w && py < y + (int32_t)h;
+}
+
+static void MaybeSendInputHoverEvent( filter_sys_t *sys, bool hovered )
+{
+    if( hovered == sys->input_hover_reported )
+        return;
+
+    const ULONGLONG now = GetTickCount64();
+    if( now < sys->input_hover_retry_ms )
+        return;
+
+    if( SendOverlayEvents( sys, MYO_EVENT_CHAT_INPUT_HOVER, hovered, 0, 0, 0, 0, 0, 0 ) )
+        sys->input_hover_reported = hovered;
+    else
+        sys->input_hover_retry_ms = now + 50u;
 }
 
 static uint32_t VisibleVideoHeight( const video_format_t *p_fmt )
@@ -1558,6 +1576,7 @@ static int Open( vlc_object_t *p_this )
                        p_filter->p_cfg );
     InitPipeName( p_filter, sys );
     InitPositionStatePath( p_filter, sys );
+    sys->video_host = (HWND)(uintptr_t)var_InheritInteger( p_filter, "drawable-hwnd" );
     sys->show_placeholder = var_InheritBool( p_filter,
                                              CFG_PREFIX "show-placeholder" );
     sys->blank_until_frame = !sys->show_placeholder;
@@ -1657,8 +1676,6 @@ static int SubMouse( filter_t *p_filter,
     bool    ui_release = false;
     uint32_t event_type = 0;
     int32_t event_value = 0;
-    uint32_t hover_event_type = 0;
-    int32_t hover_event_value = 0;
     uint32_t focus_event_type = 0;
     int32_t focus_event_value = 0;
     uint32_t selection_event_type = 0;
@@ -1677,17 +1694,9 @@ static int SubMouse( filter_t *p_filter,
         sys->button_moved = false;
         sys->scrollbar_pressed = false;
         sys->resizing = false;
-        if( sys->input_hovered )
-        {
-            sys->input_hovered = false;
-            hover_event_type = MYO_EVENT_CHAT_INPUT_HOVER;
-            hover_event_value = 0;
-        }
+        sys->input_hovered = false;
         LeaveCriticalSection( &sys->lock );
-        SendOverlayEvents( sys, 0, 0,
-                           hover_event_type, hover_event_value,
-                           0, 0,
-                           MYO_EVENT_TEXT_SELECT_CANCEL, 0 );
+        SendOverlayEvents( sys, MYO_EVENT_TEXT_SELECT_CANCEL, 0, 0, 0, 0, 0, 0, 0 );
         return VLC_SUCCESS;
     }
 
@@ -1958,13 +1967,7 @@ static int SubMouse( filter_t *p_filter,
                          || sys->selecting_text || sys->button_pressed
                          || sys->scrollbar_pressed || sys->resizing
                          || b_over_input;
-    const bool input_hovered_now = !sys->hidden && b_over_input;
-    if( input_hovered_now != sys->input_hovered )
-    {
-        sys->input_hovered = input_hovered_now;
-        hover_event_type = MYO_EVENT_CHAT_INPUT_HOVER;
-        hover_event_value = input_hovered_now ? 1 : 0;
-    }
+    sys->input_hovered = !sys->hidden && b_over_input;
 
     const bool consume = sys->dragging || sys->selecting_text
                        || sys->button_pressed
@@ -2006,14 +2009,23 @@ static int SubMouse( filter_t *p_filter,
         consume ? 1 : 0 );
 
     SendOverlayEvents( sys, event_type, event_value,
-                       hover_event_type, hover_event_value,
                        focus_event_type, focus_event_value,
-                       selection_event_type, selection_event_value );
+                       selection_event_type, selection_event_value, 0, 0 );
 
     if( save_now )
         SaveOverlayState( sys, save_x, save_y, save_hidden );
 
     return consume ? VLC_EGENERIC : VLC_SUCCESS;
+}
+
+static bool PointerHasLeftVideo( HWND video_host )
+{
+    POINT cursor;
+    if( video_host == NULL || !GetCursorPos( &cursor ) )
+        return false;
+
+    const HWND target = WindowFromPoint( cursor );
+    return target != video_host && !IsChild( video_host, target );
 }
 
 /*****************************************************************************
@@ -2028,7 +2040,6 @@ static subpicture_t *Filter( filter_t *p_filter, vlc_tick_t date )
     LeaveCriticalSection(&sys->metrics->lock);
     if (!source.i_visible_height) source = p_filter->fmt_out.video;
     const uint32_t video_h = VisibleVideoHeight( &source );
-    MaybeSendVideoSizeEvent( p_filter, &source );
 
     int32_t  x, y;
     uint32_t footprint_w, footprint_h;
@@ -2041,12 +2052,24 @@ static subpicture_t *Filter( filter_t *p_filter, vlc_tick_t date )
     bool     show_placeholder;
     bool     show_button;
     bool     show_scrollbar;
+    bool     input_hovered;
     int32_t  scroll_offset;
     int32_t  scroll_max;
     uint32_t scroll_visible;
     uint32_t scroll_total;
 
     EnterCriticalSection( &sys->lock );
+    /* VLC reports moves over its own window and during capture. A direct exit
+     * can leave the last source-coordinate sample inside chat indefinitely. */
+    if( ( sys->mouse_over_chat || sys->input_hovered )
+        && !sys->dragging && !sys->selecting_text && !sys->button_pressed
+        && !sys->scrollbar_pressed && !sys->resizing
+        && PointerHasLeftVideo( sys->video_host ) )
+    {
+        sys->mouse_over_chat = false;
+        sys->input_hovered = false;
+    }
+
     footprint_w = sys->w; footprint_h = sys->h;
     x = sys->x; y = sys->y;
     const int32_t max_x = (int32_t)source.i_visible_width - (int32_t)footprint_w;
@@ -2056,6 +2079,7 @@ static subpicture_t *Filter( filter_t *p_filter, vlc_tick_t date )
     sys->x = x; sys->y = y;
     hidden = sys->hidden;
     blank_until_frame = sys->blank_until_frame;
+    input_hovered = !hidden && !blank_until_frame && sys->input_hovered;
     show_placeholder = sys->show_placeholder;
     show_button = sys->mouse_over_chat || sys->button_pressed || sys->resizing;
     show_scrollbar = !hidden
@@ -2082,6 +2106,10 @@ static subpicture_t *Filter( filter_t *p_filter, vlc_tick_t date )
         }
     }
     LeaveCriticalSection( &sys->lock );
+
+    /* Retry a busy event pipe on later frames using the current hover state. */
+    MaybeSendInputHoverEvent( sys, input_hovered );
+    MaybeSendVideoSizeEvent( p_filter, &source );
 
     overlay_visual_state_t visual;
     /* Clear padding as well, since equality below compares the complete key. */

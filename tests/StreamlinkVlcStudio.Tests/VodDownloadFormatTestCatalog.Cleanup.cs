@@ -301,6 +301,7 @@ internal static partial class VodDownloadFormatTestCatalog
             }
         });
         var settings = VodResumeTestCatalog.Settings();
+        settings.Downloads.Format = VodDownloadFormat.Hls;
         var dispatcher = System.Windows.Threading.Dispatcher.CurrentDispatcher;
         await using var model = new MainViewModel(new MainViewModelDependencies
         {
@@ -360,6 +361,7 @@ internal static partial class VodDownloadFormatTestCatalog
             }
         });
         var settings = VodResumeTestCatalog.Settings();
+        settings.Downloads.Format = VodDownloadFormat.Hls;
         var dispatcher = System.Windows.Threading.Dispatcher.CurrentDispatcher;
         await using var model = new MainViewModel(new MainViewModelDependencies
         {

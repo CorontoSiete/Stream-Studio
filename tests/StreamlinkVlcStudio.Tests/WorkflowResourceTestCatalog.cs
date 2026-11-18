@@ -7,6 +7,7 @@ internal static class WorkflowResourceTestCatalog
         ("workflow resources: changing quality starts a new search instead of sharing old probes", SearchQualityAsync),
         ("workflow resources: viewer counts preserve search rows and commands while reordering", PreserveSearchRowsAsync),
         ("workflow resources: playable live search results appear before optional metadata", EarlySearchResultsAsync),
+        ("workflow resources: desktop stream search fills missing live titles and categories from the provider", SearchTitlesAndCategoriesAsync),
         ("workflow resources: late metadata cannot overwrite a replacement search", StaleSearchMetadataAsync),
         ("workflow resources: each viewer count appears without waiting for slower channels", ProgressiveSearchCountsAsync),
         ("workflow resources: channel artwork and viewer counts load independently", IndependentSearchDetailsAsync),
@@ -169,6 +170,90 @@ internal static class WorkflowResourceTestCatalog
                 row.Target.ProfileImageUrl == "https://example.com/avatar.jpg"));
         }
         finally { release.TrySetResult(Metadata()); }
+    });
+
+    private static Task SearchTitlesAndCategoriesAsync() => TestSta.RunOffscreenAsync(async () =>
+    {
+        var kickDetails = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var requests = new ConcurrentBag<string>();
+        using var client = new HttpClient(new AsyncHttpMessageHandler(async (request, token) =>
+        {
+            var uri = request.RequestUri!;
+            requests.Add(uri.AbsolutePath);
+            Assert.True(request.Headers.Authorization is null);
+            string json;
+            if (uri.Host == "gql.twitch.tv")
+            {
+                using var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(token));
+                var variables = body.RootElement.GetProperty("variables");
+                if (variables.TryGetProperty("login", out var login))
+                {
+                    Assert.Equal("creator", login.GetString());
+                    json = """
+                        {"data":{"user":{"login":"creator","stream":{"title":"Pasted Twitch URL","game":{"name":"Music"}}}}}
+                        """;
+                }
+                else
+                {
+                    Assert.Equal("creator", variables.GetProperty("query").GetString());
+                    json = """
+                        {"data":{"searchFor":{"channels":{"edges":[{"item":{"login":"creator","stream":{"title":"Twitch broadcast","game":{"name":"Art"}}}}]}}}}
+                        """;
+                }
+            }
+            else if (uri.AbsolutePath == "/api/search")
+            {
+                json = """
+                    {"channels":[{"slug":"creator","isLive":true,"recentCategories":[{"name":"Previous category"}]},
+                                 {"slug":"creatoroffline","isLive":false}]}
+                    """;
+            }
+            else
+            {
+                Assert.Equal("/api/v2/channels/creator", uri.AbsolutePath);
+                await kickDetails.Task.WaitAsync(token);
+                json = """
+                    {"slug":"creator","livestream":{"is_live":true,"session_title":"Kick broadcast","categories":[{"name":"Just Chatting"}]}}
+                    """;
+            }
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(json, Encoding.UTF8, "application/json")
+            };
+        }));
+        var logger = new MemoryLogger();
+        var search = new StreamSearchService(logger, new FakeStreamlinkService(), client);
+        var metadata = new StreamMetadataService(logger, client);
+        await using var viewModel = Create(new AppSettings { StreamlinkPath = "streamlink.exe" }, search, metadata);
+        viewModel.NewStreamText = "creator";
+        try
+        {
+            await TestWait.UntilAsync(() => requests.Contains("/api/v2/channels/creator"), TimeSpan.FromSeconds(2));
+            var twitch = viewModel.StreamSearchResults.Single(row => row.Platform == PlatformKind.Twitch);
+            var kick = viewModel.StreamSearchResults.Single(row => row.Platform == PlatformKind.Kick && row.IsLive);
+            var offline = viewModel.StreamSearchResults.Single(row => row.IsOffline);
+            Assert.Equal("Twitch broadcast", twitch.Title);
+            Assert.Equal("Art", twitch.CategoryName);
+            Assert.True(kick.OpenCommand.CanExecute(null));
+            Assert.Equal(false, kick.HasTitle || kick.HasCategory);
+            Assert.Equal(false, offline.HasTitle || offline.HasCategory);
+
+            kickDetails.SetResult();
+            await TestWait.UntilAsync(() => kick.HasTitle && kick.HasCategory, TimeSpan.FromSeconds(2));
+            Assert.Equal("Kick broadcast", kick.Title);
+            Assert.Equal("Just Chatting", kick.CategoryName);
+            Assert.Equal(kick.CategoryName, kick.Target.CategoryName);
+            Assert.True(ReferenceEquals(kick, viewModel.StreamSearchResults.Single(row => row.Platform == PlatformKind.Kick && row.IsLive)));
+            Assert.SequenceEqual(new[] { "/api/search", "/api/v2/channels/creator", "/gql" }, requests.Order(StringComparer.Ordinal));
+
+            viewModel.NewStreamText = "https://www.twitch.tv/creator";
+            await TestWait.UntilAsync(() => viewModel.StreamSearchResults.SingleOrDefault()?.Title == "Pasted Twitch URL", TimeSpan.FromSeconds(2));
+            Assert.Equal("Music", viewModel.StreamSearchResults.Single().CategoryName);
+        }
+        finally
+        {
+            kickDetails.TrySetResult();
+        }
     });
 
     private static Task StaleSearchMetadataAsync() => TestSta.RunOffscreenAsync(async () =>

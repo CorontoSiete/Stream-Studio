@@ -16,6 +16,8 @@ public sealed class AppSettings : NotifyPropertyChangedObject
     private bool multiStreamEnabled;
     private bool keepHomeCardRightGap = true;
     private bool enableStreamHoverPreviews;
+    private bool autoStartLocalWebServer;
+    private LocalWebServerEndpoint? localWebServerEndpoint;
     private bool setupCompleted;
     private AppTheme theme = AppTheme.Dark;
     private WindowCloseBehavior closeBehavior = WindowCloseBehavior.Exit;
@@ -95,6 +97,18 @@ public sealed class AppSettings : NotifyPropertyChangedObject
     {
         get => enableStreamHoverPreviews;
         set => SetProperty(ref enableStreamHoverPreviews, value);
+    }
+
+    public bool AutoStartLocalWebServer
+    {
+        get => autoStartLocalWebServer;
+        set => SetProperty(ref autoStartLocalWebServer, value);
+    }
+
+    public LocalWebServerEndpoint? LocalWebServerEndpoint
+    {
+        get => localWebServerEndpoint;
+        set => SetProperty(ref localWebServerEndpoint, value);
     }
 
     public bool SetupCompleted

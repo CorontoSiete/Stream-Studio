@@ -29,8 +29,8 @@ internal sealed record NativeOverlayChatPresentation(
             systemFontSize,
             NativeOverlayFontMetrics.GetCellHeight(messageFontSize, FontWeights.Bold),
             NativeOverlayFontMetrics.GetCellHeight(systemFontSize, FontWeights.Normal),
-            NativeOverlaySizing.ScaleReferencePixels(videoHeight, 2),
-            NativeOverlaySizing.ScaleReferencePixels(videoHeight, 2),
+            NativeOverlaySizing.ScaleReferencePixels(videoHeight, 3),
+            NativeOverlaySizing.ScaleReferencePixels(videoHeight, 4),
             NativeOverlaySizing.ScaleReferencePixels(videoHeight, 24),
             NativeOverlaySizing.ScaleReferencePixels(videoHeight, 96),
             NativeOverlaySizing.ScaleReferencePixels(videoHeight, 1));

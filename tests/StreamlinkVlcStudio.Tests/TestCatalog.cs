@@ -71,6 +71,7 @@ internal static class TestCatalog
                 .. ApplicationTestCatalog.VodWatchProgressTests,
                 .. ApplicationTestCatalog.VodResumeNativeTests,
                 .. ApplicationTestCatalog.OverlayReadabilityTests,
+                .. ApplicationTestCatalog.OverlayPointerLeaveTests,
                 .. ApplicationTestCatalog.ChatTextSizeTests,
                 .. UpdateModernizationTestCatalog.RefreshTests,
                 .. UpdateModernizationTestCatalog.ReleaseTests,

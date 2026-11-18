@@ -20,12 +20,15 @@ internal static partial class LocalWebTestCatalog
     {
         const string settled = "document.querySelector('#cards').getAttribute('aria-busy')==='false'";
         const string noOverflow = "document.documentElement.scrollWidth<=document.documentElement.clientWidth";
+        await WaitBrowser(core, "document.querySelector('#login .wordmark img[src=\"/studio-logo.svg\"]')?.naturalWidth > 0");
+        Assert.Equal("true", await core.ExecuteScriptAsync("document.querySelector('link[rel=icon]')?.getAttribute('href')==='/studio-logo.svg'"));
         await CaptureBrowser(core, "login-desktop");
         await core.ExecuteScriptAsync("document.querySelector('#password').value='wrong password';document.querySelector('#login-form').requestSubmit()");
         await WaitBrowser(core, "document.querySelector('#login-error').textContent.length>0");
         Assert.Equal("true", await core.ExecuteScriptAsync("!document.querySelector('#login').hidden"));
         await core.ExecuteScriptAsync($"document.querySelector('#password').value={JsonSerializer.Serialize(password)};document.querySelector('#login-form').requestSubmit()");
         await WaitBrowser(core, settled + " && document.querySelectorAll('.card').length===6");
+        await WaitBrowser(core, "document.querySelector('#brand img[src=\"/studio-logo.svg\"]')?.naturalWidth > 0");
         await WaitBrowser(core, "Array.from(document.querySelectorAll('.card img')).every(i=>i.complete)");
         await WaitBrowser(core, "Array.from(document.querySelectorAll('.provider-logo')).every(i=>i.complete && i.naturalWidth>0)");
         Assert.Equal("true", await core.ExecuteScriptAsync("document.querySelector('.card[data-key=mountain] .provider-logo')?.alt==='Twitch' && document.querySelector('.card[data-key=music] .provider-logo')?.alt==='Kick' && !document.querySelector('#followed-channels .provider-logo') && [...document.querySelectorAll('.provider-label')].every(label=>label.textContent==='')"));
@@ -38,7 +41,7 @@ internal static partial class LocalWebTestCatalog
         Assert.Equal("6", await core.ExecuteScriptAsync("document.querySelectorAll('.followed-channel').length"));
         Assert.Contains("4 LIVE", await core.ExecuteScriptAsync("document.querySelector('#sidebar-live-count').textContent"));
         Assert.Equal("true", await core.ExecuteScriptAsync("document.querySelector('.topbar #search-form')!==null && document.querySelector('[data-nav-page=following]').getAttribute('aria-current')==='page'"));
-        Assert.Equal("true", await core.ExecuteScriptAsync("!document.querySelector('#open-stream') && !document.querySelector('#open-input') && !document.querySelector('.search-shortcut')"));
+        Assert.Equal("true", await core.ExecuteScriptAsync("!document.querySelector('#search-form select:not([hidden])')"));
         await CaptureBrowser(core, "following-desktop");
 
         // Local sorting keeps offline channels behind the live lineup, without provider requests.
@@ -91,6 +94,8 @@ internal static partial class LocalWebTestCatalog
         await WaitBrowser(core, "!document.querySelector('#empty-state').hidden");
         Assert.Contains("back catalog", await core.ExecuteScriptAsync("document.querySelector('#empty-state').textContent"));
         await core.ExecuteScriptAsync("document.querySelector('#query').value='northstar';document.querySelector('#search-form').requestSubmit()");
+        await WaitBrowser(core, "!!document.querySelector('.search-option')");
+        await core.ExecuteScriptAsync("document.querySelector('.search-option').click()");
         await WaitBrowser(core, settled + " && document.querySelectorAll('.card').length===2");
         Assert.Equal("true", await core.ExecuteScriptAsync("!!document.querySelector('.resume-bar progress')"));
         await CaptureBrowser(core, "videos-desktop");
@@ -200,7 +205,7 @@ internal static partial class LocalWebTestCatalog
                 "following" => new { items = live, offline = new[] { Stream("offline1", "Slowmornings", "", "Twitch", "Offline"), Stream("offline2", "Sundayclub", "", "Kick", "Offline") } },
                 "categories" => new { items = new[] { Category("game", "Adventure games", 234000), Category("music", "Music", 42000), Category("mountain", "Outdoors", 18000), Category("code", "Creative", 35000), Category("chat", "Just chatting", 480000) } },
                 "streams" => new { items = input.TryGetProperty("cursor", out var cursor) && cursor.GetString() == "next" ? new[] { live[3] } : live.Take(3).ToArray(), nextCursor = input.TryGetProperty("cursor", out var next) && next.GetString() == "next" ? "" : "next" },
-                "search" => new { items = Array.Empty<object>() },
+                "search" => new { items = input.GetProperty("query").GetString() == "northstar" ? live.Take(1).ToArray() : [] },
                 "recent" => new { items = live.Take(2).ToArray() },
                 "vods" => new { items = new[] { new { key = "vod1", title = "The long way home · a mountain adventure", channel = "Northstar", platform = "Twitch", state = "VOD", duration = 7200, resume = 1820, watched = false, thumbnailUrl = Address + "media/artwork/mountain" }, new { key = "vod2", title = "One more chapter", channel = "Northstar", platform = "Twitch", state = "VOD", duration = 3600, resume = 0, watched = true, thumbnailUrl = Address + "media/artwork/game" } } },
                 "downloads" => new { items = new[] { new { id = "download1", title = "Ready to watch", channel = "Northstar", platform = "Twitch", state = "Completed", format = "MP4", totalSegments = 100, completedSegments = 100, bytesDownloaded = 590000000, thumbnailUrl = Address + "media/artwork/mountain" }, new { id = "download2", title = "Saving your next adventure", channel = "Pixelquest", platform = "Twitch", state = "Downloading", format = "HLS", totalSegments = 100, completedSegments = DownloadCompletedSegments, bytesDownloaded = 281000000, thumbnailUrl = Address + "media/artwork/game" } } },

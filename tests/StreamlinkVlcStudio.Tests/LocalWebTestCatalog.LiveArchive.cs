@@ -109,6 +109,23 @@ internal static partial class LocalWebTestCatalog
         }
     }
 
+    private static async Task LiveArchivePinnedRenditionAsync()
+    {
+        var refreshed = false;
+        using var media = ArchiveMedia("test", new("https://cdn.example/master.m3u8"), uri => uri.AbsolutePath switch
+        {
+            "/master.m3u8" when !refreshed => "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=2000,RESOLUTION=1280x720\n720.m3u8\n",
+            "/master.m3u8" => "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=4000,RESOLUTION=1920x1080\n1080.m3u8\n",
+            "/720.m3u8" when refreshed => ArchiveFixture.Replace("#EXTINF:10,", "#EXTINF:12,", StringComparison.Ordinal),
+            "/720.m3u8" => ArchiveFixture,
+            _ => ArchiveFixture.Replace("#EXTINF:10,", "#EXTINF:20,", StringComparison.Ordinal)
+        });
+
+        Assert.Equal(30d, await media.ReadArchiveDurationAsync("720p", default, selectVariant: true));
+        refreshed = true;
+        Assert.Equal(36d, await media.ReadArchiveDurationAsync("720p", default));
+    }
+
     private static Task LiveArchiveFallbackAsync() => WithWorkspaceAsync(async fixture =>
     {
         var remote = new Uri("https://d1example.cloudfront.net/broadcast/chunked/index-dvr.m3u8");

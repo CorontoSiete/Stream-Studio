@@ -8,8 +8,12 @@ module.exports = async ({ evaluate, wait, capture, viewport }) => {
     await evaluate(`document.querySelector('[data-page=${page}]').click()`);
     await wait(`document.querySelector('#studio').dataset.page==='${page}' && document.querySelector('#cards').getAttribute('aria-busy')==='false'`);
     if (page === 'vods') {
-      await evaluate(`document.querySelector('#platform').value='${provider}';document.querySelector('#query').value='Northstar';document.querySelector('#search-form').requestSubmit()`);
+      const channel = provider === 'kick' ? 'Afterhours' : 'Northstar';
+      await evaluate(`document.querySelector('#query').value='${channel}';document.querySelector('#search-form').requestSubmit()`);
+      await wait(`!!document.querySelector('.search-option[data-provider=${provider}]')`);
+      await evaluate(`document.querySelector('.search-option[data-provider=${provider}]').click()`);
       await wait("document.querySelectorAll('#cards .card').length===4 && document.querySelector('#cards').getAttribute('aria-busy')==='false'");
+      assert.ok(await evaluate(`[...document.querySelectorAll('#cards .card')].every(card=>card.dataset.provider==='${provider}')`));
       assert.deepEqual(await order(), ['new', 'broken', 'old', 'unknown']);
       await evaluate("document.querySelector('#more').click()");
     }

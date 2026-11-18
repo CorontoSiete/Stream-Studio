@@ -48,7 +48,7 @@ function Invoke-LifecycleTest([string]$Name, [scriptblock]$Test) {
 
 New-Item -ItemType Directory -Path $testRoot | Out-Null
 try {
-    Invoke-LifecycleTest 'upgrade settings rewrite preserves per-stream web chat layouts' {
+    Invoke-LifecycleTest 'upgrade settings rewrite preserves offline channel pins and web chat layouts' {
         foreach ($definition in $installer.FindAll({
                     param($node)
                     $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
@@ -65,6 +65,7 @@ try {
             $settingsPath = Join-Path $settingsDirectory 'settings.json'
             $before = [pscustomobject]@{
                 DefaultQuality = '720p'
+                FollowedChannels = [pscustomobject]@{ PinnedOfflineChannelKeys = @('Twitch:streamer', 'Kick:streamer') }
                 WebChatOverlayLayouts = [pscustomobject]@{
                     'Twitch:streamer' = [pscustomobject]@{ Width = 420; Height = 260; X = 0.23; Y = 0.87 }
                     'Kick:streamer' = [pscustomobject]@{ Width = $null; Height = $null; X = 0; Y = 1 }
@@ -74,6 +75,8 @@ try {
             $before | ConvertTo-Json -Depth 50 | Set-Content -LiteralPath $settingsPath -Encoding UTF8
             Update-AppSettings -StreamlinkPath 'C:\New Install\streamlink.exe' -VlcDirectory 'C:\New Install\vlc'
             $after = Get-Content -LiteralPath $settingsPath -Raw | ConvertFrom-Json
+            Assert-Lifecycle (($after.FollowedChannels.PinnedOfflineChannelKeys -join ',') -ceq
+                'Twitch:streamer,Kick:streamer') 'Upgrade changed or removed saved offline channel pins.'
             Assert-Lifecycle (($after.WebChatOverlayLayouts | ConvertTo-Json -Depth 50 -Compress) -ceq
                 ($before.WebChatOverlayLayouts | ConvertTo-Json -Depth 50 -Compress)) 'Upgrade changed or removed a saved chat layout.'
             Assert-Lifecycle ($after.DefaultQuality -ceq '720p') 'Upgrade changed unrelated preferences.'

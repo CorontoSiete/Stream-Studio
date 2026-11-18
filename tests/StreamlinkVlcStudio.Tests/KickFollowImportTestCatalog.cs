@@ -1,3 +1,4 @@
+using System.Windows.Controls;
 using System.Windows.Interop;
 using Microsoft.Web.WebView2.Core;
 using StreamlinkVlcStudio.App.Wpf.Kick;
@@ -16,6 +17,7 @@ internal static class KickFollowImportTestCatalog
         ("Kick follow import: canceled failed and unsaved imports keep previous follows", FailedCommandAsync),
         ("Kick follow import: shutdown cancels detection and rejects late results", ShutdownAsync),
         ("Kick follow import: browser authenticates paginates and handles expired sessions", BrowserAsync),
+        ("Kick follow import: detects with a saved browser session and opens sign-in when needed", SavedSessionAsync),
         ("Kick follow import: browser origin rules reject lookalikes and external navigation", OriginsAsync)
     ];
 
@@ -158,6 +160,12 @@ internal static class KickFollowImportTestCatalog
         Assert.Equal("manual\nunsaved-extra", model.KickFollowedChannelsText);
         Assert.Equal(1, followed.CallCount);
         Assert.Contains("2 Kick follows imported", model.KickImportedFollowsSummary);
+        Assert.Equal(false, importer.OpenSignInWindow);
+        importer.Result = null;
+        await model.ManageKickSignInCommand.ExecuteAsync();
+        Assert.Equal(true, importer.OpenSignInWindow);
+        Assert.Equal(1, save.SaveCount);
+        Assert.SequenceEqual(new[] { "new", "offline" }, settings.FollowedChannels.KickImportedChannelSlugs);
         importer.Result = [];
         await model.ImportKickFollowsCommand.ExecuteAsync();
         Assert.Equal(0, settings.FollowedChannels.KickImportedChannelSlugs.Count);
@@ -194,6 +202,7 @@ internal static class KickFollowImportTestCatalog
         await using var model = Model(settings, save, importer);
         var command = model.ImportKickFollowsCommand.ExecuteAsync();
         Assert.Equal(false, model.ClearImportedKickFollowsCommand.CanExecute(null));
+        Assert.Equal(false, model.ManageKickSignInCommand.CanExecute(null));
         await model.DisposeAsync();
         Assert.True(importer.Token.IsCancellationRequested);
         pending.TrySetResult(["late"]);
@@ -269,6 +278,159 @@ internal static class KickFollowImportTestCatalog
         return Task.CompletedTask;
     }
 
+    private static Task SavedSessionAsync() => TestSta.RunOffscreenAsync(async () =>
+    {
+        const string kickHome = "https://kick.com/";
+        var timeout = TimeSpan.FromSeconds(10);
+        var directory = Path.Combine(Path.GetTempPath(), $"kick-saved-follows-{Guid.NewGuid():N}");
+        var owner = new Window();
+        _ = new WindowInteropHelper(owner).EnsureHandle();
+        var homeLoaded = NewPageSignal();
+        var requests = new List<string>();
+        var startupPaths = new List<string>();
+        var secondPageStatus = 200;
+        var backgroundPageStatus = 200;
+        var firstBrowser = true;
+        var startupWasInterrupted = false;
+        CoreWebView2Deferral? pendingStartupImage = null;
+        var expectedToken = "saved-fixture";
+        var importer = new KickFollowedChannelsImporter(owner, directory, core =>
+        {
+            var inSignInWindow = owner.OwnedWindows.Count > 0;
+            var redirectStartup = firstBrowser;
+            if (redirectStartup)
+            {
+                SetCookie(core, expectedToken);
+                firstBrowser = false;
+                core.NavigationStarting += (_, args) => startupPaths.Add(new Uri(args.Uri).AbsolutePath);
+            }
+            core.NavigationCompleted += (_, args) =>
+            {
+                if (redirectStartup && !args.IsSuccess && args.HttpStatusCode == 200)
+                    startupWasInterrupted = true;
+                pendingStartupImage?.Complete();
+                pendingStartupImage = null;
+                if (inSignInWindow && args.IsSuccess && core.Source == kickHome) homeLoaded.TrySetResult(core);
+            };
+            core.WebResourceRequested += (_, args) =>
+            {
+                // Route all requests to fixtures so only the app's test profile sees these cookies.
+                var uri = new Uri(args.Request.Uri);
+                var isApi = uri.AbsolutePath == "/api/v2/channels/followed";
+                var firstPage = uri.Query.Length == 0;
+                if (isApi)
+                {
+                    requests.Add(uri.Query);
+                    Assert.Equal("Bearer " + expectedToken, args.Request.Headers.GetHeader("Authorization"));
+                }
+                var isStartupPage = args.ResourceContext == CoreWebView2WebResourceContext.Document &&
+                    uri.AbsolutePath is "/" or "/following";
+                var code = isApi ? (firstPage ? 200 : secondPageStatus) :
+                    !inSignInWindow && isStartupPage ? backgroundPageStatus : 200;
+                var body = isApi ? (firstPage ? Page([expectedToken], "\"next\"") : Page(["offline"])) :
+                    redirectStartup && isStartupPage ? "<!doctype html><title>Kick fixture</title><img src='/startup-pending.png'>" :
+                    "<!doctype html><html><body>Kick fixture</body></html>";
+                args.Response ??= core.Environment.CreateWebResourceResponse(
+                    new MemoryStream(Encoding.UTF8.GetBytes(body)), code, "Fixture",
+                    isApi ? "Content-Type: application/json" : "Content-Type: text/html");
+                if (redirectStartup && uri.AbsolutePath == "/startup-pending.png")
+                {
+                    // Keep the first document loading while WebView2 starts the replacement navigation.
+                    pendingStartupImage = args.GetDeferral();
+                    _ = owner.Dispatcher.BeginInvoke(() => core.Navigate(kickHome + "fixture-landing"));
+                }
+            };
+        });
+
+        try
+        {
+            Assert.SequenceEqual(new[] { "offline", "saved-fixture" }, (await importer.ImportAsync().WaitAsync(timeout))!);
+            Assert.SequenceEqual(new[] { "/", "/fixture-landing" }, startupPaths);
+            Assert.True(startupWasInterrupted, "Expected WebView2 to report the superseded HTTP 200 navigation as aborted.");
+            Assert.SequenceEqual(new[] { "", "?cursor=next" }, requests);
+            Assert.Equal(false, homeLoaded.Task.IsCompleted);
+            Assert.Equal(0, owner.OwnedWindows.Count);
+
+            requests.Clear();
+            secondPageStatus = 429;
+            var error = await Assert.ThrowsAsync<InvalidOperationException>(() => importer.ImportAsync().WaitAsync(timeout));
+            Assert.Contains("limiting requests", error.Message);
+            Assert.SequenceEqual(new[] { "", "?cursor=next" }, requests);
+            Assert.Equal(false, homeLoaded.Task.IsCompleted);
+
+            requests.Clear();
+            secondPageStatus = 401;
+            var expired = importer.ImportAsync();
+            var interactive = await homeLoaded.Task.WaitAsync(timeout);
+            Assert.Equal(false, expired.IsCompleted);
+            Assert.SequenceEqual(new[] { "", "?cursor=next" }, requests);
+            expectedToken = "renewed-fixture";
+            SetCookie(interactive, expectedToken);
+            secondPageStatus = 200;
+            ClickSignInButton("Import follows");
+            Assert.SequenceEqual(new[] { "offline", "renewed-fixture" }, (await expired.WaitAsync(timeout))!);
+            Assert.SequenceEqual(new[] { "", "?cursor=next", "", "?cursor=next" }, requests);
+
+            requests.Clear();
+            homeLoaded = NewPageSignal();
+            backgroundPageStatus = 403;
+            var blocked = importer.ImportAsync();
+            await homeLoaded.Task.WaitAsync(timeout);
+            ClickSignInButton("Close");
+            Assert.Equal<IReadOnlyList<string>?>(null, await blocked.WaitAsync(timeout));
+            Assert.Equal(0, requests.Count);
+
+            homeLoaded = NewPageSignal();
+            backgroundPageStatus = 503;
+            error = await Assert.ThrowsAsync<InvalidOperationException>(() => importer.ImportAsync().WaitAsync(timeout));
+            Assert.Contains("HTTP 503", error.Message);
+            Assert.Equal(false, homeLoaded.Task.IsCompleted);
+            Assert.Equal(0, requests.Count);
+
+            homeLoaded = NewPageSignal();
+            backgroundPageStatus = 200;
+            var manage = importer.ImportAsync(openSignInWindow: true);
+            await homeLoaded.Task.WaitAsync(timeout);
+            homeLoaded = NewPageSignal();
+            ClickSignInButton("Clear Kick sign-in");
+            await homeLoaded.Task.WaitAsync(timeout);
+            ClickSignInButton("Close");
+            Assert.Equal<IReadOnlyList<string>?>(null, await manage.WaitAsync(timeout));
+            Assert.Equal(0, requests.Count);
+
+            homeLoaded = NewPageSignal();
+            var guest = importer.ImportAsync();
+            await homeLoaded.Task.WaitAsync(timeout);
+            ClickSignInButton("Close");
+            Assert.Equal<IReadOnlyList<string>?>(null, await guest.WaitAsync(timeout));
+            Assert.Equal(0, requests.Count);
+        }
+        finally
+        {
+            pendingStartupImage?.Complete();
+            owner.Close();
+        }
+
+        void ClickSignInButton(string label)
+        {
+            var layout = (DockPanel)owner.OwnedWindows.Cast<Window>().Single().Content;
+            var buttons = layout.Children.OfType<WrapPanel>().Single();
+            var button = buttons.Children.OfType<Button>().Single(control => Equals(label, control.Content));
+            Assert.True(button.IsEnabled, $"Expected {label} to be available.");
+            button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        }
+
+        static TaskCompletionSource<CoreWebView2> NewPageSignal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        static void SetCookie(CoreWebView2 core, string token)
+        {
+            var cookie = core.CookieManager.CreateCookie("session_token", token, "kick.com", "/");
+            cookie.IsSecure = true;
+            cookie.Expires = DateTime.UtcNow.AddHours(1);
+            core.CookieManager.AddOrUpdateCookie(cookie);
+        }
+    });
+
     private static AppSettings Settings() => new()
     {
         FollowedChannels = new()
@@ -305,9 +467,11 @@ internal static class KickFollowImportTestCatalog
         internal Exception? Error { get; init; }
         internal Task<IReadOnlyList<string>?>? Pending { get; init; }
         internal CancellationToken Token { get; private set; }
-        public Task<IReadOnlyList<string>?> ImportAsync(CancellationToken cancellationToken = default)
+        internal bool OpenSignInWindow { get; private set; }
+        public Task<IReadOnlyList<string>?> ImportAsync(CancellationToken cancellationToken = default, bool openSignInWindow = false)
         {
             Token = cancellationToken;
+            OpenSignInWindow = openSignInWindow;
             if (Error is not null) throw Error;
             return Pending ?? Task.FromResult(Result);
         }

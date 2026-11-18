@@ -9,7 +9,8 @@ internal static partial class ApplicationTestCatalog
         fixture.Handler.Put(new Uri(target.ProfileImageUrl).AbsolutePath, VodDownloadTestCatalog.CreateProfileImageBytes());
         var dispatcher = Dispatcher.CurrentDispatcher;
         Guid downloadId;
-        await using (var original = CreateDownloadCardsMain(fixture.Service, [target], action => dispatcher.BeginInvoke(action)))
+        await using (var original = CreateDownloadCardsMain(fixture.Service, [target],
+            action => dispatcher.BeginInvoke(action), VodDownloadFormat.Hls))
         {
             original.Initialize();
             if (platform == PlatformKind.Kick) original.SelectKickVodPlatformCommand.Execute(null);
@@ -25,7 +26,8 @@ internal static partial class ApplicationTestCatalog
         fixture.Handler.NetworkAvailable = false;
         var requests = fixture.Handler.RequestCount;
         await fixture.RestartAsync();
-        await using var model = CreateDownloadCardsMain(fixture.Service, [], action => dispatcher.BeginInvoke(action));
+        await using var model = CreateDownloadCardsMain(fixture.Service, [],
+            action => dispatcher.BeginInvoke(action), VodDownloadFormat.Hls);
         model.Initialize();
         await TestWait.UntilAsync(() => model.VodDownloads.Count == 1, TimeSpan.FromSeconds(3));
         var window = new MainWindow { DataContext = model };

@@ -134,7 +134,7 @@ internal static partial class LocalWebTestCatalog
         window.Networks.SelectedIndex = 0;
         window.Users.ItemsSource = new[] { new LocalWebUserSummary("fixture", "webtester") };
         window.Users.SelectedIndex = 0;
-        window.Status.Text = "Stopped. The browser server is off by default and does not start automatically.";
+        window.Status.Text = "Stopped.";
         window.Stop.IsEnabled = window.Rotate.IsEnabled = window.Export.IsEnabled = false;
         try
         {

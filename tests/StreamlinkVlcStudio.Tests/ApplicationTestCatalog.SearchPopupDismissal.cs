@@ -29,8 +29,9 @@ internal static partial class ApplicationTestCatalog
                 PumpResponsiveLayout(window);
                 Assert.True(popup.IsOpen && main.IsStreamSearchPanelVisible);
                 var popupRoot = (FrameworkElement)popup.Child;
+                var result = main.StreamSearchResults.Single();
                 var button = FindVisualDescendants<Button>(popupRoot)
-                    .Single(item => ReferenceEquals(item.Command, main.StreamSearchResults.Single().OpenCommand));
+                    .Single(item => ReferenceEquals(item.Command, result.OpenCommand));
                 var menu = button.ContextMenu!;
                 Assert.NotNull(menu);
                 var events = new List<string>();
@@ -41,7 +42,7 @@ internal static partial class ApplicationTestCatalog
                 button.ContextMenuOpening += (_, _) => events.Add("context menu opening");
                 menu.Opened += (_, _) => events.Add("context menu opened");
                 menu.Closed += (_, _) => events.Add("context menu closed");
-                var title = FindVisualDescendants<EmojiTextBlock>(button).Single();
+                var title = FindVisualDescendants<EmojiTextBlock>(button).Single(block => block.SourceText == result.Title);
                 var run = title.Inlines.OfType<Run>().First();
                 var character = run.ContentStart.GetCharacterRect(LogicalDirection.Forward);
                 var next = run.ContentStart.GetPositionAtOffset(1)!.GetCharacterRect(LogicalDirection.Forward);
@@ -61,7 +62,7 @@ internal static partial class ApplicationTestCatalog
                     $"button size={button.ActualWidth:0.##}x{button.ActualHeight:0.##}");
 
                 Assert.True(ReferenceEquals(run, popupRoot.InputHitTest(popupRoot.PointFromScreen(screenPoint))),
-                    "The physical search click must hit the streamer's actual text Run.");
+                    "The physical search click must hit the broadcast title's text Run.");
                 object? originalSource = null;
                 window.AddHandler(Mouse.PreviewMouseDownEvent,
                     new MouseButtonEventHandler((_, args) => originalSource = args.OriginalSource), true);
@@ -97,7 +98,7 @@ internal static partial class ApplicationTestCatalog
                 originalSource = null;
                 NativeWindowTest.SendLeftClick(x, y);
                 await TestWait.UntilAsync(() => main.Tabs.Count == 1, TimeSpan.FromSeconds(2),
-                    "Clicking the streamer's text must open playback");
+                    "Clicking the broadcast title must open playback");
                 Assert.True(ReferenceEquals(run, originalSource));
                 Assert.Equal("searchfixture", main.SelectedTab!.Target.Channel);
                 Assert.Equal(false, main.IsHomeSelected);

@@ -329,6 +329,8 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
 
     public AsyncRelayCommand ImportKickFollowsCommand { get => followed.ImportKickFollowsCommand; }
 
+    public AsyncRelayCommand ManageKickSignInCommand { get => followed.ManageKickSignInCommand; }
+
     public AsyncRelayCommand ClearImportedKickFollowsCommand { get => followed.ClearImportedKickFollowsCommand; }
 
     public AsyncRelayCommand SearchTwitchVodsCommand { get => vodLibrary.SearchTwitchVodsCommand; }
@@ -1384,6 +1386,9 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     }
 
     private Task RefreshFollowedChannelsAsync() => followed.RefreshFollowedChannelsAsync();
+
+    internal Task<FollowedLiveStreamsResult?> GetWebFollowingAsync(bool refresh, CancellationToken token) =>
+        followed.GetWebFollowingAsync(refresh, token);
 
     public void OpenChannelFromNotification(PlatformKind platform, string channel)
     {
@@ -3545,7 +3550,9 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
 
         if (e.PropertyName == nameof(AppSettings.Chat))
         {
+            var twitchTokenChanged = Settings.Chat.TwitchOAuthToken != observedChatSettings?.TwitchOAuthToken;
             ObserveChatSettings(Settings.Chat, applyImmediately: true);
+            if (twitchTokenChanged) RefreshTwitchChannelFollowStatuses();
         }
 
         if (e.PropertyName == nameof(AppSettings.DefaultQuality))
@@ -3634,6 +3641,10 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         if (IsAccountSignInSetting(e.PropertyName))
         {
             RefreshAccountSignInProperties();
+        }
+        if (e.PropertyName == nameof(ChatSettings.TwitchOAuthToken))
+        {
+            RefreshTwitchChannelFollowStatuses();
         }
 
         if (e.PropertyName == nameof(ChatSettings.Layout) &&

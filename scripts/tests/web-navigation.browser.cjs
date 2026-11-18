@@ -13,14 +13,16 @@ const loadingMode = process.argv.includes('--loading-only');
 const discoveryLanguageMode = process.argv.includes('--discovery-language-only');
 const deleteMode = process.argv.includes('--downloads-delete-only');
 const vodLibraryMode = process.argv.includes('--vod-library-only');
-const hotkeyMode = process.argv.includes('--hotkeys-only');
+const desktopHotkeyMode = process.argv.includes('--desktop-hotkeys-only');
+const hotkeyMode = process.argv.includes('--hotkeys-only') || desktopHotkeyMode;
 const settingsMode = process.argv.includes('--settings-only');
 const multistreamMode = process.argv.includes('--multistream-only');
 const volumeWheelMode = process.argv.includes('--volume-wheel-only');
 const sidebarMode = process.argv.includes('--sidebar-only');
 const mobileControlsMode = process.argv.includes('--mobile-controls-only');
 const seekPreviewMode = process.argv.includes('--seek-preview-only');
-const output = path.join(root, seekPreviewMode ? '.artifacts/web-seek-preview' : discoveryLanguageMode ? '.artifacts/web-discovery-language' : vodLibraryMode ? '.artifacts/web-vod-library' : mobileControlsMode ? '.artifacts/web-mobile-controls' : loginMode ? '.artifacts/web-login' : sidebarMode ? '.artifacts/web-sidebar' : multistreamMode ? '.artifacts/web-multistream' : hotkeyMode ? '.artifacts/web-hotkeys' : settingsMode ? '.artifacts/web-settings' : volumeWheelMode ? '.artifacts/web-volume-wheel' : deleteMode ? '.artifacts/web-download-delete' : searchMode ? '.artifacts/web-search' : '.artifacts/player-navigation');
+const controlsIdleMode = process.argv.includes('--controls-idle-only');
+const output = path.join(root, controlsIdleMode ? '.artifacts/web-controls-idle' : seekPreviewMode ? '.artifacts/web-seek-preview' : discoveryLanguageMode ? '.artifacts/web-discovery-language' : vodLibraryMode ? '.artifacts/web-vod-library' : mobileControlsMode ? '.artifacts/web-mobile-controls' : loginMode ? '.artifacts/web-login' : sidebarMode ? '.artifacts/web-sidebar' : multistreamMode ? '.artifacts/web-multistream' : hotkeyMode ? '.artifacts/web-hotkeys' : settingsMode ? '.artifacts/web-settings' : volumeWheelMode ? '.artifacts/web-volume-wheel' : deleteMode ? '.artifacts/web-download-delete' : searchMode ? '.artifacts/web-search' : '.artifacts/player-navigation');
 const assets = path.join(root, 'src/StreamlinkVlcStudio.Infrastructure/LocalWeb/Assets');
 const mediaFixture = path.join(root, 'tests/StreamlinkVlcStudio.Tests/Fixtures', multistreamMode ? 'hover-preview-fmp4' : 'replay-position-event');
 const browserPath = [process.env.SVS_WEB_TEST_BROWSER, 'C:/Program Files/Google/Chrome/Application/chrome.exe', 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe', 'C:/Program Files/BraveSoftware/Brave-Browser/Application/brave.exe'].find(file => file && fs.existsSync(file));
@@ -34,7 +36,9 @@ const live = [
   ['code', 'Buildspace', 'Making something from nothing. Live creative session.', 'Twitch', 1580, '']
 ].map(([key, channel, title, platform, viewers, categoryName]) => ({ key, channel, displayName: channel, title, platform, viewers, categoryName, state: 'Live', thumbnailUrl: 'https://artwork.fixture/' + key,
   profileImageUrl: 'https://profiles.fixture/' + key + '.png' }));
-const offline = ['Slowmornings', 'Sundayclub'].map((channel, i) => ({ key: 'offline' + i, channel, displayName: channel, title: '', platform: i ? 'Kick' : 'Twitch', state: 'Offline', thumbnailUrl: 'https://artwork.fixture/offline', profileImageUrl: 'https://profiles.fixture/offline.png' }));
+const offline = ['Slowmornings', 'Sundayclub'].map((channel, i) => ({ key: 'offline' + i, channel, displayName: channel, title: '',
+  categoryName: i ? '' : 'Just Chatting', platform: i ? 'Kick' : 'Twitch', state: 'Offline',
+  thumbnailUrl: 'https://artwork.fixture/offline', profileImageUrl: 'https://profiles.fixture/offline.png' }));
 // Deliberately retain provider relevance order, including offline and unknown counts.
 const rankedSearch = [
   ['Offline first', 'Offline', 2147483647],
@@ -65,6 +69,10 @@ const loginFixture = { requests: 0, holdNext: false, held: [] };
 const savedSettings = { quality: 'best', lowLatency: true, layout: 'docked', size: 16,
   opacity: 90, keepInactive: false, pauseInactiveVod: true, hotkeys: {}, volumes: {}, chatLayouts: {}, categoryLanguages: {} };
 const settingsFixture = { failSave: false, saves: 0, holdNext: false, held: [] };
+if (hotkeyMode) settingsFixture.desktopHotkeys = {
+  bindings: { back: 'Escape', nextTab: 'OemCloseBrackets', previousTab: 'OemOpenBrackets', grid: 'G', dismiss: 'F8' },
+  skipBackwardSeconds: 2, skipForwardSeconds: 4
+};
 let lastOpen;
 let openCount = 0;
 let profileOverride = null;
@@ -74,7 +82,7 @@ const startedWrites = [];
 const playerMetadata = new Map();
 const followStates = new Map(live.map(item => [item.platform + ':' + item.channel.toLowerCase(), true]));
 const followRequests = [], followWrites = [];
-const searchFixture = { requests: [], held: [], hold: new Set(), fail: false, canceled: 0 };
+const searchFixture = { requests: [], vodRequests: [], held: [], hold: new Set(), fail: false, canceled: 0 };
 const loadingFixture = { requests: [], hold: new Set(), held: [], canceled: 0, categories: null };
 const discoveryRequests = [];
 let followPending = false, followUnknown = false, followFailure = false, followConfirmed = true;
@@ -89,6 +97,8 @@ const vodLibraryItems = [
   thumbnailUrl: art ? 'https://artwork.fixture/' + art : '', profileImageUrl: live[0].profileImageUrl, duration: 7200 }));
 const server = http.createServer(async (request, response) => {
   const url = new URL(request.url, 'http://localhost');
+  const squareMedia = multistreamMode && url.searchParams.has('square');
+  const streamFixture = squareMedia ? path.join(mediaFixture, '../replay-position-event') : mediaFixture;
   if (url.pathname.startsWith('/artwork/')) { response.setHeader('Content-Type', 'image/svg+xml'); response.end(artwork(url.pathname.split('/').pop())); return; }
   if (seekPreviewMode && url.pathname === '/media/fixture/colors.mp4') {
     const parts = ['init.mp4', ...Array.from({ length: 6 }, (_, index) => `segment${index}.m4s`)];
@@ -105,10 +115,10 @@ const server = http.createServer(async (request, response) => {
   }
   if (url.pathname === '/media/fixture/root' || url.pathname === '/media/fixture/vod' || seekPreviewMode && url.pathname === '/media/fixture/history') {
     response.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
-    const playlist = fs.readFileSync(path.join(mediaFixture, 'index.m3u8'), 'utf8').replace(/^(index\d+\.ts)\r?$/gm, '/media/fixture/$1');
+    const playlist = fs.readFileSync(path.join(streamFixture, 'index.m3u8'), 'utf8').replace(/^(index\d+\.ts)\r?$/gm, '/media/fixture/$1' + (squareMedia ? '?square' : ''));
     response.end(playlist + (url.pathname.endsWith('/vod') || url.pathname.endsWith('/history') ? '\n#EXT-X-ENDLIST\n' : '')); return;
   }
-  if (/^\/media\/fixture\/index[0-5]\.ts$/.test(url.pathname)) { response.setHeader('Content-Type', 'video/mp2t'); response.end(fs.readFileSync(path.join(mediaFixture, url.pathname.split('/').pop()))); return; }
+  if (/^\/media\/fixture\/index[0-5]\.ts$/.test(url.pathname)) { response.setHeader('Content-Type', 'video/mp2t'); response.end(fs.readFileSync(path.join(streamFixture, url.pathname.split('/').pop()))); return; }
   if (multistreamMode && /^\/media\/fixture\/(init\.mp4|segment[0-5]\.m4s)$/.test(url.pathname)) { response.setHeader('Content-Type', 'video/mp4'); response.end(fs.readFileSync(path.join(mediaFixture, url.pathname.split('/').pop()))); return; }
   if (url.pathname.startsWith('/api/')) {
     let raw = ''; for await (const chunk of request) raw += chunk;
@@ -137,7 +147,8 @@ const server = http.createServer(async (request, response) => {
     }
     else if (action === 'logout') signedIn = false;
     else if (action === 'settings') result = { defaultQuality: savedSettings.quality, lowLatency: savedSettings.lowLatency,
-      preferences: savedSettings, qualities: ['best', '720p'], browseLanguages: [{ code: '', name: 'All languages' }, { code: 'en', name: 'English' }, { code: 'fr', name: 'French' }], accounts: { twitch: true, kick: true } };
+      preferences: savedSettings, desktopHotkeys: settingsFixture.desktopHotkeys, qualities: ['best', '720p'], browseLanguages: [{ code: '', name: 'All languages' }, { code: 'en', name: 'English' }, { code: 'fr', name: 'French' }], accounts: { twitch: true, kick: true } };
+    else if (action === 'hotkeys') result = settingsFixture.desktopHotkeys;
     else if (action === 'settings/save') {
       settingsFixture.saves++;
       if (settingsFixture.holdNext) {
@@ -152,10 +163,11 @@ const server = http.createServer(async (request, response) => {
       lastOpen = input;
       const isVod = !!input.input?.includes('/videos/');
       const isMp4 = seekPreviewMode && input.input?.endsWith('/videos/mp4');
-      const item = live.find(item => item.key === input.key || item.channel.toLowerCase() === input.input?.toLowerCase()) ||
+      const square = multistreamMode && /^square/i.test(input.input || '');
+      const item = (searchMode ? [...live, ...rankedSearch] : live).find(item => item.key === input.key || item.channel.toLowerCase() === input.input?.toLowerCase()) ||
         (isVod ? live[0] : { key: 'guest', channel: input.input || 'Guest', platform: input.platform === 'kick' || input.input?.startsWith('https://kick.com/') ? 'Kick' : 'Twitch', title: 'Guest stream' });
       result = { id: 'visual-player-' + ++openCount, key: isVod ? input.input : item.key, title: isVod ? 'Mountain adventure - full broadcast' : item.title,
-        channel: item.channel, platform: item.platform, profileImageUrl: item.profileImageUrl, url: '/media/fixture/' + (isMp4 ? 'colors.mp4' : isVod ? 'vod' : 'root'), isVod, isMp4, resume: 0, duration: 0,
+        channel: item.channel, platform: item.platform, profileImageUrl: item.profileImageUrl, url: '/media/fixture/' + (isMp4 ? 'colors.mp4' : isVod ? 'vod' : square ? 'root?square' : 'root'), isVod, isMp4, resume: 0, duration: 0,
         quality: input.quality ?? savedSettings.quality, chatLayout: savedSettings.chatLayouts[item.platform + ':' + item.channel.toLowerCase()] ?? null };
       playerMetadata.set(result.id, result);
     }
@@ -222,13 +234,15 @@ const server = http.createServer(async (request, response) => {
       response.once('close', () => { if (!response.writableEnded) searchFixture.canceled++; });
       const items = input.query === 'ranked' ? rankedSearch
         : input.query === 'many' ? Array.from({ length: 30 }, (_, i) => ({ ...live[0], key: 'many-' + i, displayName: 'Channel ' + (i + 1) }))
-        : input.query === 'hostile' ? [{ ...live[0], displayName: '<img src=x onerror=window.injected=true>', title: '<script>window.injected=true</script>', profileImageUrl: 'javascript:alert(1)' }]
+        : input.query === 'hostile' ? [{ ...live[0], displayName: '<img src=x onerror=window.injected=true>',
+          title: '<script>window.injected=true</script>', categoryName: '<svg onload=window.injected=true>Music</svg>',
+          profileImageUrl: 'javascript:alert(1)' }]
         : ['all', 'slow', 'late'].includes(input.query) ? [...live, ...offline]
         : [...live, ...offline].filter(item => item.channel.toLowerCase().includes(input.query.toLowerCase()));
       const send = () => {
         if (response.destroyed) return;
         response.statusCode = searchFixture.fail ? 502 : 200;
-        response.end(JSON.stringify(searchFixture.fail ? { error: 'Provider temporarily unavailable.' } : { items: items.filter(item => item.platform.toLowerCase() === input.platform) }));
+        response.end(JSON.stringify(searchFixture.fail ? { error: 'Provider temporarily unavailable.' } : { items }));
       };
       if (searchFixture.hold.has(input.query)) searchFixture.held.push({ query: input.query, send }); else send();
       return;
@@ -236,7 +250,10 @@ const server = http.createServer(async (request, response) => {
     else if (action === 'search') result = { items: live.filter(item => item.channel.toLowerCase().includes(input.query.toLowerCase())) };
     else if (action === 'vods' && vodLibraryMode) result = { items: (input.cursor ? [vodLibraryItems[4], vodLibraryItems[2]] : vodLibraryItems.slice(0, 4)).map(item => ({ ...item, state: 'VOD', platform: input.platform === 'kick' ? 'Kick' : 'Twitch' })), nextCursor: input.cursor ? '' : 'page2' };
     else if (action === 'downloads' && vodLibraryMode) result = { items: vodLibraryItems.map(item => ({ ...item, state: 'Completed', format: 'MP4', totalSegments: 10, completedSegments: 10 })) };
-    else if (action === 'vods') result = { items: [{ key: 'vod1', title: 'The long way home · a mountain adventure', channel: 'Northstar', platform: 'Twitch', state: 'VOD', duration: 7200, resume: 1820, thumbnailUrl: 'https://artwork.fixture/mountain', profileImageUrl: live[0].profileImageUrl }] };
+    else if (action === 'vods') {
+      if (searchMode) searchFixture.vodRequests.push(input);
+      result = { items: [{ key: 'vod1', title: 'The long way home · a mountain adventure', channel: input.channel, platform: input.platform === 'kick' ? 'Kick' : 'Twitch', state: 'VOD', duration: 7200, resume: 1820, thumbnailUrl: 'https://artwork.fixture/mountain', profileImageUrl: live[0].profileImageUrl }] };
+    }
     else if (action === 'downloads' && deleteMode) result = { items: deleteFixture.items };
     else if (action === 'downloads/remove' && deleteMode) {
       deleteFixture.requests.push(input);
@@ -247,9 +264,10 @@ const server = http.createServer(async (request, response) => {
     response.end(JSON.stringify(result)); return;
   }
   const name = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
-  if (!['index.html', 'app.css', 'app.js', 'twitch-logo.svg', 'kick-logo.svg', 'hls.min.js'].includes(name)) { response.statusCode = 404; response.end(); return; }
+  if (!['index.html', 'app.css', 'app.js', 'studio-logo.svg', 'twitch-logo.svg', 'kick-logo.svg', 'hls.min.js'].includes(name)) { response.statusCode = 404; response.end(); return; }
   response.setHeader('Content-Type', name.endsWith('.css') ? 'text/css' : name.endsWith('.js') ? 'text/javascript' : name.endsWith('.svg') ? 'image/svg+xml' : 'text/html');
-  response.end(fs.readFileSync(path.join(assets, name)));
+  const assetPath = name === 'studio-logo.svg' ? path.join(root, 'src/StreamlinkVlcStudio.App.Wpf/Assets/Studio.svg') : path.join(assets, name);
+  response.end(fs.readFileSync(assetPath));
 });
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function main() {
@@ -303,6 +321,8 @@ async function main() {
     const capture = async name => { await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))'); await sleep(180); const shot = await cdp('Page.captureScreenshot', { format: 'png' }); fs.writeFileSync(path.join(output, name + '.png'), Buffer.from(shot.data, 'base64')); };
     const viewport = async width => cdp('Emulation.setDeviceMetricsOverride', { width, height: width < 651 ? 844 : 1000, deviceScaleFactor: 1, mobile: false });
     await cdp('Page.enable');
+    if (desktopHotkeyMode)
+      await cdp('Browser.setPermission', { permission: { name: 'fullscreen', allowWithoutGesture: true }, setting: 'granted', origin: address });
     await cdp('Page.addScriptToEvaluateOnNewDocument', { source: "window.visualErrors=[];window.addEventListener('error',e=>visualErrors.push(e.message));" });
     await viewport(1440);
     await cdp('Page.navigate', { url: address });
@@ -315,6 +335,10 @@ async function main() {
     await evaluate("document.querySelector('#username').value='webtester';document.querySelector('#password').value='Test web password 123!';document.querySelector('#login-form').requestSubmit()");
     const settled = "document.querySelector('#cards').getAttribute('aria-busy')==='false'";
     await wait("!document.querySelector('#studio').hidden && document.querySelectorAll('.card').length===6");
+    if (controlsIdleMode) {
+      await require('./helpers/web-controls-idle-browser.cjs')({ cdp, evaluate, wait });
+      return;
+    }
     if (loadingMode) {
       await require('./helpers/web-loading-browser.cjs')({ evaluate, wait, capture, viewport, fixture: loadingFixture });
       return;
@@ -341,7 +365,7 @@ async function main() {
       return;
     }
     if (hotkeyMode) {
-      await require('./helpers/web-hotkeys-browser.cjs')({ cdp, evaluate, wait, capture, viewport, settingsFixture, getSavedSettings: () => savedSettings });
+      await require('./helpers/web-hotkeys-browser.cjs')({ cdp, evaluate, wait, capture, viewport, settingsFixture, desktopHotkeyMode, getSavedSettings: () => savedSettings });
       return;
     }
     if (settingsMode) {
@@ -361,7 +385,7 @@ async function main() {
       return;
     }
     if (searchMode) {
-      await require('./helpers/web-search-browser.cjs')({ cdp, evaluate, wait, capture, viewport, searchFixture, live, offline,
+      await require('./helpers/web-search-browser.cjs')({ cdp, evaluate, wait, capture, viewport, searchFixture,
         getOpen: () => ({ lastOpen, openCount }), output });
       return;
     }
@@ -400,12 +424,12 @@ async function main() {
       release('0');
       assert.equal(await evaluate("document.querySelector('.card').dataset.key"), '7', 'late totals cannot change search results');
       const beforeKick = viewerRequests.length;
-      await evaluate("document.querySelector('#platform').value='kick';document.querySelector('#platform').dispatchEvent(new Event('change'))");
+      await evaluate("document.querySelector('#discover-platform').value='kick';document.querySelector('#discover-platform').dispatchEvent(new Event('change'))");
       await wait(settled + ' && ' + meta('0') + "==='77 viewers'");
       assert.equal(viewerRequests.length, beforeKick, 'Kick totals continue to use their category response');
 
       failViewer = false; holdViewerIds.clear();
-      await evaluate("document.querySelector('#query').value='';document.querySelector('#platform').value='twitch';document.querySelector('#platform').dispatchEvent(new Event('change'))");
+      await evaluate("document.querySelector('#query').value='';document.querySelector('#discover-platform').value='twitch';document.querySelector('#discover-platform').dispatchEvent(new Event('change'))");
       await wait(settled + ' && ' + meta('2') + "==='2,500 viewers'");
       await evaluate("document.querySelector('.card[data-key=\"1\"] .card-main').click()");
       await wait(settled + " && !document.querySelector('#cards').classList.contains('categories') && document.querySelectorAll('.card').length===4");
@@ -444,6 +468,8 @@ async function main() {
     await evaluate("document.querySelector('[data-page=vods]').click()");
     await wait("document.querySelector('#studio').dataset.page==='vods' && document.querySelector('#cards').getAttribute('aria-busy')==='false'");
     await evaluate("document.querySelector('#query').value='Northstar';document.querySelector('#search-form').requestSubmit()");
+    await wait("!!document.querySelector('.search-option')");
+    await evaluate("document.querySelector('.search-option').click()");
     await wait("document.querySelectorAll('.card .avatar.has-image').length===1");
     await evaluate("document.querySelector('[data-page=following]').click()");
     await wait("document.querySelector('#studio').dataset.page==='following' && document.querySelector('#cards').getAttribute('aria-busy')==='false' && document.querySelectorAll('.card').length===6");
@@ -540,12 +566,12 @@ async function main() {
       await ready(follow, 'Follow');
       followUnknown = true;
       await open('Unknown');
-      await ready(follow, 'Follow');
+      await ready(follow, 'Follow…');
       assert.equal(await evaluate(`document.querySelector(${JSON.stringify(follow)}).getAttribute('aria-pressed')`), null, 'unverified status is not reported as false');
       assert.match(await evaluate(`document.querySelector(${JSON.stringify(follow)}).title`), /unavailable/i);
       followUnknown = false; followFailure = true;
       await open('Failure');
-      await ready(follow, 'Follow');
+      await ready(follow, 'Follow…');
       assert.equal(await evaluate(`document.querySelector(${JSON.stringify(follow)}).getAttribute('aria-pressed')`), null);
       assert.match(await evaluate(`document.querySelector(${JSON.stringify(follow)}).title`), /failed/i);
       followFailure = false;

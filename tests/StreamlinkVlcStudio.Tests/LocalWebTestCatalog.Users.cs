@@ -13,18 +13,94 @@ internal static partial class LocalWebTestCatalog
             var users = await LocalWebUserStore.OpenAsync(path);
             var user = await users.AddAsync("shortcuts", "Shortcut password 123!");
             await using var workspace = new LocalWebUserWorkspace(new ProfileFixture(), users, user.Id);
-            foreach (var key in new[] { "é", "𐐨", "🎮", "F1", "F12" })
+            foreach (var key in new[] { "é", "𐐨", "🎮", "F1", "F24", "Numpad4", "Space" })
             {
                 await Call(workspace, "settings/save", new { hotkeys = new { mute = new { key, ctrl = false, alt = false, shift = false, meta = false } } });
                 var reopened = await LocalWebUserStore.OpenAsync(path);
                 Assert.Equal(key, reopened.PreferencesFor(user.Id).Hotkeys["mute"]!.Key);
             }
-            foreach (var key in new[] { "", "\u200d", "\ue000", "ab", "F01", "F+1", "F13", " " })
+            foreach (var key in new[] { "", "\u200d", "\ue000", "ab", "F01", "F+1", "F25", " " })
                 await Assert.ThrowsAsync<ArgumentException>(() => Call(workspace, "settings/save",
                     new { hotkeys = new { mute = new { key, ctrl = false, alt = false, shift = false, meta = false } } }));
         }
         finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
     }
+
+    private static Task DesktopShortcutsAsync() => WithWorkspaceAsync(async fixture =>
+    {
+        var path = Path.Combine(fixture.Directory, "web-shortcuts.json");
+        var users = await LocalWebUserStore.OpenAsync(path);
+        var user = await users.AddAsync("shortcuts", "Shortcut password 123!");
+        fixture.Settings.Hotkeys.TogglePause = "Ctrl+P";
+        fixture.Settings.Hotkeys.SkipBackwardSeconds = 17;
+
+        // Old clients wrote all six resolved shortcuts even when only one changed.
+        var legacyFile = JsonNode.Parse(await File.ReadAllTextAsync(path))!;
+        var preferences = legacyFile["users"]![0]!["preferences"]!.AsObject();
+        foreach (var field in new[] { "skipBackwardSeconds", "skipForwardSeconds", "volumeUpStep", "volumeDownStep" })
+            preferences.Remove(field);
+        var legacy = new Dictionary<string, LocalWebHotkey?>
+        {
+            ["back"] = new("Escape", false, false, false, false),
+            ["nextTab"] = new("]", false, false, false, false),
+            ["previousTab"] = new("[", false, false, false, false),
+            ["grid"] = new("g", false, false, false, false),
+            ["keepAudio"] = new("b", true, false, false, false),
+            ["mute"] = null
+        };
+        preferences["hotkeys"] = JsonSerializer.SerializeToNode(legacy, LocalWebUserStore.JsonOptions);
+        await File.WriteAllTextAsync(path, legacyFile.ToJsonString());
+        users = await LocalWebUserStore.OpenAsync(path);
+
+        await using var workspace = new LocalWebUserWorkspace(new LocalWebWorkspace(fixture.Dependencies), users, user.Id);
+        var initial = await Call(workspace, "settings", new { });
+        var inherited = initial.GetProperty("desktopHotkeys");
+        Assert.Equal(11, inherited.GetProperty("bindings").EnumerateObject().Count());
+        Assert.Equal("Ctrl+P", inherited.GetProperty("bindings").GetProperty("togglePause").GetString());
+        Assert.Equal(17, inherited.GetProperty("skipBackwardSeconds").GetInt32());
+        var account = initial.GetProperty("preferences");
+        Assert.Equal(JsonValueKind.Null, account.GetProperty("skipBackwardSeconds").ValueKind);
+        Assert.Equal(JsonValueKind.Null, account.GetProperty("volumeUpStep").ValueKind);
+        var saved = account.GetProperty("hotkeys");
+        Assert.Equal(2, saved.EnumerateObject().Count());
+        Assert.Equal("b", saved.GetProperty("keepAudio").GetProperty("key").GetString());
+        Assert.Equal(JsonValueKind.Null, saved.GetProperty("mute").ValueKind);
+
+        fixture.Settings.Hotkeys.TogglePause = "Mouse5";
+        var refreshed = await Call(workspace, "hotkeys", new { });
+        Assert.Equal("Mouse5", refreshed.GetProperty("bindings").GetProperty("togglePause").GetString());
+
+        var overrideBinding = new LocalWebHotkey("Escape", false, false, false, false);
+        var overrides = new Dictionary<string, LocalWebHotkey?>(legacy)
+        {
+            ["togglePause"] = new("Space", false, false, false, false)
+        };
+        await Call(workspace, "settings/save", new { hotkeys = JsonSerializer.SerializeToElement(overrides, LocalWebUserStore.JsonOptions) });
+        await Task.WhenAll(
+            Call(workspace, "settings/save", new { skipBackwardSeconds = 11, volumeUpStep = 16 }),
+            Call(workspace, "settings/save", new { skipForwardSeconds = 27, volumeDownStep = 9 }));
+        await Assert.ThrowsAsync<ArgumentException>(() => Call(workspace, "settings/save", new { skipForwardSeconds = 301 }));
+        await Assert.ThrowsAsync<ArgumentException>(() => Call(workspace, "settings/save", new { volumeUpStep = 0 }));
+        await Assert.ThrowsAsync<ArgumentException>(() => Call(workspace, "settings/save", new { volumeDownStep = 1.5 }));
+
+        users = await LocalWebUserStore.OpenAsync(path);
+        var restored = users.PreferencesFor(user.Id);
+        Assert.Equal(overrideBinding, restored.Hotkeys["back"]);
+        Assert.Equal("Space", restored.Hotkeys["togglePause"]!.Key);
+        Assert.Equal<int?>(11, restored.SkipBackwardSeconds);
+        Assert.Equal<int?>(27, restored.SkipForwardSeconds);
+        Assert.Equal<int?>(16, restored.VolumeUpStep);
+        Assert.Equal<int?>(9, restored.VolumeDownStep);
+        Assert.Equal("Mouse5", fixture.Settings.Hotkeys.TogglePause);
+        Assert.Equal(17, fixture.Settings.Hotkeys.SkipBackwardSeconds);
+
+        await Call(workspace, "settings/save", new { skipBackwardSeconds = (int?)null, volumeUpStep = (int?)null });
+        var reset = (await LocalWebUserStore.OpenAsync(path)).PreferencesFor(user.Id);
+        Assert.Equal<int?>(null, reset.SkipBackwardSeconds);
+        Assert.Equal<int?>(null, reset.VolumeUpStep);
+        Assert.Equal<int?>(27, reset.SkipForwardSeconds);
+        Assert.Equal<int?>(9, reset.VolumeDownStep);
+    });
 
     private static async Task UserAccountsAsync()
     {
@@ -52,6 +128,7 @@ internal static partial class LocalWebTestCatalog
             {
                 var initial = await Call(aliceSession, "settings", new { });
                 Assert.Equal("best", initial.GetProperty("defaultQuality").GetString());
+                Assert.Equal(true, initial.GetProperty("preferences").GetProperty("keepInactive").GetBoolean());
                 await Call(aliceSession, "settings/save", new
                 {
                     quality = "720p",
@@ -59,7 +136,7 @@ internal static partial class LocalWebTestCatalog
                     layout = "overlay",
                     size = 22,
                     opacity = 35,
-                    keepInactive = true,
+                    keepInactive = false,
                     pauseInactiveVod = false,
                     hotkeys = new { back = new { key = "Escape", ctrl = false, alt = false, shift = false, meta = false } }
                 });
@@ -94,6 +171,7 @@ internal static partial class LocalWebTestCatalog
                 var settings = await Call(restored, "settings", new { });
                 Assert.Equal("720p", settings.GetProperty("defaultQuality").GetString());
                 var prefs = settings.GetProperty("preferences");
+                Assert.Equal(false, prefs.GetProperty("keepInactive").GetBoolean());
                 Assert.Equal(false, prefs.GetProperty("lowLatency").GetBoolean());
                 Assert.Equal("overlay", prefs.GetProperty("layout").GetString());
                 Assert.Equal(22, prefs.GetProperty("size").GetInt32());

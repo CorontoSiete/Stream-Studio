@@ -6,8 +6,9 @@ namespace StreamlinkVlcStudio.Core.Settings;
 
 public sealed class DownloadSettings : NotifyPropertyChangedObject
 {
+    private const VodDownloadFormat DefaultFormat = VodDownloadFormat.Mp4;
     private string quality = "best";
-    private VodDownloadFormat format;
+    private VodDownloadFormat format = DefaultFormat;
     private double bandwidthLimitMegabytesPerSecond;
     private string? directory;
     private List<string> previousDirectories = [];
@@ -73,7 +74,7 @@ public sealed class DownloadSettings : NotifyPropertyChangedObject
     public VodDownloadFormat Format
     {
         get => format;
-        set => SetProperty(ref format, Enum.IsDefined(value) ? value : VodDownloadFormat.Hls);
+        set => SetProperty(ref format, Enum.IsDefined(value) ? value : DefaultFormat);
     }
 
     public double BandwidthLimitMegabytesPerSecond

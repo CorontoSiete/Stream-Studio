@@ -17,7 +17,7 @@ The configured Streamlink executable is needed to select the online rendition. C
 
 ## Download formats and conversion
 
-**HLS (original)** keeps the existing self-contained playlist and media segments. **MP4 (.mp4)** produces a single `vod.mp4` file that can also be opened outside the app. Select MP4 for possible storage savings while keeping the original encoded picture and audio. The library shows each download's current format.
+**MP4 (.mp4)** is the default for VOD downloads when no format preference has been saved. It produces a single `vod.mp4` file that can be opened outside the app and may save storage while keeping the original encoded picture and audio. Choose **HLS (original)** to keep the self-contained playlist and media segments. The library shows each download's current format.
 
 Changing the format automatically queues local conversion of completed VODs throughout the library, including downloads in previously selected folders. Active downloads finish in the latest selected format. Switching back to HLS converts MP4 downloads into local HLS packages. Conversion preserves the video ID, quality, saved playback history, and cached profile picture; it does not download the VOD again or need internet access.
 

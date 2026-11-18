@@ -232,6 +232,7 @@ test('replay discovery replaces a playing live stream normally', async () => {
 test('picture-in-picture keeps inactive video playing and reapplies pausing when it closes', async () => {
   for (const isVod of [false, true]) {
     const f = fixture();
+    f.setPreferences({ keepInactive: false });
     f.target({ isVod });
     const first = await f.open();
     f.document.pictureInPictureElement = first.video;
@@ -263,6 +264,17 @@ test('disposing a replaced player cancels its pending volume save', async () => 
   f.disconnect();
 });
 
+test('inactive live streams keep playing muted by default', async () => {
+  const f = fixture();
+  try {
+    const first = await f.open();
+    f.target({ channel: 'other' });
+    await f.open();
+    assert.equal(first.video.paused, false);
+    assert.equal(first.video.muted, true);
+  } finally { f.disconnect(); }
+});
+
 test('inactive VOD playback follows its own setting for every live-tab preference', async () => {
   for (const keepInactive of [false, true]) for (const pauseInactiveVod of [false, true]) {
     const f = fixture();
@@ -280,7 +292,9 @@ test('inactive VOD playback follows its own setting for every live-tab preferenc
 });
 
 test('always keep audio on resumes an automatically paused stream and preserves manual mute', async () => {
-  const f = fixture(), first = await f.open();
+  const f = fixture();
+  f.setPreferences({ keepInactive: false });
+  const first = await f.open();
   f.target({ channel: 'other' });
   await f.open();
   assert.equal(first.video.paused, true);

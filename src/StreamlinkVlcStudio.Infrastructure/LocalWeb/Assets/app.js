@@ -4,23 +4,25 @@
   if (new URLSearchParams(location.hash.slice(1)).has('desktop')) history.replaceState(null, '', location.pathname + location.search);
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
-  const state = { csrf: '', sessionVersion: 0, page: 'following', players: [], selected: null, grid: false, settings: null, cursor: '', category: null, generation: 0, polling: false, authenticated: false, items: [], followed: [], cardType: 'following', filter: 'all', busy: false };
+  const state = { csrf: '', sessionVersion: 0, page: 'following', players: [], selected: null, grid: false, settings: null, cursor: '', category: null, vodChannel: null, generation: 0, polling: false, authenticated: false, items: [], followed: [], cardType: 'following', filter: 'all', busy: false };
   const navigationHistory = [];
   const completedCursors = new Set();
+  let followingPins = new Set();
+  const savingFollowingPins = new Set();
+  let followingPinsRefresh = null, lastFollowingPinsRefresh = 0, followingRevision = 0;
   let pageLoadAbort = null;
   const categoryLanguages = new Map();
   let browseDirectoryLanguage = '';
   const search = { timer: null, abort: null, version: 0, items: [], active: -1, signature: '', status: '', message: '', mode: '', composing: false };
   const pages = {
-    following: ['Following', 'YOUR DAILY LINEUP', 'Your favorite channels, together in one place.', 'Your channels'],
-    discover: ['Discover', 'FIND YOUR NEXT FAVORITE', 'Explore categories. Find your people.', 'Browse categories'],
-    vods: ['Videos', 'WORTH ANOTHER WATCH', 'Catch up on broadcasts, highlights and everything in between.', 'Channel videos'],
-    recent: ['Recently watched', 'PICK UP WHERE YOU LEFT OFF', 'A familiar face is always one click away.', 'Your watch history'],
-    downloads: ['Downloads', 'YOUR OFFLINE COLLECTION', 'Manage videos saved on your desktop. Watch them here.', 'Download library'],
-    settings: ['Preferences', 'MAKE IT YOURS', 'A few small adjustments. A better way to watch.', '']
+    following: { title: 'Following', description: 'Live and offline channels you follow.' },
+    discover: { title: 'Discover', description: 'Browse live channels by category on Twitch or Kick.', results: 'Browse categories' },
+    vods: { title: 'Videos', description: 'Find past broadcasts, highlights, and uploads by channel.', results: 'Channel videos' },
+    recent: { title: 'Recently watched', description: 'Resume videos from your watch history.', results: 'Your watch history' },
+    downloads: { title: 'Downloads', description: 'Watch and manage videos saved on your desktop.', results: 'Download library' },
+    settings: { title: 'Preferences', description: 'Manage playback, chat, and shortcuts for your web account.' }
   };
   const iconPaths = {
-    studio: 'M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2ZM10 8l6 4-6 4Z',
     home: 'M3 10 12 3l9 7v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1Z',
     compass: 'M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20ZM16 8l-3 5-5 3 3-5Z',
     video: 'M3 5h18v14H3ZM10 9l5 3-5 3Z',
@@ -31,12 +33,13 @@
     shield: 'M12 2 3 6v6c0 5 9 10 9 10s9-5 9-10V6ZM8 12l3 3 5-6',
     logout: 'M9 3H3v18h6m4-14 5 5-5 5M8 12h13',
     plus: 'M12 5v14M5 12h14',
+    pin: 'M9 3h6v2l-1 2v3l3 3v3H7v-3l3-3V7L9 5V3ZM12 16v5',
     refresh: 'M20 7a9 9 0 1 0 1 9M20 3v5h-5',
     search: 'M10 3a7 7 0 1 0 0 14 7 7 0 0 0 0-14Zm5 12 6 6',
     play: 'M8 4v16l12-8Z',
     grid: 'M3 3h7v7H3ZM14 3h7v7h-7ZM3 14h7v7H3ZM14 14h7v7h-7Z',
-    'panel-close': 'M3 4h18v16H3ZM9 4v16m6-11-3 3 3 3',
-    'panel-open': 'M3 4h18v16H3ZM9 4v16m4-11 3 3-3 3',
+    'panel-close': 'M5 4h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2ZM9 4v16m7-11-3 3 3 3',
+    'panel-open': 'M5 4h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2ZM9 4v16m4-11 3 3-3 3',
     fullscreen: 'M3 9V3h6m6 0h6v6m0 6v6h-6m-6 0H3v-6',
     close: 'M6 6l12 12M6 18 18 6',
     check: 'M5 12l4 4L19 6',
@@ -96,16 +99,61 @@
   });
   let queue = Promise.resolve();
   const pendingPlayers = new Map();
-  let preferences = { layout: 'docked', size: 16, opacity: 90, keepInactive: false, pauseInactiveVod: true };
+  let preferences = { layout: 'docked', size: 16, opacity: 90, keepInactive: true, pauseInactiveVod: true };
   const bounded = (value, min, max, fallback) => Number.isFinite(Number(value)) && value !== null ? Math.max(min, Math.min(max, Number(value))) : fallback;
   const hotkeyActions = [
-    { id: 'back', label: 'Go back', key: 'Escape' },
-    { id: 'nextTab', label: 'Next stream tab', key: ']' },
-    { id: 'previousTab', label: 'Previous stream tab', key: '[' },
-    { id: 'grid', label: 'Toggle Multi-stream grid', key: 'g' },
+    { id: 'back', label: 'Go back', desktop: 'Mouse4' },
+    { id: 'dismiss', label: 'Exit fullscreen or stop auto-scroll', desktop: 'Escape' },
+    { id: 'nextTab', label: 'Next stream tab', desktop: 'Right' },
+    { id: 'previousTab', label: 'Previous stream tab', desktop: 'Left' },
+    { id: 'grid', label: 'Toggle Multi-stream grid', desktop: 'M' },
+    { id: 'toggleSeekBar', label: 'Show / hide replay seek bar', desktop: 'Ctrl+S' },
+    { id: 'togglePause', label: 'Pause / resume playback', desktop: 'Space' },
+    { id: 'skipBackward', label: 'Skip backward', desktop: 'NumPad4' },
+    { id: 'skipForward', label: 'Skip forward', desktop: 'NumPad6' },
+    { id: 'volumeUp', label: 'Volume up', desktop: 'Up' },
+    { id: 'volumeDown', label: 'Volume down', desktop: 'Down' },
     { id: 'keepAudio', label: 'Toggle always keep audio on', key: 'a' },
     { id: 'mute', label: 'Mute / unmute selected tab', key: 'm' }
   ];
+  const defaultVolumeStep = 5;
+  const skipAmount = { label: 'Distance', max: 300, fallback: 30, suffix: ' s', unit: 'seconds', resetLabel: 'Use desktop distance' };
+  const volumeAmount = { label: 'Step', max: 100, fallback: defaultVolumeStep, suffix: '%', unit: 'percentage points', resetLabel: 'Reset step' };
+  const hotkeyAmounts = {
+    skipBackward: { ...skipAmount, setting: 'skipBackwardSeconds' },
+    skipForward: { ...skipAmount, setting: 'skipForwardSeconds' },
+    volumeUp: { ...volumeAmount, setting: 'volumeUpStep' },
+    volumeDown: { ...volumeAmount, setting: 'volumeDownStep' }
+  };
+  const namedHotkeys = new Set([
+    'Space', 'Enter', 'Escape', 'Backspace', 'Delete', 'Insert', 'Home', 'End', 'PageUp', 'PageDown',
+    'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Mouse4', 'Mouse5',
+    'Cancel', 'Clear', 'Pause', 'CapsLock', 'PrintScreen', 'NumLock', 'ScrollLock', 'ContextMenu',
+    'Help', 'Select', 'Execute', 'Sleep', 'Standby', 'WakeUp', 'Convert', 'NonConvert',
+    'Accept', 'ModeChange', 'KanaMode', 'HangulMode', 'HanjaMode', 'KanjiMode',
+    'BrowserBack', 'BrowserForward', 'BrowserRefresh', 'BrowserStop', 'BrowserSearch', 'BrowserFavorites', 'BrowserHome',
+    'AudioVolumeMute', 'AudioVolumeDown', 'AudioVolumeUp', 'MediaTrackNext', 'MediaTrackPrevious', 'MediaStop',
+    'MediaPlayPause', 'LaunchMail', 'LaunchMediaPlayer', 'LaunchApplication1', 'LaunchApplication2'
+  ]);
+  const numpadHotkey = /^Numpad(?:[0-9]|Add|Subtract|Multiply|Divide|Decimal|Comma)$/;
+  const desktopKeyNames = new Map(Object.entries({
+    Left: 'ArrowLeft', Right: 'ArrowRight', Up: 'ArrowUp', Down: 'ArrowDown', Back: 'Backspace', Return: 'Enter',
+    Prior: 'PageUp', Next: 'PageDown', Capital: 'CapsLock', Scroll: 'ScrollLock', Snapshot: 'PrintScreen', Apps: 'ContextMenu',
+    XButton1: 'Mouse4', XButton2: 'Mouse5', Add: 'NumpadAdd', Subtract: 'NumpadSubtract', Multiply: 'NumpadMultiply',
+    Divide: 'NumpadDivide', Decimal: 'NumpadDecimal', Separator: 'NumpadComma',
+    ImeConvert: 'Convert', ImeNonConvert: 'NonConvert', ImeAccept: 'Accept', ImeModeChange: 'ModeChange',
+    VolumeMute: 'AudioVolumeMute', VolumeDown: 'AudioVolumeDown', VolumeUp: 'AudioVolumeUp',
+    MediaNextTrack: 'MediaTrackNext', MediaPreviousTrack: 'MediaTrackPrevious', SelectMedia: 'LaunchMediaPlayer', Sleep: 'Standby'
+  }));
+  const desktopPunctuation = new Map(Object.entries({
+    Oem1: [';', ':', 'Semicolon'], OemSemicolon: [';', ':', 'Semicolon'], OemPlus: ['=', '+', 'Equal'],
+    OemComma: [',', '<', 'Comma'], OemMinus: ['-', '_', 'Minus'], OemPeriod: ['.', '>', 'Period'],
+    Oem2: ['/', '?', 'Slash'], OemQuestion: ['/', '?', 'Slash'], Oem3: ['`', '~', 'Backquote'], OemTilde: ['`', '~', 'Backquote'],
+    Oem4: ['[', '{', 'BracketLeft'], OemOpenBrackets: ['[', '{', 'BracketLeft'],
+    Oem5: ['\\', '|', 'Backslash'], OemPipe: ['\\', '|', 'Backslash'],
+    Oem6: [']', '}', 'BracketRight'], OemCloseBrackets: [']', '}', 'BracketRight'],
+    Oem7: ["'", '"', 'Quote'], OemQuotes: ["'", '"', 'Quote'], Oem102: ['\\', '|', 'IntlBackslash'], OemBackslash: ['\\', '|', 'IntlBackslash']
+  }));
   function normalizeHotkey(value) {
     if (!value || typeof value !== 'object' || typeof value.key !== 'string') return null;
     const character = /^[^\s\p{C}]$/u;
@@ -113,73 +161,176 @@
     // Some letters (such as İ) lowercase to several code points. Keep those keys
     // intact so recording, saved bindings and keyboard events use the same character.
     const key = character.test(lower) ? lower : value.key;
-    if (!character.test(key) && !/^(Escape|Backspace|Delete|Insert|Home|End|PageUp|PageDown|ArrowLeft|ArrowRight|ArrowUp|ArrowDown|Mouse[45]|F(?:[1-9]|1[0-2]))$/.test(key)) return null;
+    if (!character.test(key) && !namedHotkeys.has(key) && !/^F(?:[1-9]|1[0-9]|2[0-4])$/.test(key) && !numpadHotkey.test(key)) return null;
     if (['ctrl', 'alt', 'shift', 'meta'].some(name => value[name] !== undefined && typeof value[name] !== 'boolean')) return null;
     return { key, ctrl: !!value.ctrl, alt: !!value.alt, shift: !!value.shift, meta: !!value.meta };
   }
-  function sameHotkey(a, b) { return !!a && !!b && ['key', 'ctrl', 'alt', 'shift', 'meta'].every(name => a[name] === b[name]); }
+  function sameHotkey(a, b, code) {
+    return !!a && !!b && (a.key === b.key || !!code && a.code === code) &&
+      ['ctrl', 'alt', 'shift', 'meta'].every(name => a[name] === b[name]);
+  }
   function reservedHotkey(binding) {
     if ((binding.ctrl || binding.meta) && !binding.alt && binding.key === 'k') return true;
     return !binding.ctrl && !binding.alt && !binding.meta &&
-      (binding.key === '/' || !binding.shift && ['k', 'f'].includes(binding.key));
+      (binding.key === '/' || !binding.shift && ['Enter', 'f'].includes(binding.key));
   }
-  function loadHotkeys(saved) {
+  function desktopHotkey(gesture) {
+    if (typeof gesture !== 'string') return null;
+    const parts = gesture.split('+').map(part => part.trim());
+    const name = parts.pop();
+    const ctrl = parts.includes('Ctrl'), alt = parts.includes('Alt'), shift = parts.includes('Shift'), meta = parts.includes('Win');
+    const digit = /^D([0-9])$/.exec(name)?.[1];
+    const punctuation = desktopPunctuation.get(name);
+    let key = desktopKeyNames.get(name) || name.replace(/^NumPad/, 'Numpad'), code;
+    if (digit !== undefined) {
+      key = shift ? ')!@#$%^&*('[Number(digit)] : digit;
+      code = 'Digit' + digit;
+    } else if (punctuation) {
+      key = punctuation[shift ? 1 : 0];
+      code = punctuation[2];
+    }
+    const binding = normalizeHotkey({ key, ctrl, alt, shift, meta });
+    return binding && code ? { ...binding, code } : binding;
+  }
+  function loadHotkeys(saved = {}, desktop = {}) {
     const result = {};
-    for (const action of hotkeyActions) {
-      const value = saved && typeof saved === 'object' && Object.hasOwn(saved, action.id) ? saved[action.id] : undefined;
-      let binding = value === null ? null : normalizeHotkey(value) || normalizeHotkey({ key: action.key });
-      if (binding && (reservedHotkey(binding) || Object.values(result).some(other => sameHotkey(other, binding)))) binding = null;
-      result[action.id] = binding;
+    const available = binding => binding && !Object.values(result).some(other => sameHotkey(other, binding));
+    // Explicit web choices take precedence over the desktop, which takes precedence over web-only defaults.
+    for (const { id } of hotkeyActions) {
+      if (!Object.hasOwn(saved, id)) continue;
+      const binding = normalizeHotkey(saved[id]);
+      result[id] = available(binding) && !reservedHotkey(binding) ? binding : null;
+    }
+    for (const { id, desktop: fallback } of hotkeyActions) {
+      if (!fallback || Object.hasOwn(result, id)) continue;
+      const binding = desktopHotkey(desktop[id] ?? fallback);
+      result[id] = available(binding) ? binding : null;
+    }
+    for (const { id, key } of hotkeyActions) {
+      if (!key || Object.hasOwn(result, id)) continue;
+      const binding = normalizeHotkey({ key }), alternate = normalizeHotkey({ key, shift: true });
+      result[id] = available(binding) ? binding : available(alternate) ? alternate : null;
     }
     return result;
   }
-  let hotkeys = loadHotkeys(preferences.hotkeys);
-  function storeHotkeys(message) {
-    preferences = { ...preferences, hotkeys: { ...hotkeys } };
+  let hotkeyOverrides = {}, desktopShortcuts = {}, hotkeys = loadHotkeys();
+  const hotkeyFields = new Map();
+  function hotkeyAmount(id) {
+    const { setting, fallback } = hotkeyAmounts[id];
+    return preferences[setting] ?? desktopShortcuts[setting] ?? fallback;
+  }
+  function updateHotkeyAmount(id) {
+    const { setting, suffix, unit } = hotkeyAmounts[id];
+    const { range, output, reset } = hotkeyFields.get(id).amount;
+    const value = hotkeyAmount(id);
+    if (Number(range.value) !== value) range.value = String(value);
+    output.value = value + suffix;
+    range.setAttribute('aria-valuetext', value + ' ' + unit);
+    reset.hidden = preferences[setting] == null;
+  }
+  function setHotkeyAmount(id, value) {
+    const { setting } = hotkeyAmounts[id];
+    if ((preferences[setting] ?? null) === value) return;
+    preferences[setting] = value;
+    updateHotkeyAmount(id);
+    queuePreferencesSave(setting);
+  }
+  function updateHotkeys() {
+    hotkeys = loadHotkeys(hotkeyOverrides, desktopShortcuts.bindings);
+    for (const { id, desktop } of hotkeyActions) {
+      const { input, reset, source } = hotkeyFields.get(id);
+      const overridden = Object.hasOwn(hotkeyOverrides, id);
+      input.value = hotkeyLabel(hotkeys[id]);
+      input.title = input.value;
+      reset.hidden = !overridden;
+      const inherited = desktopHotkey(desktopShortcuts.bindings?.[id] ?? desktop);
+      source.textContent = overridden ? 'Web preference' : !desktop ? 'Web default' : hotkeys[id] ? 'From desktop'
+        : inherited ? hotkeyLabel(inherited) + ' is already in use' : 'Desktop binding unavailable in browser';
+    }
+    for (const id of Object.keys(hotkeyAmounts)) updateHotkeyAmount(id);
+  }
+  function storeHotkeys(overrides, message) {
+    if (JSON.stringify(overrides) === JSON.stringify(hotkeyOverrides)) return;
+    hotkeyOverrides = overrides;
+    updateHotkeys();
     $('#hotkey-status').textContent = message + ' Saving to your account…';
     queuePreferencesSave('hotkeys');
   }
   function hotkeyLabel(binding) {
     if (!binding) return 'Not assigned';
-    return [binding.ctrl && 'Ctrl', binding.alt && 'Alt', binding.shift && 'Shift', binding.meta && 'Meta', binding.key.length === 1 ? binding.key.toUpperCase() : binding.key].filter(Boolean).join(' + ');
+    const key = binding.key.replace(/^Numpad/, 'Num ');
+    return [binding.ctrl && 'Ctrl', binding.alt && 'Alt', binding.shift && 'Shift', binding.meta && 'Meta', key.length === 1 ? key.toUpperCase() : key].filter(Boolean).join(' + ');
+  }
+  function createHotkeyAmount(id, actionLabel) {
+    const { label: text, max, resetLabel } = hotkeyAmounts[id];
+    const element = node('div', undefined, 'hotkey-amount');
+    const range = node('input'); range.type = 'range'; range.id = 'hotkey-' + id + '-amount';
+    range.min = '1'; range.max = String(max); range.step = '1';
+    const label = node('label', text); label.id = range.id + '-label'; label.htmlFor = range.id;
+    range.setAttribute('aria-labelledby', actionLabel.id + ' ' + label.id);
+    range.addEventListener('input', () => setHotkeyAmount(id, Number(range.value)));
+    const output = node('output'); output.setAttribute('for', range.id);
+    const reset = node('button', resetLabel); reset.type = 'button';
+    reset.setAttribute('aria-label', resetLabel + ' for ' + actionLabel.textContent.toLowerCase());
+    reset.addEventListener('click', () => {
+      setHotkeyAmount(id, null);
+      range.focus({ preventScroll: true });
+    });
+    element.append(label, range, output, reset);
+    return { element, range, output, reset };
   }
   function renderHotkeyPreferences() {
-    $('#hotkey-bindings').replaceChildren(...hotkeyActions.map(action => {
+    $('#hotkey-bindings').replaceChildren(...hotkeyActions.map(({ id, label: name, desktop }) => {
       const row = node('div', undefined, 'setting-row hotkey-row');
-      const label = node('label', action.label); label.htmlFor = 'hotkey-' + action.id;
+      const label = node('label', name); label.htmlFor = 'hotkey-' + id; label.id = label.htmlFor + '-label';
+      const description = node('div'), source = node('p');
+      source.id = label.htmlFor + '-source'; description.append(label, source);
       const controls = node('div', undefined, 'hotkey-controls');
       const input = node('input'); input.id = label.htmlFor; input.type = 'text'; input.readOnly = true;
-      input.dataset.hotkey = action.id; input.value = hotkeyLabel(hotkeys[action.id]);
-      input.setAttribute('aria-describedby', 'hotkey-help hotkey-status');
-      const clear = button('Clear', () => {
-        hotkeys = { ...hotkeys, [action.id]: null }; input.value = hotkeyLabel(null);
-        storeHotkeys(action.label + ' cleared.');
+      input.dataset.hotkey = id;
+      input.setAttribute('aria-describedby', source.id + ' hotkey-help');
+      const clear = button('Clear', () => storeHotkeys({ ...hotkeyOverrides, [id]: null }, name + ' cleared.'));
+      clear.setAttribute('aria-label', 'Clear shortcut for ' + name.toLowerCase());
+      const reset = node('button', desktop ? 'Use desktop' : 'Use default');
+      reset.type = 'button';
+      reset.addEventListener('click', () => {
+        const overrides = { ...hotkeyOverrides };
+        delete overrides[id];
+        storeHotkeys(overrides, 'Default shortcut restored for ' + name.toLowerCase() + '.');
+        input.focus({ preventScroll: true });
       });
-      clear.setAttribute('aria-label', 'Clear shortcut for ' + action.label.toLowerCase());
-      controls.append(input, clear); row.append(label, controls); return row;
+      reset.setAttribute('aria-label', reset.textContent + ' shortcut for ' + name.toLowerCase());
+      const amount = hotkeyAmounts[id] ? createHotkeyAmount(id, label) : null;
+      hotkeyFields.set(id, { input, reset, source, amount });
+      controls.append(input, clear, reset);
+      const settings = node('div', undefined, 'hotkey-settings'); settings.append(controls);
+      if (amount) settings.append(amount.element);
+      row.append(description, settings); return row;
     }));
+    updateHotkeys();
   }
   renderHotkeyPreferences();
   $('#reset-hotkeys').addEventListener('click', () => {
-    hotkeys = loadHotkeys(); renderHotkeyPreferences();
-    storeHotkeys('Default shortcuts restored.');
+    for (const id of Object.keys(hotkeyAmounts)) setHotkeyAmount(id, null);
+    storeHotkeys({}, 'Default shortcuts restored.');
   });
-  function hotkeyFromEvent(event, key = event.key) {
+  function hotkeyFromEvent(event, key) {
+    key ??= numpadHotkey.test(event.code) ? event.code : event.key === ' ' ? 'Space' : event.key;
     return normalizeHotkey({ key, ctrl: event.ctrlKey, alt: event.altKey, shift: event.shiftKey, meta: event.metaKey });
   }
-  function recordHotkey(event, input, key = event.key) {
-    if (key === 'Tab') return;
+  function recordHotkey(event, input, key) {
+    if (event.key === 'Tab') return;
     event.preventDefault(); event.stopPropagation();
-    if (event.repeat || ['Control', 'Alt', 'Shift', 'Meta'].includes(key)) return;
+    if (event.repeat || ['Control', 'Alt', 'Shift', 'Meta'].includes(event.key)) return;
     const binding = hotkeyFromEvent(event, key);
     if (!binding || reservedHotkey(binding)) {
       $('#hotkey-status').textContent = 'That key is reserved for typing, playback, search, or keyboard navigation. Choose another shortcut.';
       return;
     }
-    const conflict = hotkeyActions.find(action => action.id !== input.dataset.hotkey && sameHotkey(hotkeys[action.id], binding));
+    const id = input.dataset.hotkey;
+    const conflict = hotkeyActions.find(action => action.id !== id && sameHotkey(hotkeys[action.id], binding, event.code));
     if (conflict) { $('#hotkey-status').textContent = 'Already assigned to ' + conflict.label.toLowerCase() + '. Clear that shortcut first.'; return; }
-    hotkeys = { ...hotkeys, [input.dataset.hotkey]: binding }; input.value = hotkeyLabel(binding);
-    storeHotkeys('Shortcut set to ' + input.value + '.');
+    storeHotkeys({ ...hotkeyOverrides, [id]: binding }, 'Shortcut set to ' + hotkeyLabel(binding) + '.');
   }
   const streamVolumes = new Map();
   const volumeSaveTimers = new Map();
@@ -288,7 +439,7 @@
     if (signal?.aborted) throw new DOMException('Request canceled.', 'AbortError');
     const response = await fetch('/api/' + action, {
       method, credentials: 'same-origin', cache: 'no-store', signal,
-      keepalive: action === 'chat/layout' || action === 'settings/save' || action === 'volume/save' || action === 'progress',
+      keepalive: action === 'chat/layout' || action === 'settings/save' || action === 'volume/save' || action === 'progress' || action === 'following/pin',
       headers: method === 'POST' ? { 'Content-Type': 'application/json', 'X-StreamStudio': '1', 'X-CSRF-Token': state.csrf } : {},
       body: method === 'POST' ? JSON.stringify(input) : undefined
     });
@@ -322,7 +473,7 @@
     queue = result.catch(() => {});
     return result;
   }
-  function platform() { return $('#platform').value; }
+  function discoverPlatform() { return $('#discover-platform').value; }
   function image(url, alt) {
     const img = node('img');
     try {
@@ -356,11 +507,15 @@
   }
   function resetSessionWork() {
     cancelPageLoad();
+    desktopHotkeyRequest?.abort(); desktopHotkeyRequest = null;
+    cancelFollowingPinsRefresh();
+    followingPins.clear(); savingFollowingPins.clear(); lastFollowingPinsRefresh = 0; followingRevision = 0;
     ++state.sessionVersion; queue = Promise.resolve();
     state.polling = false; pendingPlayers.clear(); completedCursors.clear(); navigationHistory.length = 0;
     return state.sessionVersion;
   }
   function disconnect() {
+    stopLibraryAutoScroll();
     resetSessionWork();
     clearTimeout(profileSaveTimer); profileSaveTimer = null; profileSaveTask = null; ++profileSaveEpoch;
     cancelVolumeSaves();
@@ -380,16 +535,23 @@
   async function connected(session) {
     const version = resetSessionWork();
     state.csrf = session.csrf;
+    state.settings = null;
     state.authenticated = true;
     $('#password').value = ''; setLoginPasswordVisible(false);
     try { state.settings = await api('settings'); }
     catch (error) { if (version === state.sessionVersion) disconnect(); throw error; }
-    preferences = { ...preferences, ...state.settings.preferences };
+    const savedPreferences = state.settings.preferences || {};
+    preferences = { ...preferences, ...savedPreferences };
+    for (const { setting } of Object.values(hotkeyAmounts)) preferences[setting] = savedPreferences[setting] ?? null;
     categoryLanguages.clear();
     for (const [key, language] of Object.entries(state.settings.preferences?.categoryLanguages || {})) categoryLanguages.set(key, language);
     browseDirectoryLanguage = '';
-    hotkeys = loadHotkeys(preferences.hotkeys);
-    renderHotkeyPreferences();
+    hotkeyOverrides = state.settings.preferences?.hotkeys || {};
+    desktopShortcuts = state.settings.desktopHotkeys || {};
+    lastDesktopHotkeysRefresh = Date.now();
+    seekBarVisible = true;
+    updateHotkeys();
+    $('#hotkey-status').textContent = '';
     cancelVolumeSaves();
     for (const [key, volume] of Object.entries(preferences.volumes || {}))
       if (typeof volume === 'number' && Number.isFinite(volume) && volume >= 0 && volume <= 1) streamVolumes.set(key, volume);
@@ -426,11 +588,11 @@
     const form = event.currentTarget, submit = $('button[type="submit"]', form);
     if (submit.disabled) return;
     submit.disabled = true; form.setAttribute('aria-busy', 'true');
-    $('.login-submit-label', submit).textContent = 'Connecting to your studio…';
+    $('.login-submit-label', submit).textContent = 'Connecting…';
     $('#login-error').textContent = '';
     try { await connected(await request('login', { username: $('#username').value.trim(), password: $('#password').value })); $('#login-error').textContent = ''; }
     catch (error) { $('#login-error').textContent = error.message; }
-    finally { submit.disabled = false; form.removeAttribute('aria-busy'); $('.login-submit-label', submit).textContent = 'Sign in to studio'; }
+    finally { submit.disabled = false; form.removeAttribute('aria-busy'); $('.login-submit-label', submit).textContent = 'Sign in'; }
   });
   const logout = () => run(async () => {
     const version = state.sessionVersion;
@@ -449,7 +611,7 @@
   $$('[data-nav-page]').forEach(b => b.addEventListener('click', () => run(() => showPage(b.dataset.navPage))));
 
   function navigationSnapshot() {
-    return { page: state.page, category: state.category, query: $('#query').value, platform: platform(),
+    return { page: state.page, category: state.category, vodChannel: state.vodChannel, query: $('#query').value, platform: discoverPlatform(),
       language: $('#discover-language').value,
       vodType: $('#vod-type').value, filter: state.filter, liveOnly: $('#live-filter').checked, sort: $('#channel-sort').value,
       watching: $('#studio').classList.contains('watching'), selected: state.selected,
@@ -457,6 +619,7 @@
   }
   function sameNavigation(a, b) {
     return a.page === b.page && a.category?.id === b.category?.id && a.query === b.query && a.platform === b.platform &&
+      a.vodChannel?.channel === b.vodChannel?.channel && a.vodChannel?.platform === b.vodChannel?.platform &&
       a.vodType === b.vodType && a.language === b.language && a.watching === b.watching;
   }
   function rememberNavigation() {
@@ -484,7 +647,7 @@
     if (state.category) $('#breadcrumbs').append(button('All categories', () => browseCategory(null, '')), node('span', '/ ' + state.category.name));
   }
   function categoryLanguageKey() {
-    return (platform() === 'kick' ? 'Kick' : 'Twitch') + ':' + state.category.id;
+    return (discoverPlatform() === 'kick' ? 'Kick' : 'Twitch') + ':' + state.category.id;
   }
   function restoreDiscoveryLanguage() {
     $('#discover-language').value = state.category ? categoryLanguages.get(categoryLanguageKey()) ?? browseDirectoryLanguage : browseDirectoryLanguage;
@@ -500,32 +663,36 @@
     if (record && !view && $('#studio').dataset.page === page && !state.category &&
       !$('#studio').classList.contains('watching') && (state.items.length || state.busy)) return;
     if (record && (page !== state.page || state.category || $('#studio').classList.contains('watching') ||
-      view?.query !== undefined && view.query !== $('#query').value || view?.platform !== undefined && view.platform !== platform())) rememberNavigation();
+      view?.query !== undefined && view.query !== $('#query').value || view?.platform !== undefined && view.platform !== discoverPlatform() ||
+      view?.vodChannel && (view.vodChannel.channel !== state.vodChannel?.channel || view.vodChannel.platform !== state.vodChannel?.platform))) rememberNavigation();
+    stopLibraryAutoScroll();
     closeSearch();
     $('#studio').classList.remove('watching', 'theater');
     renderFollowedChannels();
     state.page = page; state.category = view?.category || null; state.cursor = ''; state.items = []; state.filter = view?.filter || 'all';
-    if (view?.platform) $('#platform').value = view.platform;
+    state.vodChannel = view?.vodChannel || null;
+    if (view?.platform) $('#discover-platform').value = view.platform;
     restoreDiscoveryLanguage();
     if (view?.vodType) $('#vod-type').value = view.vodType;
     if (view?.sort) $('#channel-sort').value = view.sort;
-    $('#live-filter').checked = !!view?.liveOnly; $('#query').value = view?.query ?? (page === 'vods' ? $('#query').value : '');
-    const [title, eyebrow, description, results] = pages[page];
+    $('#live-filter').checked = !!view?.liveOnly; $('#query').value = view?.query ?? '';
+    const { title, description, results = '' } = pages[page];
     $('#page-title').textContent = title;
-    $('#page-eyebrow').textContent = eyebrow; $('#page-description').textContent = description;
-    $('#results-title').textContent = results; $('#location-label').textContent = title;
+    $('#page-description').textContent = description;
+    $('#results-title').textContent = results; $('#results-title').hidden = !results; $('#location-label').textContent = title;
     document.title = title + ' · Stream Studio';
     $$('[data-page]').forEach(b => b.setAttribute('aria-current', b.dataset.page === page ? 'page' : 'false'));
     $$('[data-nav-page]').forEach(b => b.setAttribute('aria-current', b.dataset.navPage === page ? 'page' : 'false'));
     $('#preferences').hidden = page !== 'settings';
-    $('.library-tools').hidden = page === 'settings'; $('#results-heading').hidden = page === 'settings';
+    $('#results-heading').hidden = page === 'settings';
     $('#search-form').hidden = page === 'settings';
     $('#studio').dataset.page = page;
     $('#refresh').hidden = page === 'settings'; $('#cards').hidden = page === 'settings';
-    $('#vod-type').hidden = page !== 'vods' || platform() === 'kick';
+    $('#vod-type').hidden = state.vodChannel?.platform !== 'twitch';
     $('#download-input').hidden = page !== 'downloads';
     $('#platform-filters').hidden = page !== 'following';
     $('#sort-label').hidden = page !== 'following';
+    $('#discover-platform-label').hidden = page !== 'discover';
     $('#discover-language-label').hidden = page !== 'discover';
     $('#discover-language-help').hidden = page !== 'discover';
     $('#live-filter-label').hidden = page !== 'following';
@@ -565,14 +732,15 @@
     cancelPageLoad();
     cancelCategoryViewerCounts();
     cancelFollowingHistory();
+    cancelFollowingPinsRefresh();
     const page = state.page;
     if (!append) state.cursor = '';
     const cursor = state.cursor;
     $('#more').hidden = true; $('#empty-state').hidden = true; notice('');
     if (page === 'settings') { setBusy(false); $('#cards').replaceChildren(); return; }
-    if (page === 'vods' && !$('#query').value.trim()) {
+    if (page === 'vods' && !state.vodChannel) {
       $('#cards').replaceChildren(); $('#result-count').textContent = '';
-      empty('Every channel has a back catalog.', 'Choose Twitch or Kick and start typing a channel name above to explore its videos.', 'video', 'Enter a channel', () => $('#query').focus());
+      empty('Every channel has a back catalog.', 'Search for a Twitch or Kick channel to explore its videos.', 'video', 'Find a channel', () => $('#query').focus());
       setBusy(false); return;
     }
     setBusy(true); $('#result-count').textContent = 'Loading…';
@@ -587,19 +755,14 @@
       else if (page === 'discover') {
         if (state.category) categoryLanguages.set(categoryLanguageKey(), $('#discover-language').value);
         result = state.category
-          ? await read('streams', { platform: platform(), categoryId: state.category.id, categoryName: state.category.name, cursor, language: $('#discover-language').value })
-          : await read('categories', { platform: platform(), query: $('#query').value.trim(), cursor });
+          ? await read('streams', { platform: discoverPlatform(), categoryId: state.category.id, categoryName: state.category.name, cursor, language: $('#discover-language').value })
+          : await read('categories', { platform: discoverPlatform(), query: $('#query').value.trim(), cursor });
       } else if (page === 'vods') {
-        result = await read('vods', { platform: platform(), channel: $('#query').value.trim(), type: $('#vod-type').value, cursor });
+        result = await read('vods', { ...state.vodChannel, type: $('#vod-type').value, cursor });
       }
       if (controller.signal.aborted || generation !== state.generation || !state.authenticated) return;
-      const seen = new Set(append ? state.items.map(item => item.id || item.key) : []);
-      const items = [...(result.items || []), ...(result.offline || [])].filter(item => {
-        const key = item.id || item.key;
-        if (seen.has(key)) return false;
-        seen.add(key); return true;
-      });
-      if (page === 'following') { state.followed = items; renderFollowedChannels(); }
+      const items = collectPageItems(result, append ? state.items : []);
+      if (page === 'following') storeFollowing(result, items);
       const type = page === 'discover' && !state.category ? 'categories' : page;
       state.items = append ? [...state.items, ...items] : items;
       state.cardType = type;
@@ -609,8 +772,8 @@
       state.cursor = completedCursors.has(nextCursor) ? '' : nextCursor;
       renderResults();
       if (result.message) notice(result.message);
-      if (type === 'categories' && platform() === 'twitch') loadCategoryViewerCounts(generation);
-      if (page === 'following' && result.offline?.length) loadFollowingHistory(generation);
+      if (type === 'categories' && discoverPlatform() === 'twitch') loadCategoryViewerCounts(generation);
+      if (page === 'following' && !followingRevision && result.offline?.length) loadFollowingHistory(generation);
     } catch (error) {
       if (controller.signal.aborted || error.name === 'AbortError' || generation !== state.generation || !state.authenticated) return;
       if (!state.items.length) {
@@ -623,11 +786,75 @@
       if (generation === state.generation) { setBusy(false); $('#more').hidden = !state.cursor; }
     }
   }
+  function collectPageItems(result, previous = []) {
+    const seen = new Set(previous.map(item => item.id || item.key));
+    return [...(result.items || []), ...(result.offline || [])].filter(item => {
+      const key = item.id || item.key;
+      if (seen.has(key)) return false;
+      seen.add(key); return true;
+    });
+  }
+  function storeFollowing(result, items) {
+    followingRevision = result.revision || 0;
+    updateFollowingPins(result.pinnedKeys);
+    state.followed = items;
+    renderFollowedChannels();
+  }
   let followingHistoryAbort = null;
   function cancelFollowingHistory() {
     followingHistoryAbort?.abort(); followingHistoryAbort = null;
   }
   function channelKey(item) { return (item.platform || '').trim().toLowerCase() + ':' + (item.channel || '').trim().toLowerCase(); }
+  function cancelFollowingPinsRefresh() {
+    followingPinsRefresh?.abort(); followingPinsRefresh = null;
+  }
+  function updateFollowingPins(keys = []) {
+    lastFollowingPinsRefresh = Date.now();
+    const next = new Set(keys.map(key => key.toLowerCase()));
+    if (followingPins.size === next.size && [...next].every(key => followingPins.has(key))) return false;
+    followingPins = next;
+    return true;
+  }
+  async function refreshFollowingPins() {
+    if (state.page !== 'following' || state.busy || document.hidden || followingPinsRefresh ||
+      savingFollowingPins.size || Date.now() - lastFollowingPinsRefresh < 4000 ||
+      (!followingRevision && !state.items.some(item => item.state === 'Offline'))) return;
+    const controller = followingPinsRefresh = new AbortController();
+    lastFollowingPinsRefresh = Date.now();
+    try {
+      // Keep snapshots ordered with Following loads and pin writes.
+      const result = await api('following/pins', { revision: followingRevision }, controller.signal);
+      if (controller.signal.aborted) return;
+      if (Array.isArray(result.offline)) {
+        state.items = collectPageItems(result);
+        storeFollowing(result, state.items);
+        renderResults();
+      } else if (updateFollowingPins(result.pinnedKeys)) renderResults();
+    } catch { /* Keep the displayed pins until the next sync can reach the desktop. */ }
+    finally { if (followingPinsRefresh === controller) followingPinsRefresh = null; }
+  }
+  function updateFollowingPinButton(pin, item) {
+    const key = channelKey(item), pinned = followingPins.has(key);
+    pin.setAttribute('aria-pressed', String(pinned));
+    pin.setAttribute('aria-disabled', String(savingFollowingPins.has(key)));
+    pin.title = (pinned ? 'Unpin ' : 'Pin ') + (item.displayName || item.channel) + ' on ' + item.platform;
+  }
+  async function toggleFollowingPin(item, pin) {
+    const key = channelKey(item);
+    if (savingFollowingPins.has(key)) return;
+    const version = state.sessionVersion;
+    savingFollowingPins.add(key);
+    updateFollowingPinButton(pin, item);
+    try {
+      const result = await api('following/pin', { key: item.key, pinned: !followingPins.has(key) });
+      updateFollowingPins(result.pinnedKeys);
+    } finally {
+      if (version === state.sessionVersion) {
+        savingFollowingPins.delete(key);
+        if (state.page === 'following' && !state.busy) renderResults();
+      }
+    }
+  }
   async function loadFollowingHistory(generation) {
     const controller = new AbortController(); followingHistoryAbort = controller;
     try {
@@ -646,7 +873,7 @@
           renderLastLive(element, item);
           const card = element.closest('.card');
           const followed = card && followedByKey.get(element.dataset.channelKey);
-          if (followed) cardContent.set(card, cardSignature(followed, state.cardType));
+          if (followed) cardContent.get(card).signature = cardSignature(followed, state.cardType);
         }
       }
     } catch { /* Cached times remain visible when optional history is unavailable. */ }
@@ -681,7 +908,7 @@
   async function loadCategoryViewerCounts(generation) {
     const controller = new AbortController(); categoryViewerCountsAbort = controller;
     const pending = state.items.filter(item => item.viewerCount == null);
-    const current = () => !controller.signal.aborted && state.authenticated && generation === state.generation && state.page === 'discover' && !state.category && platform() === 'twitch';
+    const current = () => !controller.signal.aborted && state.authenticated && generation === state.generation && state.page === 'discover' && !state.category && discoverPlatform() === 'twitch';
     // Each category can finish independently if another requires full stream pagination.
     // These read-only requests bypass the command queue and are also bounded on the server.
     const worker = async () => {
@@ -699,7 +926,7 @@
         const media = card && $('.card-media', card);
         if (media) {
           renderMediaMeta(media, count == null ? 'Viewers unavailable' : count.toLocaleString() + ' viewers', count != null);
-          cardContent.set(card, cardSignature(item, state.cardType));
+          cardContent.get(card).signature = cardSignature(item, state.cardType);
         }
       }
     };
@@ -776,6 +1003,7 @@
       const category = item.categoryName?.trim();
       const row = button('', async () => { if (live) await openPlayer({ key: item.key }); else await browseVideos(item); closeChannels(); });
       row.className = 'followed-channel'; row.dataset.provider = item.platform?.toLowerCase() || '';
+      row.dataset.focusKey = 'follow-' + channelKey(item);
       row.title = name + ' · ' + item.platform + ' · ' + (live ? category || 'Live now' : 'Offline');
       row.setAttribute('aria-label', (live ? 'Watch ' : 'Browse videos from ') + name + ' on ' + item.platform + (live && category ? ', streaming ' + category : ''));
       const copy = node('span', undefined, 'followed-copy');
@@ -786,7 +1014,7 @@
       if (live) status.prepend(node('i', '', 'live-dot'));
       row.append(avatar(item, name), copy, status); list.append(row);
     }
-    if (focusKey) $$('[data-focus-key]', list).find(b => b.dataset.focusKey === focusKey)?.focus();
+    if (focusKey) $$('[data-focus-key]', list).find(b => b.dataset.focusKey === focusKey)?.focus({ preventScroll: true });
   }
   function compactNumber(value) { return new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(Number(value)); }
   function initials(text) { return (text || 'SS').replace(/[^\p{L}\p{N} ]/gu, '').trim().slice(0, 2).toUpperCase() || 'SS'; }
@@ -800,12 +1028,15 @@
       if ($('#live-filter').checked) items = items.filter(i => i.state === 'Live');
     }
     $('#platform-filters').hidden = !following; $('#live-filter-label').hidden = !following; $('#sort-label').hidden = !following;
-    $('#results-title').textContent = state.category ? state.category.name : pages[state.page][3];
+    $('#results-title').textContent = state.category?.name ?? pages[state.page].results ?? '';
     if (following) {
       const sort = $('#channel-sort').value;
       items = [...items].sort((a, b) => {
         const liveFirst = Number(b.state === 'Live') - Number(a.state === 'Live');
         if (liveFirst) return liveFirst;
+        const pinnedFirst = Number(b.state === 'Offline' && followingPins.has(channelKey(b))) -
+          Number(a.state === 'Offline' && followingPins.has(channelKey(a)));
+        if (pinnedFirst) return pinnedFirst;
         if (sort === 'name') return (a.displayName || a.channel || '').localeCompare(b.displayName || b.channel || '');
         if (sort === 'viewers') return (b.viewers || 0) - (a.viewers || 0);
         return 0;
@@ -828,7 +1059,7 @@
     else empty('Nothing here just yet.', 'Try another category or a different search.', 'compass', 'Browse all categories', () => browseCategory(null, ''));
   }
   const cardContent = new WeakMap();
-  function cardSignature(item, type) { return JSON.stringify([type, platform(), item]); }
+  function cardSignature(item, type) { return JSON.stringify([type, type === 'categories' ? discoverPlatform() : '', item]); }
   function renderCards(items, type) {
     const cards = $('#cards'), focused = document.activeElement;
     cards.classList.toggle('categories', type === 'categories');
@@ -838,7 +1069,11 @@
       const content = cardSignature(item, type);
       const previous = existing.get(key);
       const retained = previous && cardContent.get(previous);
-      if (retained?.signature === content) { retained.retryArtwork(); return previous; }
+      if (retained?.signature === content) {
+        retained.retryArtwork();
+        if (retained.pin) updateFollowingPinButton(retained.pin, item);
+        return previous;
+      }
       return createCard(item, type, content);
     });
     const retained = new Set(next);
@@ -852,7 +1087,7 @@
   }
   function createCard(item, type, signature) {
     const card = node('article', undefined, 'card');
-    card.dataset.key = item.id || item.key || ''; card.dataset.provider = item.platform?.toLowerCase() || platform();
+    card.dataset.key = item.id || item.key || ''; card.dataset.provider = item.platform?.toLowerCase() || (type === 'categories' ? discoverPlatform() : '');
     const offline = ['Offline', 'Unavailable'].includes(item.state); card.classList.toggle('is-offline', offline);
     const display = item.displayName || item.name || item.title || item.channel || 'Untitled';
     const liveCategory = type === 'following' && item.state === 'Live' ? item.categoryName?.trim() || '' : null;
@@ -892,7 +1127,7 @@
     else if (item.watched) media.append(node('span', 'Watched', 'badge media-badge'));
     else if (offline) media.append(node('span', item.state === 'Unavailable' ? 'Unavailable' : 'Offline', 'badge media-badge'));
     const viewers = item.viewers ?? item.viewerCount;
-    const mediaText = viewers != null ? Number(viewers).toLocaleString() + ' viewers' : item.duration ? duration(item.duration) : type === 'categories' && platform() === 'twitch' ? 'Loading viewers…' : '';
+    const mediaText = viewers != null ? Number(viewers).toLocaleString() + ' viewers' : item.duration ? duration(item.duration) : type === 'categories' && discoverPlatform() === 'twitch' ? 'Loading viewers…' : '';
     renderMediaMeta(media, mediaText, viewers != null);
     const play = node('span', undefined, 'play-affordance'); play.append(icon(offline || type === 'categories' ? 'arrow-right' : 'play')); media.append(play);
     if (item.resume > 0 && item.duration > 0) { const track = node('div', undefined, 'resume-bar'); const progress = node('progress'); progress.max = item.duration; progress.value = item.resume; progress.setAttribute('aria-label', 'Watched progress'); track.append(progress); media.append(track); }
@@ -904,6 +1139,7 @@
     if (liveCategory !== null) copy.append(node('p', liveCategory ? 'Category: ' + liveCategory : 'Category unavailable', 'card-category'));
     const meta = node('div', undefined, 'card-meta');
     if (item.platform) { const provider = node('span', undefined, 'provider-label'); provider.append(providerLogo(item.platform)); meta.append(provider); }
+    if (offline) meta.append(node('span', item.state, 'offline-label'));
     if (item.resume > 0) meta.append(node('span', 'Resume ' + duration(item.resume)));
     if (item.format) meta.append(node('span', item.format));
     if (type === 'downloads') meta.append(node('span', item.state.replace(/([a-z])([A-Z])/g, '$1 $2')));
@@ -919,6 +1155,17 @@
     }
     if (type !== 'categories') body.append(avatar(item, item.displayName || item.channel || display));
     body.append(copy); main.append(media, body); card.append(main);
+    if (type === 'following' && item.state === 'Offline') {
+      const pin = node('button');
+      pin.type = 'button';
+      pin.className = 'card-pin icon-button';
+      pin.setAttribute('aria-label', 'Pin ' + display + ' on ' + item.platform);
+      pin.addEventListener('click', () => run(() => toggleFollowingPin(item, pin)));
+      pin.append(icon('pin'));
+      updateFollowingPinButton(pin, item);
+      cardContent.get(card).pin = pin;
+      card.append(pin);
+    }
     if (type === 'downloads') {
       const progressBox = node('div', undefined, 'download-progress'); const progress = node('progress');
       progress.max = Math.max(1, item.totalSegments || 0); progress.value = item.completedSegments || 0; progress.setAttribute('aria-label', 'Download progress');
@@ -938,7 +1185,9 @@
     if (actions.childElementCount) card.append(actions);
     return card;
   }
-  async function browseVideos(item) { await showPage('vods', { platform: item.platform.toLowerCase(), query: item.channel }); }
+  async function browseVideos(item) {
+    await showPage('vods', { vodChannel: { platform: item.platform.toLowerCase(), channel: item.channel }, query: item.channel });
+  }
   function closeSearch() {
     clearTimeout(search.timer); search.timer = null; search.abort?.abort(); search.abort = null; ++search.version;
     search.items = []; search.active = -1; search.signature = ''; search.status = ''; search.message = '';
@@ -965,37 +1214,67 @@
   function renderSearch(query) {
     const list = $('#search-options'), feedback = $('#search-feedback'); list.replaceChildren(); feedback.replaceChildren(); feedback.hidden = true;
     search.active = -1; $('#query').removeAttribute('aria-activedescendant');
-    const provider = platform() === 'kick' ? 'Kick' : 'Twitch';
-    $('#search-kind').textContent = search.mode === 'categories' ? 'CATEGORIES' : ['url', 'download'].includes(search.mode) ? 'READY WHEN YOU ARE' : state.page === 'vods' ? 'CHANNEL VIDEOS' : 'CHANNELS';
-    $('#search-context').textContent = ['url', 'download'].includes(search.mode) ? 'Direct link' : provider; $('#search-context').className = ['url', 'download'].includes(search.mode) ? '' : platform();
-    list.setAttribute('aria-label', search.mode === 'categories' ? 'Category suggestions' : 'Channel suggestions');
+    const direct = search.mode === 'url' || search.mode === 'download', category = search.mode === 'categories';
+    const provider = category ? (discoverPlatform() === 'kick' ? 'Kick' : 'Twitch') : 'Twitch and Kick';
+    $('#search-kind').textContent = category ? 'CATEGORIES' : direct ? 'READY WHEN YOU ARE' : state.page === 'vods' ? 'CHANNEL VIDEOS' : 'CHANNELS';
+    $('#search-context').textContent = direct ? 'Direct link' : provider;
+    $('#search-context').className = category ? discoverPlatform() : '';
+    list.setAttribute('aria-label', category ? 'Category suggestions' : 'Channel suggestions');
     list.setAttribute('aria-busy', String(search.status === 'loading'));
     if (search.status === 'loading') {
       for (let i = 0; i < 3; i++) { const row = node('div', undefined, 'search-skeleton'); row.setAttribute('aria-hidden', 'true'); row.append(node('span'), node('span')); list.append(row); }
       $('#search-announcement').textContent = 'Searching ' + provider + '…'; return;
     }
     for (const [index, item] of search.items.entries()) {
-      const direct = search.mode === 'url' || search.mode === 'download', category = search.mode === 'categories';
+      const channelResult = !direct && !category;
       const name = direct ? search.mode === 'download' ? 'Download this video' : 'Open this stream or video' : item.displayName || item.channel || item.name;
       const offline = ['Offline', 'Unavailable'].includes(item.state), videos = state.page === 'vods' || offline;
       const row = node('div', undefined, 'search-option'); row.id = 'search-option-' + search.version + '-' + index;
-      row.setAttribute('role', 'option'); row.setAttribute('aria-selected', 'false'); row.dataset.provider = (item.platform || platform()).toLowerCase();
+      row.setAttribute('role', 'option'); row.setAttribute('aria-selected', 'false');
+      row.dataset.provider = item.platform?.toLowerCase() || (category ? discoverPlatform() : '');
       const visual = direct ? node('span', undefined, 'search-source-icon') : category ? node('span', undefined, 'search-category-art') : avatar(item, name);
       if (direct) visual.append(icon(search.mode === 'download' ? 'download' : 'play'));
       if (category) { const artwork = image(item.thumbnailUrl, ''); visual.append(artwork || icon('compass')); }
       const copy = node('span', undefined, 'search-option-copy'), heading = node('strong'); matchedText(heading, name, query);
-      const detail = direct ? query : category ? item.viewerCount == null ? 'Explore category' : Number(item.viewerCount).toLocaleString() + ' viewers' : item.title || (videos ? 'Browse past broadcasts and highlights' : 'Open channel');
-      copy.append(heading, node('span', detail, 'search-option-description'));
+      const streamTitle = channelResult ? item.title?.trim() : '';
+      const categoryName = channelResult ? item.categoryName?.trim() : '';
+      let detail = streamTitle;
+      if (direct) detail = query;
+      else if (category) detail = item.viewerCount == null ? 'Explore category' : Number(item.viewerCount).toLocaleString() + ' viewers';
+      else if (!detail && !categoryName) detail = videos ? 'Browse past broadcasts and highlights' : 'Open channel';
+      copy.append(heading);
+      const descriptionIds = [];
+      if (detail) {
+        const description = node('span', detail, 'search-option-description');
+        if (streamTitle) {
+          description.classList.add('search-option-title');
+          description.id = row.id + '-title';
+          description.title = streamTitle;
+          descriptionIds.push(description.id);
+        }
+        copy.append(description);
+      }
+      if (categoryName) {
+        const label = node('span', categoryName, 'search-option-category');
+        label.id = row.id + '-category';
+        label.title = categoryName;
+        descriptionIds.push(label.id);
+        copy.append(label);
+      }
+      if (descriptionIds.length) row.setAttribute('aria-describedby', descriptionIds.join(' '));
       const meta = node('span', undefined, 'search-option-meta');
-      if (!direct && !category) {
+      if (channelResult) {
         const live = item.state === 'Live';
         const status = node('span', live ? 'LIVE' : offline ? item.state === 'Unavailable' ? 'Unavailable' : 'Offline' : '', live ? 'search-live' : 'search-offline');
         if (live) status.prepend(node('i', undefined, 'live-dot'));
-        meta.append(status);
+        const channelStatus = node('span', undefined, 'search-channel-status');
+        channelStatus.append(node('span', item.platform, 'search-provider ' + row.dataset.provider), status);
+        meta.append(channelStatus);
         if (live && item.viewers != null) meta.append(node('span', compactNumber(item.viewers) + ' viewers', 'search-viewers'));
+      } else {
+        const arrow = node('span', undefined, 'search-option-arrow'); arrow.append(icon('arrow-right')); meta.append(arrow);
       }
       const action = direct ? search.mode === 'download' ? 'Download' : 'Open' : category ? 'Explore' : videos ? 'Videos' : 'Watch';
-      const arrow = node('span', undefined, 'search-option-arrow'); arrow.append(icon('arrow-right')); meta.append(arrow);
       row.setAttribute('aria-label', action + ' ' + name + (item.platform ? ' on ' + item.platform : '') + (item.state === 'Live' ? ', live' + (item.viewers != null ? ', ' + Number(item.viewers).toLocaleString() + ' viewers' : '') : offline ? ', ' + item.state.toLowerCase() : ''));
       row.append(visual, copy, meta);
       row.addEventListener('pointermove', event => { if (event.pointerType === 'mouse' && search.active !== index) setSearchActive(index); });
@@ -1008,15 +1287,16 @@
       if (!search.items.length) {
         const symbol = node('span', undefined, 'search-feedback-icon'); symbol.append(icon(search.status === 'error' ? 'refresh' : 'search'));
         feedback.append(symbol, node('strong', search.status === 'error' ? 'Search couldn’t finish' : search.mode === 'categories' ? 'No categories found' : 'No channels found'));
-        feedback.append(node('p', search.message || 'Try another name or switch platforms.'));
+        feedback.append(node('p', search.message || 'Try another name.'));
         if (search.status === 'error') { const retry = button('Try again', () => { $('#query').focus(); updateSearch(true); }); retry.className = 'search-retry'; feedback.append(retry); }
       } else feedback.append(node('p', search.message));
     }
-    $('#search-announcement').textContent = ['url', 'download'].includes(search.mode) ? 'Press Enter to ' + (search.mode === 'download' ? 'download this video.' : 'open this stream or video.') : search.status === 'error' ? 'Search couldn’t finish. ' + search.message : search.items.length + (search.mode === 'categories' ? ' categories' : ' suggestions') + ' found on ' + provider + '.' + (search.items.length ? ' Use arrow keys to choose a result.' : ' Try another name or switch platforms.');
+    $('#search-announcement').textContent = direct ? 'Press Enter to ' + (search.mode === 'download' ? 'download this video.' : 'open this stream or video.') : search.status === 'error' ? 'Search couldn’t finish. ' + search.message : search.items.length + (category ? ' categories' : ' suggestions') + ' from ' + provider + '.' + (search.items.length ? ' Use arrow keys to choose a result.' : ' Try another name.');
   }
   function updateSearch(immediate = false) {
     if (search.composing) return;
-    const query = $('#query').value.trim(), mode = searchMode(query), signature = JSON.stringify([query, platform(), state.page]);
+    const query = $('#query').value.trim(), mode = searchMode(query), categoryPlatform = mode === 'categories' ? discoverPlatform() : null;
+    const signature = JSON.stringify([query, categoryPlatform, state.page]);
     if (!state.authenticated || !query || !mode) { closeSearch(); return; }
     if (signature === search.signature && search.status !== 'error' && !$('#search-dropdown').hidden) return;
     closeSearch(); search.signature = signature; search.mode = mode;
@@ -1026,7 +1306,9 @@
     search.timer = setTimeout(async () => {
       search.timer = null;
       try {
-        const result = await api(mode === 'categories' ? 'categories' : 'search', { query, platform: platform() }, controller.signal);
+        const result = mode === 'categories'
+          ? await api('categories', { query, platform: categoryPlatform }, controller.signal)
+          : await api('search', { query }, controller.signal);
         if (version !== search.version || !state.authenticated) return;
         search.status = 'ready'; search.items = [...(result.items || [])];
         if (mode === 'channels') search.items.sort((a, b) => {
@@ -1044,12 +1326,12 @@
   }
   async function chooseSearch(index) {
     const item = search.items[index]; if (!item) return;
-    const mode = search.mode, query = $('#query').value.trim(), provider = platform(); closeSearch();
+    const mode = search.mode, query = $('#query').value.trim(); closeSearch();
     if (mode === 'categories') {
       await browseCategory(item, item.name); $('#library').focus();
     } else if (mode === 'download') {
-      await api('downloads/add', { input: query, platform: provider, quality: state.settings.defaultQuality }); await load(); notice('Download queued.');
-    } else if (mode === 'url') { await openPlayer({ input: query, platform: provider }); state.players.find(p => p.id === state.selected)?.video.focus(); }
+      await api('downloads/add', { input: query, quality: state.settings.defaultQuality }); await load(); notice('Download queued.');
+    } else if (mode === 'url') { await openPlayer({ input: query }); state.players.find(p => p.id === state.selected)?.video.focus(); }
     else if (state.page === 'vods' || ['Offline', 'Unavailable'].includes(item.state)) { await browseVideos(item); $('#library').focus(); }
     else { await openPlayer({ key: item.key }); state.players.find(p => p.id === state.selected)?.video.focus(); }
   }
@@ -1074,7 +1356,7 @@
       const query = $('#query').value.trim();
       if (search.active >= 0 && !$('#search-dropdown').hidden) { await chooseSearch(search.active); return; }
       if (['url', 'download'].includes(searchMode(query))) { updateSearch(true); await chooseSearch(0); return; }
-      if (state.page !== 'discover' && state.page !== 'vods') { updateSearch(true); return; }
+      if (state.page !== 'discover') { updateSearch(true); return; }
       closeSearch();
       if (state.category) rememberNavigation();
       state.category = null; restoreDiscoveryLanguage(); $('#breadcrumbs').replaceChildren();
@@ -1084,7 +1366,7 @@
   $('#download-input').addEventListener('click', () => run(async () => {
     closeSearch();
     if (!$('#query').value.trim()) { $('#query').focus(); notice('Paste a video URL before choosing Download URL.', true); return; }
-    await api('downloads/add', { input: $('#query').value.trim(), platform: platform(), quality: state.settings.defaultQuality }); await load();
+    await api('downloads/add', { input: $('#query').value.trim(), quality: state.settings.defaultQuality }); await load();
   }));
   $('#refresh').addEventListener('click', () => run(() => load()));
   $('#more').addEventListener('click', () => run(() => load(true)));
@@ -1094,11 +1376,9 @@
     if (!state.category) { browseDirectoryLanguage = $('#discover-language').value; return; }
     state.items = []; return load();
   }));
-  $('#platform').addEventListener('change', () => run(() => {
-    const hasQuery = !!$('#query').value.trim(); closeSearch();
-    if (hasQuery && state.page !== 'discover' && state.page !== 'vods') { updateSearch(true); return; }
-    state.category = null; state.items = []; restoreDiscoveryLanguage(); $('#breadcrumbs').replaceChildren();
-    $('#vod-type').hidden = state.page !== 'vods' || platform() === 'kick'; return load();
+  $('#discover-platform').addEventListener('change', () => run(() => {
+    closeSearch();
+    state.category = null; state.items = []; restoreDiscoveryLanguage(); renderBreadcrumbs(); return load();
   }));
   $('#query').addEventListener('search', () => {
     updateSearch();
@@ -1109,7 +1389,8 @@
   $('#channel-sort').addEventListener('change', renderResults);
   function showOpenDialog() {
     closeSearch();
-    $('#open-error').textContent = ''; $('#open-platform').value = platform();
+    $('#open-error').textContent = '';
+    $('#open-platform').value = state.page === 'discover' ? discoverPlatform() : state.vodChannel?.platform ?? 'twitch';
     if (!$('#open-dialog').open) $('#open-dialog').showModal(); $('#open-query').focus();
   }
   function closeOnBackdrop(dialog, close) {
@@ -1118,6 +1399,7 @@
       if (event.target === dialog && (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom)) close();
     });
   }
+  $('#open-stream').addEventListener('click', showOpenDialog);
   $('#close-open').addEventListener('click', () => $('#open-dialog').close());
   closeOnBackdrop($('#open-dialog'), () => $('#open-dialog').close());
   bindAsyncSubmit($('#open-form'), async () => {
@@ -1327,6 +1609,11 @@
     p.video.currentTime = target;
     updateVideoControls(p);
   }
+  async function skipVideo(p, offset) {
+    const position = !p.isVod && p.archive?.available ? p.archive.duration : p.video.currentTime;
+    seekVideo(p, position + offset);
+    await commitArchiveSeek(p);
+  }
   function cancelSeekPreviewCapture(preview) {
     clearTimeout(preview.retry); preview.retry = null;
     if (preview.frameCallback != null) preview.video?.cancelVideoFrameCallback(preview.frameCallback);
@@ -1347,6 +1634,11 @@
     preview.active = false; preview.time = null;
     preview.element.hidden = true;
     releaseSeekPreviewMedia(p);
+  }
+  function clearSeekDrag(p) {
+    if (!p.seekDrag) return;
+    p.seekDrag.abort(); p.seekDrag = null;
+    $('.video-surface', p.element).classList.remove('is-seeking');
   }
   function loadSeekPreviewFrame(p) {
     const preview = p.seekPreview;
@@ -1512,7 +1804,10 @@
     $('.video-volume', root).value = video.muted ? 0 : video.volume;
     const ranges = videoSeekRanges(p), seek = $('.video-seek', root);
     seek.hidden = false; seek.disabled = !ranges.length;
-    if (!p.seekDragging) {
+    if (seek.disabled) {
+      clearSeekDrag(p); p.archiveSeek = null; hideSeekPreview(p);
+    }
+    if (!p.seekDrag) {
       seek.min = ranges[0]?.start || 0;
       seek.max = ranges.length ? ranges[ranges.length - 1].end : 1;
       seek.value = !p.isVod && p.archive?.available ? p.archiveSeek ?? p.archive.duration : video.currentTime;
@@ -1529,22 +1824,34 @@
     $('.video-time', root).textContent = p.isVod ? duration(current) + ' / ' + (total !== null ? duration(total) : '--:--:--') : behindLive > 2 ? '−' + duration(behindLive) : '';
     const span = Number(seek.max) - Number(seek.min);
     seek.style.setProperty('--seek-progress', (span > 0 ? Math.max(0, Math.min(100, (Number(seek.value) - Number(seek.min)) / span * 100)) : 0) + '%');
-    if (seek.disabled) hideSeekPreview(p);
     $('[data-action=live]', root).hidden = p.isVod && !p.liveSource;
     updateChannelClock(p);
+  }
+  let seekBarVisible = true;
+  function setSeekBarVisibility(p) {
+    const area = $('.video-seek-area', p.element);
+    if (!seekBarVisible) {
+      clearSeekDrag(p); p.archiveSeek = null; hideSeekPreview(p);
+      if (area.contains(document.activeElement)) p.video.focus({ preventScroll: true });
+    }
+    area.hidden = !seekBarVisible;
+    $('.player-controls', p.element).classList.toggle('seek-bar-hidden', !seekBarVisible);
+  }
+  function changeVolume(p, delta) {
+    p.video.volume = Math.max(0, Math.min(100, Math.round(p.video.volume * 100) + delta)) / 100;
+    updateVideoControls(p);
   }
   function setupVideoControls(p) {
     const root = p.element, video = p.video, surface = $('.video-surface', root);
     video.controls = false;
     for (const name of ['play', 'pause', 'timeupdate', 'volumechange', 'loadedmetadata', 'durationchange', 'progress', 'emptied', 'seeked']) video.addEventListener(name, () => updateVideoControls(p));
     const volume = $('.video-volume', root);
-    const setVolume = value => { video.volume = value; p.manualMuted = false; applyAudio(); updateVideoControls(p); };
-    volume.addEventListener('input', event => setVolume(Number(event.target.value)));
+    volume.addEventListener('input', event => { video.volume = Number(event.target.value); p.manualMuted = false; applyAudio(); updateVideoControls(p); });
     volume.addEventListener('wheel', event => {
       if (!event.deltaY) return;
       event.preventDefault();
-      const direction = event.deltaY < 0 ? 1 : -1;
-      setVolume(Math.max(0, Math.min(100, Math.round(video.volume * 100) + direction * 5)) / 100);
+      p.manualMuted = false; applyAudio();
+      changeVolume(p, event.deltaY < 0 ? defaultVolumeStep : -defaultVolumeStep);
     }, { passive: false });
     const seek = $('.video-seek', root);
     p.seekPreview = { element: $('.seek-preview', root), canvas: $('.seek-preview-frame', root), status: $('.seek-preview-status', root), label: $('.seek-preview-time', root), active: false };
@@ -1555,24 +1862,61 @@
       const fraction = Math.max(0, Math.min(1, (event.clientX - rect.left - 7) / (rect.width - 14)));
       showSeekPreview(p, Math.round((Number(seek.min) + fraction * (Number(seek.max) - Number(seek.min))) * 10) / 10);
     };
+    const finishSeek = (commit = true) => {
+      clearSeekDrag(p); hideSeekPreview(p);
+      if (commit) run(() => commitArchiveSeek(p));
+      else p.archiveSeek = null;
+      updateVideoControls(p);
+    };
     for (const name of ['pointerenter', 'pointermove']) seek.addEventListener(name, hoverSeek);
-    seek.addEventListener('pointerleave', () => { if (!p.seekDragging) hideSeekPreview(p); });
+    seek.addEventListener('pointerleave', () => { if (!p.seekDrag) hideSeekPreview(p); });
     seek.addEventListener('focus', () => { if (!seek.disabled) showSeekPreview(p, Number(seek.value)); });
-    seek.addEventListener('pointerdown', event => { if (seek.disabled) return; p.seekDragging = true; seek.setPointerCapture?.(event.pointerId); hoverSeek(event); });
-    for (const name of ['change', 'pointerup', 'blur']) seek.addEventListener(name, () => { p.seekDragging = false; hideSeekPreview(p); run(() => commitArchiveSeek(p)); updateVideoControls(p); });
-    for (const name of ['pointercancel', 'lostpointercapture']) seek.addEventListener(name, () => { p.seekDragging = false; p.archiveSeek = null; hideSeekPreview(p); updateVideoControls(p); });
+    seek.addEventListener('pointerdown', event => {
+      if (seek.disabled || event.button !== 0 || p.seekDrag) return;
+      const { signal } = p.seekDrag = new AbortController();
+      const { pointerId } = event;
+      const options = { capture: true, signal };
+      // The native range owns the drag. A release outside it can bypass
+      // the slider, and a release without a value change may emit no change.
+      const release = event => {
+        if (event.pointerId !== pointerId) return;
+        // Let the range process any final input from this release.
+        setTimeout(() => { if (!signal.aborted) finishSeek(); }, 0);
+      };
+      window.addEventListener('pointerup', release, options);
+      window.addEventListener('pointermove', event => {
+        if (!(event.buttons & 1)) release(event);
+      }, options);
+      window.addEventListener('pointercancel', event => {
+        if (event.pointerId === pointerId) finishSeek(false);
+      }, options);
+      window.addEventListener('blur', () => finishSeek(false), { signal });
+      surface.classList.add('is-seeking'); hoverSeek(event);
+    });
+    // A native change can arrive before pointer release if the range loses capture.
+    seek.addEventListener('change', () => { if (!p.seekDrag) finishSeek(); });
+    seek.addEventListener('blur', () => finishSeek());
     seek.addEventListener('keydown', event => { if (event.key === 'Escape') hideSeekPreview(p); });
     seek.addEventListener('input', event => { seekVideo(p, Number(event.target.value)); showSeekPreview(p, Number(event.target.value)); });
-    video.addEventListener('dblclick', () => run(() => playerAction(p, 'fullscreen')));
+    video.addEventListener('dblclick', () => run(() => toggleFullscreen(p, true)));
     video.addEventListener('keydown', event => {
       if (event.defaultPrevented || event.isComposing || event.repeat || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
-      const action = { ' ': 'play', k: 'play', f: 'fullscreen' }[event.key.toLowerCase()];
-      if (action) { event.preventDefault(); run(() => playerAction(p, action)); }
+      if (event.key.toLowerCase() === 'f') { event.preventDefault(); run(() => playerAction(p, 'fullscreen')); }
     });
-    const reveal = () => { surface.classList.remove('controls-idle'); clearTimeout(p.controlsHideTimer); p.controlsHideTimer = setTimeout(() => { if (!p.closed && !video.paused) surface.classList.add('controls-idle'); }, 2500); };
-    surface.addEventListener('pointermove', reveal); surface.addEventListener('pointerdown', reveal);
+    const hideControls = () => {
+      clearTimeout(p.controlsHideTimer);
+      if (!p.closed && !video.paused) surface.classList.add('controls-idle');
+    };
+    const reveal = () => {
+      if (p.closed) return;
+      surface.classList.remove('controls-idle'); clearTimeout(p.controlsHideTimer);
+      if (!video.paused) p.controlsHideTimer = setTimeout(hideControls, 2500);
+    };
+    for (const name of ['pointerenter', 'pointermove', 'pointerdown']) surface.addEventListener(name, reveal);
+    surface.addEventListener('pointerleave', event => { if (event.pointerType === 'mouse') hideControls(); });
     video.addEventListener('play', reveal); video.addEventListener('pause', reveal);
     updateVideoControls(p);
+    setSeekBarVisibility(p);
   }
   function playerSourceKey(source) {
     if (source.key) return 'key:' + source.key;
@@ -1692,6 +2036,7 @@
     if (pageFullscreen) video.setAttribute('controlslist', 'nofullscreen');
     $('[data-action=predictions]', element).hidden = p.platform !== 'Twitch' || p.isVod;
     video.addEventListener('loadedmetadata', () => { if ((p.resume > 0 || p.isLiveArchive) && p.resume < video.duration) video.currentTime = p.resume; });
+    for (const event of ['resize', 'emptied']) video.addEventListener(event, updateGridPictureRatio);
     video.addEventListener('playing', () => {
       $('.player-status', element).textContent = '';
       if (!p.startedSent && !p.closed) { p.startedSent = true; run(() => api('started', { player: p.id })); }
@@ -1737,6 +2082,7 @@
     return p;
   }
   function releasePlayerMedia(p) {
+    clearSeekDrag(p); p.archiveSeek = null;
     hideSeekPreview(p);
     p.hls?.destroy(); p.hls = null;
     p.video.pause(); p.video.removeAttribute('src'); p.video.load();
@@ -1766,6 +2112,7 @@
     if (failure) throw failure;
   }
   function selectPlayer(id, record = true) {
+    stopLibraryAutoScroll();
     if (record && !$('#studio').classList.contains('watching')) rememberNavigation();
     state.selected = id; $('#studio').classList.add('watching'); renderPlayers();
   }
@@ -1774,9 +2121,27 @@
     $('.never-mute', p.element).checked = enabled;
     renderPlayers();
   }
+  function fullscreenGridPlayer() {
+    const fullscreen = document.fullscreenElement;
+    return fullscreen?.matches('#players:fullscreen > .player') ? fullscreen : null;
+  }
+  function requestPlayerFullscreen(element) {
+    if (document.fullscreenElement === $('#players') && !navigator.keyboard?.lock)
+      return element.requestFullscreen({ keyboardLock: 'browser' });
+    return element.requestFullscreen();
+  }
+  async function toggleFullscreen(p, fromVideo = false) {
+    if (changingGrid || switchingPlayer) return;
+    const grid = $('#players'), fullscreen = document.fullscreenElement;
+    // The fullscreen stack retains the grid below the player.
+    if (fromVideo && state.grid && fullscreen === grid && state.players.length > 1)
+      await requestPlayerFullscreen(p.element);
+    else if (fullscreen) await document.exitFullscreen();
+    else await (state.grid ? grid : p.element).requestFullscreen();
+  }
   let switchingPlayer = false;
   async function cyclePlayer(direction) {
-    if (switchingPlayer) return;
+    if (switchingPlayer || changingGrid) return;
     const players = state.players.filter(p => !p.closed && !p.closing);
     if (!players.length) return;
     const index = players.findIndex(p => p.id === state.selected);
@@ -1786,7 +2151,7 @@
     try {
       if (moveFullscreen) await document.exitFullscreen();
       selectPlayer(next.id); next.video.focus({ preventScroll: true }); $('#watch').scrollIntoView({ block: 'start' });
-      if (moveFullscreen) await next.element.requestFullscreen();
+      if (moveFullscreen) await requestPlayerFullscreen(next.element);
     } finally { switchingPlayer = false; }
   }
   function applyAudio() {
@@ -1795,14 +2160,42 @@
       p.video.muted = p.desiredMute;
     }
   }
+  function trackGridDeviceScale() {
+    const scale = window.devicePixelRatio || 1;
+    // Chromium snaps video layers in both CSS and device pixels. Find a small step that fits both.
+    let pixelSize = 1 / scale;
+    for (let cssPixels = 1; cssPixels <= 10; cssPixels++) {
+      const devicePixels = cssPixels * scale;
+      if (Math.abs(devicePixels - Math.round(devicePixels)) < .0001) {
+        pixelSize = cssPixels;
+        break;
+      }
+    }
+    $('#players').style.setProperty('--grid-pixel-size', `${pixelSize}px`);
+    // Recreate the query when the window moves to a monitor with a different scale or zoom changes.
+    window.matchMedia?.(`(resolution: ${scale}dppx)`).addEventListener('change', trackGridDeviceScale, { once: true });
+  }
+  trackGridDeviceScale();
+  function updateGridPictureRatio() {
+    if (!state.grid || state.players.length < 3) return;
+    const ratios = state.players.map(p => p.video)
+      .filter(video => video.videoWidth && video.videoHeight)
+      .map(video => video.videoWidth / video.videoHeight).sort((a, b) => a - b);
+    const grid = $('#players');
+    // Use the middle source ratio so an unusually wide or tall stream cannot size the whole grid.
+    if (ratios.length) grid.style.setProperty('--grid-picture-ratio', ratios[Math.floor((ratios.length - 1) / 2)]);
+    else grid.style.removeProperty('--grid-picture-ratio');
+  }
   function renderPlayers() {
     $('#watch').hidden = !state.players.length;
     if (!state.players.length) $('#studio').classList.remove('watching', 'theater');
     const grid = state.grid;
     $('#open-player-count').textContent = state.players.length ? String(state.players.length) : '';
     $('#players').classList.toggle('grid', grid);
+    $('#players').classList.toggle('multi-row', grid && state.players.length > 2);
     $('#players').style.setProperty('--grid-rows', String(Math.max(1, Math.ceil(state.players.length / 2))));
     $('#players').style.setProperty('--grid-count', String(Math.max(1, state.players.length)));
+    updateGridPictureRatio();
     for (const p of state.players) {
       // Keep every media row ahead of the channel information in multi-stream.
       // Move the existing section so its content and handlers survive toggling.
@@ -1826,9 +2219,9 @@
   }
   let changingGrid = false;
   async function setGrid(grid) {
-    if (changingGrid) return;
-    const fullscreen = document.fullscreenElement;
-    const moveFullscreen = fullscreen === $('#players') || state.players.some(p => p.element === fullscreen);
+    if (changingGrid || switchingPlayer || grid === state.grid) return;
+    const gridElement = $('#players'), fullscreen = document.fullscreenElement;
+    const moveFullscreen = fullscreen === gridElement || state.players.some(p => p.element === fullscreen);
     state.grid = grid;
     renderPlayers();
     if (!moveFullscreen) return;
@@ -1837,7 +2230,9 @@
     for (const p of state.players) $('.multistream-toggle', p.element).disabled = true;
     try {
       await document.exitFullscreen();
-      const target = grid ? $('#players') : state.players.find(p => p.id === state.selected)?.element;
+      // Changing layouts replaces the fullscreen stack.
+      if (fullscreen !== gridElement && document.fullscreenElement === gridElement) await document.exitFullscreen();
+      const target = grid ? gridElement : state.players.find(p => p.id === state.selected)?.element;
       if (target) await target.requestFullscreen();
     } finally {
       changingGrid = false;
@@ -1866,7 +2261,7 @@
     follow.disabled = unfollow.disabled = !!p.followBusy;
     if (typeof p.following === 'boolean') follow.setAttribute('aria-pressed', String(p.following));
     else follow.removeAttribute('aria-pressed');
-    let label = p.following ? 'Following' : 'Follow';
+    let label = p.following === true ? 'Following' : p.following === false ? 'Follow' : 'Follow…';
     if (p.followStatusAbort) label = 'Checking…';
     else if (p.followBusy) label = p.followOperation === 'unfollow' ? 'Unfollowing…' : 'Following…';
     $('.follow-label', follow).textContent = label;
@@ -1928,7 +2323,7 @@
         if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(p.channelUrl); notice('Channel link copied.'); }
         else notice(p.channelUrl);
         break;
-      case 'back': seekVideo(p, !p.isVod && p.archive?.available ? p.archive.duration - 30 : video.currentTime - 30); await commitArchiveSeek(p); break;
+      case 'back': await skipVideo(p, -30); break;
       case 'reload': await openPlayer({ ...p.source, quality: p.quality, ...(p.isLiveArchive ? { startPosition: video.currentTime } : {}) }, p); break;
       case 'stop': {
         p.reloadCanceled = true;
@@ -1944,7 +2339,7 @@
         if (failure) throw failure;
         break;
       }
-      case 'forward': if (p.isVod || !p.archive?.available) seekVideo(p, video.currentTime + 30); break;
+      case 'forward': await skipVideo(p, 30); break;
       case 'live':
         if (p.isVod && p.liveSource) await openPlayer(p.liveSource, p);
         else {
@@ -1961,7 +2356,7 @@
         if (!replay.available) { notice(replay.message); break; }
         await openPlayer({ key: replay.key, quality: p.quality }, p); break;
       }
-      case 'fullscreen-menu': case 'fullscreen': if (document.fullscreenElement) await document.exitFullscreen(); else await (state.grid ? $('#players') : p.element).requestFullscreen(); break;
+      case 'fullscreen-menu': case 'fullscreen': await toggleFullscreen(p); break;
       case 'pip': await video.requestPictureInPicture(); break;
       case 'chat': $('.chat', p.element).hidden = !$('.chat', p.element).hidden; $('[data-action=chat]', p.element).setAttribute('aria-pressed', String(!$('.chat', p.element).hidden)); break;
       case 'clip': {
@@ -2277,7 +2672,23 @@
     if (window.ResizeObserver) { p.chatResizeObserver = new ResizeObserver(() => sizeChat(p)); p.chatResizeObserver.observe($('.video-surface', p.element)); }
   }
   window.addEventListener('resize', () => state.players.forEach(sizeChat));
-  document.addEventListener('fullscreenchange', () => state.players.forEach(sizeChat));
+  let fullscreenEscapeLockRequested = false;
+  document.addEventListener('fullscreenchange', () => {
+    const player = fullscreenGridPlayer(), keyboard = navigator.keyboard;
+    if (keyboard?.lock && !!player !== fullscreenEscapeLockRequested) {
+      fullscreenEscapeLockRequested = !!player;
+      // Chromium's Keyboard API lets a short Escape dismiss only the player.
+      if (player) keyboard.lock(['Escape']).catch(() => {});
+      else keyboard.unlock();
+    }
+    for (const p of state.players) {
+      const control = $('[data-action=fullscreen]', p.element);
+      const label = player === p.element ? 'Back to fullscreen multiview' : 'Fullscreen';
+      control.title = label;
+      control.setAttribute('aria-label', label);
+      sizeChat(p);
+    }
+  });
   function updateRangeValues() { $('#chat-size-value').textContent = $('#chat-size').value + 'px'; $('#chat-opacity-value').textContent = $('#chat-opacity').value + '%'; }
   $('#chat-size').addEventListener('input', updateRangeValues); $('#chat-opacity').addEventListener('input', updateRangeValues);
   const preferenceIds = new Map([
@@ -2290,10 +2701,11 @@
   let profileSaveRevision = 0, profileSavedRevision = 0, profileSaveError = '', profileFailureNotice = false;
   const profileDirtyKeys = new Set();
   function preferenceValues() {
+    const amounts = Object.fromEntries(Object.values(hotkeyAmounts).map(({ setting }) => [setting, preferences[setting] ?? null]));
     return { quality: $('#default-quality').value, lowLatency: $('#low-latency').checked,
       layout: $('#chat-layout').value, size: Number($('#chat-size').value), opacity: Number($('#chat-opacity').value),
       keepInactive: $('#keep-inactive').checked, pauseInactiveVod: $('#pause-inactive-vod').checked,
-      hotkeys: { ...hotkeys } };
+      hotkeys: { ...hotkeyOverrides }, ...amounts };
   }
   function updatePreferencesStatus() {
     $('#retry-settings').hidden = !profileSaveError;
@@ -2339,7 +2751,8 @@
           if (JSON.stringify(current[key]) === JSON.stringify(value)) profileDirtyKeys.delete(key);
         profileSavedRevision = revision; profileSaveError = '';
         updatePreferencesStatus();
-        $('#hotkey-status').textContent = 'Shortcuts saved to your account.';
+        if (patch.hotkeys && !profileDirtyKeys.has('hotkeys'))
+          $('#hotkey-status').textContent = 'Shortcuts saved to your account.';
         if (profileFailureNotice) { notice('Preferences saved.'); profileFailureNotice = false; }
       }
     })();
@@ -2366,12 +2779,29 @@
   $('#retry-settings').addEventListener('click', () => {
     if (profileSaveError) queuePreferencesSave(null, 0);
   });
-  let lastDownloadRefresh = 0;
+  let lastDownloadRefresh = 0, lastDesktopHotkeysRefresh = 0, desktopHotkeyRequest = null;
+  async function refreshDesktopHotkeys() {
+    if (!state.settings?.desktopHotkeys || document.hidden || desktopHotkeyRequest ||
+        Date.now() - lastDesktopHotkeysRefresh < 5000) return;
+    lastDesktopHotkeysRefresh = Date.now();
+    const controller = desktopHotkeyRequest = new AbortController();
+    try {
+      const shortcuts = await request('hotkeys', {}, 'POST', controller.signal);
+      if (shortcuts.bindings && JSON.stringify(shortcuts) !== JSON.stringify(desktopShortcuts)) {
+        desktopShortcuts = shortcuts;
+        updateHotkeys();
+      }
+    } catch { /* Keep the last desktop bindings while the next refresh retries. */ }
+    finally { if (desktopHotkeyRequest === controller) desktopHotkeyRequest = null; }
+  }
   setInterval(() => {
     for (const p of state.players) { pumpVodChat(p); scheduleChatPoll(p); loadLiveArchive(p); }
   }, 250);
   setInterval(async () => {
-    if (!state.authenticated || state.polling) return;
+    if (!state.authenticated) return;
+    void refreshDesktopHotkeys();
+    void refreshFollowingPins();
+    if (state.polling) return;
     const version = state.sessionVersion;
     state.polling = true;
     try {
@@ -2395,10 +2825,45 @@
   document.addEventListener('visibilitychange', () => { if (document.hidden) run(flushSessionState); else refreshLastLiveLabels(); });
   window.addEventListener('pagehide', () => run(flushSessionState));
 
+  let libraryAutoScroll = null;
+  function stopLibraryAutoScroll() {
+    if (!libraryAutoScroll) return;
+    libraryAutoScroll.abort(); libraryAutoScroll = null;
+    document.body.classList.remove('library-auto-scroll');
+  }
+  $('#library').addEventListener('pointerdown', event => {
+    const page = document.scrollingElement;
+    if (event.button !== 1 || !page || page.scrollHeight <= page.clientHeight ||
+        event.target.closest('a,button,input,textarea,select,summary,[contenteditable]')) return;
+    event.preventDefault();
+    stopLibraryAutoScroll();
+    const { signal } = libraryAutoScroll = new AbortController();
+    const anchor = event.clientY;
+    let y = anchor, lastFrame = performance.now();
+    document.body.classList.add('library-auto-scroll');
+    window.addEventListener('pointermove', event => {
+      if (!(event.buttons & 4)) stopLibraryAutoScroll();
+      else y = event.clientY;
+    }, { signal });
+    for (const type of ['pointerup', 'pointercancel', 'blur']) window.addEventListener(type, stopLibraryAutoScroll, { signal });
+    const scroll = time => {
+      if (signal.aborted) return;
+      const distance = y - anchor;
+      const speed = Math.min(2600, Math.max(0, Math.abs(distance) - 8) * 18) * Math.sign(distance);
+      if (speed) window.scrollBy(0, speed * Math.min(0.05, (time - lastFrame) / 1000));
+      lastFrame = time;
+      requestAnimationFrame(scroll);
+    };
+    requestAnimationFrame(scroll);
+  });
+
   function hotkeyActionForEvent(event, binding) {
     if ($('#open-dialog').open || $('#channels-dialog').open) return null;
     if (event.target?.closest?.('.chat-move,.chat-resize') && ['Home', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(binding?.key)) return null;
-    if (binding?.key === 'Escape' && state.players.some(p => $('.chat', p.element).classList.contains('is-moving') || $('.chat', p.element).classList.contains('is-resizing'))) return null;
+    if (binding?.key === 'Escape') {
+      if (state.players.some(p => $('.chat', p.element).classList.contains('is-moving') || $('.chat', p.element).classList.contains('is-resizing'))) return null;
+      if (!binding.ctrl && !binding.alt && !binding.shift && !binding.meta && fullscreenGridPlayer()) return 'dismiss';
+    }
     const editing = element => {
       // Switches keep focus after a click, but do not use navigation shortcut keys.
       // Keep text fields, sliders, radio groups and selects in control of their keys.
@@ -2406,17 +2871,35 @@
       return element?.matches?.('select,textarea,[role="textbox"]') || element?.isContentEditable;
     };
     if (editing(event.target) || editing(document.activeElement)) return null;
-    const action = hotkeyActions.find(action => sameHotkey(hotkeys[action.id], binding));
-    return action && (action.id === 'back' || state.players.some(p => p.id === state.selected && !p.closed && !p.closing)) ? action : null;
+    if (binding && !binding.ctrl && !binding.alt && !binding.meta && !binding.shift && ['Space', 'Enter'].includes(binding.key) &&
+        document.activeElement?.closest?.('button,a[href],summary,input')) return null;
+    const action = Object.keys(hotkeys).find(id => sameHotkey(hotkeys[id], binding, event.code));
+    if (action === 'back' || action === 'toggleSeekBar') return action;
+    if (action === 'dismiss') return libraryAutoScroll || document.fullscreenElement ? action : null;
+    const p = state.players.find(p => p.id === state.selected && !p.closed && !p.closing);
+    if (!p) return null;
+    if (action === 'togglePause' && (p.stopped || p.reloading)) return null;
+    if (['skipBackward', 'skipForward'].includes(action) && (p.reloading || p.seekDrag || !videoSeekRanges(p).length)) return null;
+    return action;
   }
   function runHotkeyAction(action) {
     const p = state.players.find(p => p.id === state.selected && !p.closed && !p.closing);
     run(async () => {
-      switch (action.id) {
+      switch (action) {
         case 'back': await goBack(); break;
+        case 'dismiss':
+          if (libraryAutoScroll) stopLibraryAutoScroll();
+          else if (document.fullscreenElement) await document.exitFullscreen();
+          break;
         case 'nextTab': await cyclePlayer(1); break;
         case 'previousTab': await cyclePlayer(-1); break;
         case 'grid': await setGrid(!state.grid); break;
+        case 'toggleSeekBar': seekBarVisible = !seekBarVisible; state.players.forEach(setSeekBarVisibility); break;
+        case 'togglePause': await playerAction(p, 'play'); break;
+        case 'skipBackward': await skipVideo(p, -hotkeyAmount(action)); break;
+        case 'skipForward': await skipVideo(p, hotkeyAmount(action)); break;
+        case 'volumeUp': changeVolume(p, hotkeyAmount(action)); break;
+        case 'volumeDown': changeVolume(p, -hotkeyAmount(action)); break;
         case 'keepAudio': setKeepAudio(p, !p.neverMute); break;
         case 'mute': await playerAction(p, 'mute'); break;
       }
@@ -2429,7 +2912,7 @@
     const action = hotkeyActionForEvent(event, hotkeyFromEvent(event));
     if (!action) return;
     event.preventDefault(); event.stopPropagation();
-    if (!event.repeat) runHotkeyAction(action);
+    if (!event.repeat || action === 'volumeUp' || action === 'volumeDown') runHotkeyAction(action);
   }, true);
   const handledMouseHotkeys = new Set();
   for (const type of ['pointerdown', 'mousedown', 'mouseup', 'auxclick']) document.addEventListener(type, event => {

@@ -104,7 +104,7 @@ internal static partial class ApplicationTestCatalog
                                 var value = ResponsiveSearchText(text);
                                 return text.IsVisible &&
                                     (value == result.DisplayName || value == result.CategoryName ||
-                                     value == result.StatusText || value == result.StateText ||
+                                     value == result.Title || value == result.StateText ||
                                      (result.HasViewerCount && value == result.ViewerCountText));
                             })
                             .ToArray();
@@ -114,7 +114,7 @@ internal static partial class ApplicationTestCatalog
                             var value = ResponsiveSearchText(text);
                             RecordResponsiveClippingFailure(failures, context + $" '{value}'", () =>
                             {
-                                if (value == result.DisplayName || value == result.CategoryName || value == result.StatusText)
+                                if (value == result.DisplayName || value == result.CategoryName || value == result.Title)
                                 {
                                     Assert.True(text.ActualWidth >= 70,
                                         $"Search text '{value}' has only {text.ActualWidth:0.##} DIPs available.");

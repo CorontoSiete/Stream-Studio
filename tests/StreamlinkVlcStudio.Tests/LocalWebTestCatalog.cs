@@ -11,10 +11,12 @@ internal static partial class LocalWebTestCatalog
         ("discovery language: web categories persist by platform and account across server restarts", DiscoveryLanguagePersistenceAsync),
         ("discovery language: overlapping saves preserve the latest choice and skip unchanged writes", DiscoveryLanguageConcurrentSavesAsync),
         ("local web: LAN policy rejects public, other-subnet, mapped and special addresses", NetworkAsync),
+        ("local web: startup only selects the saved LAN interface, address and subnet", SavedNetworkAsync),
         ("local web: password attempts have per-device and global budgets", LoginBudgetAsync),
         ("local web: device sessions expire and cannot move to another IP", SessionsAsync),
         ("local web: account storage persists hashes and isolates preferences", UserAccountsAsync),
         ("local web: Unicode shortcuts persist and malformed shortcut keys are rejected", UnicodeShortcutsAsync),
+        ("local web: desktop shortcuts stay current and legacy web choices migrate", DesktopShortcutsAsync),
         ("local web: login pipeline enforces origin, host, peer, cookies and CSRF", LoginPipelineAsync),
         ("local web: desktop browser launch opens the sign-in page without credentials", DesktopLaunchAsync),
         ("local web: server window follows every app theme while open", ServerWindowThemeAsync),
@@ -36,7 +38,9 @@ internal static partial class LocalWebTestCatalog
         ("local web: real workspace shares VOD history and isolates players", WorkspaceAsync),
         ("local web: Kick VOD identities share desktop watch progress and preserve metadata", VodIdentityAsync),
         ("local web: offline last-live history preserves verified timestamps without blocking commands", FollowingLastLiveAsync),
-        ("local web: offline last-live browser updates cards and sidebar without losing focus", BrowserFollowingLastLiveAsync),
+        ("local web: offline pins sync with the desktop and persist across restarts", FollowingPinsAsync),
+        ("local web: offline pins use refreshed desktop channel status in an existing session", FollowingPinStatusChangesAsync),
+        ("local web: offline last-live and pins update browser cards without losing focus", BrowserFollowingLastLiveAsync),
         ("local web: category viewer totals are validated, bounded, cancellable and independent of commands", CategoryViewersAsync),
         ("local web: category artwork rejects Twitch missing covers and recovers after refresh", CategoryArtworkAsync),
         ("local web: category artwork validates bytes when Twitch mislabels content types", CategoryArtworkFormatsAsync),
@@ -46,6 +50,7 @@ internal static partial class LocalWebTestCatalog
         .. LiveCategoryArtworkTests,
         ("local web: follow status is verified, read-only, nonblocking and survives late responses", FollowStatusAsync),
         ("local web: profile pictures survive library, playback, history and cached image responses", ProfileImagesAsync),
+        ("local web: channel search mixes providers and fills Kick live broadcast metadata", ChannelSearchAsync),
         ("local web: channel profiles include real metadata and panels with safe public links", ChannelProfileAsync),
         ("local web: panel-only profiles preserve the actual introduction after sponsor panels", PanelOnlyChannelProfileAsync),
         ("local web: provider badges and animated emotes resolve without exposing host paths", ChatPresentationAsync),
@@ -56,6 +61,7 @@ internal static partial class LocalWebTestCatalog
         ("local web: full live archive uses measured playlist history and scoped growing playback", LiveArchiveWorkspaceAsync),
         ("local web: seek previews retain scoped live archive media, refresh and release it", LiveArchivePreviewAsync),
         ("local web: full live archive validates complete playlists and preserves normal VODs", LiveArchivePlaylistsAsync),
+        ("local web: full live archive refresh measures the pinned rendition", LiveArchivePinnedRenditionAsync),
         ("local web: full live archive lookup never blocks commands and closes with its player", LiveArchiveCancellationAsync),
         ("local web: full live archive subscriber fallback refreshes sanitized remote playlists", LiveArchiveFallbackAsync),
         ("local web: full live archive browser decodes earlier history, grows and returns live", BrowserFullArchiveAsync),
@@ -92,6 +98,21 @@ internal static partial class LocalWebTestCatalog
         Assert.True(auth.TryConsumeLoginAttempt(peer));
         for (var i = 3; i <= 31; i++) Assert.True(auth.TryConsumeLoginAttempt(IPAddress.Parse($"192.168.1.{i}")));
         Assert.Equal(false, auth.TryConsumeLoginAttempt(IPAddress.Parse("192.168.1.100")));
+        return Task.CompletedTask;
+    }
+
+    private static Task SavedNetworkAsync()
+    {
+        var saved = new LocalWebServerEndpoint("saved-interface", "192.168.10.5", 24, 18444);
+        var selected = new LocalWebInterface(saved.InterfaceId, "Ethernet", IPAddress.Parse(saved.Address), saved.PrefixLength);
+        LocalWebInterface[] otherNetworks =
+        [
+            selected with { Id = "other-interface" },
+            selected with { Address = IPAddress.Parse("192.168.10.6") },
+            selected with { PrefixLength = 16 }
+        ];
+        Assert.Equal(selected, MainWindow.FindLocalWebNetwork([.. otherNetworks, selected], saved));
+        Assert.True(MainWindow.FindLocalWebNetwork(otherNetworks, saved) is null);
         return Task.CompletedTask;
     }
 

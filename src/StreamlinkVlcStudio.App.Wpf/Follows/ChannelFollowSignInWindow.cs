@@ -9,7 +9,7 @@ namespace StreamlinkVlcStudio.App.Wpf.Follows;
 internal static class ChannelFollowSignInWindow
 {
     internal static async Task<bool> ShowAsync(Window owner, CoreWebView2Environment environment,
-        StreamTarget channel, CancellationToken cancellationToken)
+        StreamTarget channel, bool following, bool useConnectedAccount, CancellationToken cancellationToken)
     {
         owner.Dispatcher.VerifyAccess();
         cancellationToken.ThrowIfCancellationRequested();
@@ -19,9 +19,13 @@ internal static class ChannelFollowSignInWindow
         var accepted = false;
         var closed = false;
         using var browser = new WebView2();
+        var action = following ? "follow" : "unfollow";
+        var signInInstruction = useConnectedAccount
+            ? "Sign in with the Twitch account connected in Settings. If a different account is signed in, sign out of it first."
+            : $"Sign in to {channel.Platform} below.";
         var status = new TextBlock
         {
-            Text = $"Sign in to {channel.Platform} below, then select Continue to follow {channel.Channel} with this website account.",
+            Text = $"{signInInstruction} Then select Continue to {action} {channel.Channel}.",
             TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(12)
         };
@@ -39,7 +43,7 @@ internal static class ChannelFollowSignInWindow
         var window = new Window
         {
             Owner = owner,
-            Title = $"Sign in to {channel.Platform} to follow {channel.Channel}",
+            Title = $"Sign in to {channel.Platform} to {action} {channel.Channel}",
             Width = 1100,
             Height = 800,
             MinWidth = 640,
@@ -68,7 +72,7 @@ internal static class ChannelFollowSignInWindow
             catch (OperationCanceledException) when (token.IsCancellationRequested) { }
             catch (Exception)
             {
-                if (!closed) status.Text = "The sign-in browser could not start. Install or repair Microsoft Edge WebView2 Runtime, then retry Follow.";
+                if (!closed) status.Text = $"The sign-in browser could not start. Install or repair Microsoft Edge WebView2 Runtime, then retry {action}.";
             }
         };
         using var registration = token.Register(() => owner.Dispatcher.BeginInvoke(() => { if (!closed) window.Close(); }));
