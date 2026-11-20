@@ -66,6 +66,26 @@ for (const destination of ['settings', 'disconnect']) test(`${destination} cance
   } finally { f.disconnect(); }
 });
 
+test('navigation cancels a busy response retry without holding the next page in the queue', async ({ mock }) => {
+  mock.timers.enable({ apis: ['setTimeout'] });
+  const f = fixture({ onRequest: url => {
+    if (url === '/api/following') return { status: 429, ok: false, text: async () => '' };
+    if (url === '/api/downloads') return json({ items: [{ id: 'saved', state: 'Completed' }] });
+  } });
+  try {
+    const oldPage = f.load();
+    await turn();
+    const nextPage = f.showPage('downloads');
+    await turn();
+    assert.equal(f.state.items[0]?.id, 'saved', 'the new page loads without advancing the retry timer');
+    await Promise.all([oldPage, nextPage]);
+    assert.equal(f.requests.filter(request => request.url === '/api/following').length, 1);
+  } finally {
+    f.disconnect();
+    mock.timers.tick(1000);
+  }
+});
+
 test('selecting the current page preserves its filters and cards until explicit refresh', async () => {
   const f = fixture({ onRequest: url => url === '/api/following' ? json({ items: [] }) : undefined });
   try {
@@ -100,4 +120,64 @@ test('a canceled provider that returns late cannot replace the selected page', a
     assert.equal(f.state.items.length, 1);
     assert.equal(f.state.items[0].id, 'new');
   } finally { release?.(); f.disconnect(); }
+});
+
+test('Discover and other notices expire, including after replacement or manual dismissal', async ({ mock }) => {
+  mock.timers.enable({ apis: ['setTimeout'] });
+  const message = 'Loaded 50 categories from Twitch.';
+  const f = fixture({ onRequest: url => url === '/api/categories'
+    ? json({ items: [{ id: '1', name: 'Category' }], message })
+    : undefined });
+  const box = f.document.querySelector('#notice');
+  try {
+    await f.showPage('discover');
+    assert.equal(box.children[0]?.textContent, message);
+    mock.timers.tick(4999);
+    assert.equal(box.hidden, false);
+    mock.timers.tick(1);
+    assert.equal(box.hidden, true);
+    assert.equal(box.childElementCount, 0);
+
+    await f.load();
+    mock.timers.tick(4000);
+    const channelUrl = 'https://www.twitch.tv/streamer';
+    await f.playerAction({ channelUrl }, 'share');
+    mock.timers.tick(1000);
+    assert.equal(box.hidden, false, 'the replaced Discover notice cannot dismiss the share notice');
+    assert.equal(box.children[0]?.textContent, channelUrl);
+    box.children[1].dispatchEvent(new Event('click'));
+    assert.equal(box.hidden, true);
+
+    await f.load();
+    mock.timers.tick(4000);
+    assert.equal(box.hidden, false, 'the dismissed share notice cannot dismiss the new Discover notice');
+    mock.timers.tick(1000);
+    assert.equal(box.hidden, true);
+  } finally { f.disconnect(); }
+});
+
+test('repeated background errors let a notification expire and stay dismissed between reminders', async ({ mock }) => {
+  mock.timers.enable({ apis: ['setTimeout'] });
+  const f = fixture();
+  const box = f.document.querySelector('#notice');
+  f.target({ isVod: true });
+  try {
+    const player = await f.open();
+    f.failProgressSave(true);
+    await f.tick(2000);
+    assert.equal(box.children[0]?.textContent, 'Progress save failed.');
+    assert.equal(box.classList.contains('error'), true);
+
+    mock.timers.tick(6000);
+    assert.equal(box.hidden, false, 'errors allow extra time to read');
+    player.lastSaved = 0;
+    await f.tick(2000);
+    mock.timers.tick(4000);
+    assert.equal(box.hidden, true, 'a failed background retry does not extend the visible error');
+
+    player.lastSaved = 0;
+    await f.tick(2000);
+    assert.equal(f.requests.filter(request => request.url === '/api/progress').length, 3);
+    assert.equal(box.hidden, true, 'the next retry does not immediately reopen the dismissed error');
+  } finally { f.disconnect(); }
 });

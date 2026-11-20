@@ -10,6 +10,7 @@ using StreamlinkVlcStudio.Core.Models;
 using StreamlinkVlcStudio.Core.Services;
 using StreamlinkVlcStudio.Infrastructure.Http;
 using StreamlinkVlcStudio.Infrastructure.Io;
+using StreamlinkVlcStudio.Workspace.Notifications;
 
 namespace StreamlinkVlcStudio.App.Wpf.Notifications;
 

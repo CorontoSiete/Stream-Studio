@@ -4,6 +4,11 @@ public sealed record QualityOption(string Id, string DisplayName)
 {
     public override string ToString() => DisplayName;
 
+    public static bool IsAudioOnly(string? quality) =>
+        string.Equals(quality, "audio", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(quality, "audio_only", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(quality, "Audio Only", StringComparison.OrdinalIgnoreCase);
+
     public static IReadOnlyList<QualityOption> Defaults { get; } =
         Array.AsReadOnly<QualityOption>(
         [

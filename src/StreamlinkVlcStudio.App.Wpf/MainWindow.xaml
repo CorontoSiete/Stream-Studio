@@ -5,8 +5,7 @@
         xmlns:converters="clr-namespace:StreamlinkVlcStudio.App.Wpf.Converters"
         xmlns:models="clr-namespace:StreamlinkVlcStudio.Core.Models;assembly=StreamlinkVlcStudio.Core"
         xmlns:settings="clr-namespace:StreamlinkVlcStudio.Core.Settings;assembly=StreamlinkVlcStudio.Core"
-        xmlns:vm="clr-namespace:StreamlinkVlcStudio.App.Wpf.ViewModels"
-        xmlns:primitives="clr-namespace:System.Windows.Controls.Primitives;assembly=PresentationFramework"
+        xmlns:vm="clr-namespace:StreamlinkVlcStudio.Workspace.ViewModels;assembly=StreamlinkVlcStudio.Workspace"
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
         Title="Stream Studio"
         Icon="/StreamStudio;component/Assets/Studio.ico"
@@ -505,6 +504,10 @@
             <Setter Property="BorderBrush" Value="{DynamicResource StudioBorderBrush}" />
             <Setter Property="BorderThickness" Value="1" />
         </Style>
+        <Style x:Key="HomeCardArtwork" TargetType="{x:Type controls:RoundedClipBorder}">
+            <Setter Property="CornerRadius" Value="11,11,0,0" />
+            <Setter Property="Background" Value="{DynamicResource StudioSurface2Brush}" />
+        </Style>
 
         <Style x:Key="HomeRefreshButton" TargetType="Button">
             <Setter Property="Background" Value="{DynamicResource StudioSurface1Brush}" />
@@ -513,10 +516,9 @@
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="FontFamily" Value="Segoe MDL2 Assets" />
             <Setter Property="FontSize" Value="14" />
-            <Setter Property="Width" Value="36" />
-            <Setter Property="Height" Value="36" />
-            <Setter Property="MinHeight" Value="0" />
-            <Setter Property="Padding" Value="0" />
+            <Setter Property="MinWidth" Value="44" />
+            <Setter Property="Height" Value="44" />
+            <Setter Property="Padding" Value="12,0" />
             <Setter Property="Cursor" Value="Hand" />
             <Setter Property="FocusVisualStyle" Value="{StaticResource StudioFocusVisualStyle}" />
             <Setter Property="Template">
@@ -526,7 +528,7 @@
                                 Background="{TemplateBinding Background}"
                                 BorderBrush="{TemplateBinding BorderBrush}"
                                 BorderThickness="{TemplateBinding BorderThickness}"
-                                CornerRadius="6">
+                                CornerRadius="{StaticResource StudioCornerSmall}">
                             <ContentPresenter HorizontalAlignment="Center"
                                               VerticalAlignment="Center"
                                               Margin="{TemplateBinding Padding}" />
@@ -552,8 +554,8 @@
         <Style x:Key="HomeSegmentButton" TargetType="Button">
             <Setter Property="Background" Value="{DynamicResource StudioSurface0Brush}" />
             <Setter Property="Foreground" Value="{DynamicResource StudioTextSecondaryBrush}" />
-            <Setter Property="BorderBrush" Value="{DynamicResource StudioBorderBrush}" />
-            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="1" />
             <Setter Property="MinWidth" Value="80" />
             <Setter Property="Height" Value="34" />
             <Setter Property="MinHeight" Value="0" />
@@ -760,6 +762,12 @@
             </Setter>
         </Style>
 
+        <Style x:Key="LiveStreamCardButton" TargetType="Button" BasedOn="{StaticResource HomeCardButton}">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="MinHeight" Value="0" />
+        </Style>
+
         <Style x:Key="VodCardDownloadProgress" TargetType="ProgressBar">
             <Setter Property="Height" Value="3" />
             <Setter Property="Minimum" Value="0" />
@@ -888,7 +896,7 @@
         </Style>
 
         <DataTemplate x:Key="LiveStreamCardTemplate" DataType="{x:Type vm:LiveStreamCardViewModel}">
-            <Button Style="{StaticResource HomeCardButton}" Command="{Binding OpenCommand}"
+            <Button Style="{StaticResource LiveStreamCardButton}" Command="{Binding OpenCommand}"
                     AutomationProperties.Name="{Binding DisplayName}">
                 <Button.ContextMenu>
                     <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
@@ -904,7 +912,7 @@
                         <RowDefinition Height="*" />
                     </Grid.RowDefinitions>
                     <controls:AspectRatioDecorator>
-                    <controls:RoundedClipBorder CornerRadius="11,11,0,0" Background="{DynamicResource StudioSurface2Brush}">
+                    <controls:RoundedClipBorder Style="{StaticResource HomeCardArtwork}">
                         <Grid>
                             <TextBlock x:Name="LiveCardPlaceholder" Text="&#xE714;" FontFamily="Segoe MDL2 Assets" FontSize="30"
                                        Foreground="{DynamicResource StudioTextDimBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
@@ -933,29 +941,28 @@
                         </Grid>
                     </controls:RoundedClipBorder>
                     </controls:AspectRatioDecorator>
-                    <StackPanel Grid.Row="1" Margin="14,12,14,14">
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="42" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-                            <controls:RoundedClipBorder Width="32" Height="32" CornerRadius="16" VerticalAlignment="Center" HorizontalAlignment="Left"
-                                                        Background="{DynamicResource StudioSurface3Brush}">
-                                <Grid>
-                                    <Path x:Name="ProfileAvatarPlaceholder" Style="{StaticResource StudioLineIcon}" Data="{StaticResource StudioIconAccount}"
-                                          Width="14" Height="14" HorizontalAlignment="Center" Stroke="{DynamicResource StudioTextMutedBrush}" Visibility="Collapsed" />
-                                    <controls:AnimatedEmoteImage x:Name="ProfileAvatarImage" ImageUrl="{Binding ProfileImageUrl}" MaxImageBytes="8388608" Stretch="UniformToFill" />
-                                </Grid>
-                            </controls:RoundedClipBorder>
-                            <TextBlock Grid.Column="1" Text="{Binding DisplayName}" FontSize="15" FontWeight="SemiBold"
-                                       TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
-                        </Grid>
-                        <controls:EmojiTextBlock SourceText="{Binding Title}" FontSize="13" Foreground="{DynamicResource StudioTextSecondaryBrush}"
-                                   TextWrapping="Wrap" TextTrimming="CharacterEllipsis" Height="36" MaxHeight="36" LineHeight="18"
-                                   Margin="0,10,0,0" />
-                        <TextBlock Text="{Binding MetadataText, Converter={StaticResource StudioMetadata}}" FontSize="12" Foreground="{DynamicResource StudioTextMutedBrush}"
-                                   TextTrimming="CharacterEllipsis" ToolTip="{Binding MetadataText}" Margin="0,10,0,0" />
-                    </StackPanel>
+                    <Grid Grid.Row="1" Margin="4,11,6,10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="44" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <controls:RoundedClipBorder Style="{StaticResource HomeProfileAvatarStyle}"
+                                                    VerticalAlignment="Top" HorizontalAlignment="Left">
+                            <Grid>
+                                <Path x:Name="ProfileAvatarPlaceholder" Style="{StaticResource StudioLineIcon}" Data="{StaticResource StudioIconAccount}"
+                                      Width="14" Height="14" HorizontalAlignment="Center" Stroke="{DynamicResource StudioTextMutedBrush}" Visibility="Collapsed" />
+                                <controls:AnimatedEmoteImage x:Name="ProfileAvatarImage" ImageUrl="{Binding ProfileImageUrl}" MaxImageBytes="8388608" Stretch="UniformToFill" />
+                            </Grid>
+                        </controls:RoundedClipBorder>
+                        <StackPanel Grid.Column="1">
+                            <TextBlock Text="{Binding DisplayName}" FontSize="16" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                            <controls:EmojiTextBlock SourceText="{Binding Title}" FontSize="13" Foreground="{DynamicResource StudioTextSecondaryBrush}"
+                                       TextWrapping="Wrap" TextTrimming="CharacterEllipsis" Height="36" MaxHeight="36" LineHeight="18"
+                                       Margin="0,4,0,0" />
+                            <TextBlock Text="{Binding MetadataText, Converter={StaticResource StudioMetadata}}" FontSize="12" Foreground="{DynamicResource StudioTextMutedBrush}"
+                                       TextTrimming="CharacterEllipsis" ToolTip="{Binding MetadataText}" Margin="0,6,0,0" />
+                        </StackPanel>
+                    </Grid>
                 </Grid>
             </Button>
             <DataTemplate.Triggers>
@@ -984,7 +991,7 @@
                             <RowDefinition Height="64" />
                             <RowDefinition Height="*" />
                         </Grid.RowDefinitions>
-                        <controls:RoundedClipBorder CornerRadius="11,11,0,0" Background="{DynamicResource StudioSurface2Brush}">
+                        <controls:RoundedClipBorder Style="{StaticResource HomeCardArtwork}">
                             <Grid>
                                 <Border x:Name="OfflineBannerFallback">
                                     <Border.Background>
@@ -1158,65 +1165,14 @@
             </Setter>
         </Style>
 
-        <Style x:Key="TopControlButtonBase" TargetType="{x:Type primitives:ButtonBase}">
-            <Setter Property="Background" Value="Transparent" />
-            <Setter Property="Foreground" Value="{DynamicResource StudioTextBrush}" />
-            <Setter Property="BorderBrush" Value="Transparent" />
-            <Setter Property="BorderThickness" Value="1" />
-            <Setter Property="FontFamily" Value="Segoe MDL2 Assets" />
-            <Setter Property="FontSize" Value="14" />
-            <Setter Property="Width" Value="36" />
-            <Setter Property="Height" Value="36" />
-            <Setter Property="MinHeight" Value="0" />
-            <Setter Property="Padding" Value="0" />
-            <Setter Property="Margin" Value="3,0" />
-            <Setter Property="Cursor" Value="Hand" />
-            <Setter Property="FocusVisualStyle" Value="{StaticResource StudioFocusVisualStyle}" />
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="{x:Type primitives:ButtonBase}">
-                        <Border x:Name="ButtonBorder"
-                                Background="{TemplateBinding Background}"
-                                BorderBrush="{TemplateBinding BorderBrush}"
-                                BorderThickness="{TemplateBinding BorderThickness}"
-                                CornerRadius="9">
-                            <ContentPresenter HorizontalAlignment="Center"
-                                              VerticalAlignment="Center"
-                                              Margin="{TemplateBinding Padding}" />
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="Tag" Value="First">
-                                <Setter Property="BorderThickness" Value="1" />
-                            </Trigger>
-                            <Trigger Property="Tag" Value="Last">
-                                <Setter Property="BorderThickness" Value="1" />
-                            </Trigger>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter Property="Background" Value="{DynamicResource StudioSurface3Brush}" />
-                                <Setter Property="BorderBrush" Value="{DynamicResource StudioAccentBrush}" />
-                            </Trigger>
-                            <Trigger Property="IsPressed" Value="True">
-                                <Setter Property="Background" Value="{DynamicResource StudioAccentPressedBrush}" />
-                            </Trigger>
-                            <Trigger Property="IsEnabled" Value="False">
-                                <Setter Property="Background" Value="{DynamicResource StudioDisabledBrush}" />
-                                <Setter Property="BorderBrush" Value="{DynamicResource StudioDisabledBorderBrush}" />
-                                <Setter Property="Foreground" Value="{DynamicResource StudioTextMutedBrush}" />
-                                <Setter Property="Opacity" Value="0.55" />
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-
         <Style x:Key="TopControlIconButton" TargetType="Button" BasedOn="{StaticResource TopControlButtonBase}" />
 
-        <Style x:Key="TopControlIconButtonLast" TargetType="Button" BasedOn="{StaticResource TopControlIconButton}">
-            <Setter Property="Tag" Value="Last" />
-        </Style>
+        <Thickness x:Key="PlaybackControlGroupMargin">12,0,1,0</Thickness>
 
         <Style x:Key="ChatToggleIconButton" TargetType="Button" BasedOn="{StaticResource TopControlIconButton}">
+            <Setter Property="Tag" Value="{StaticResource StudioIconChat}" />
+            <Setter Property="Margin" Value="{StaticResource PlaybackControlGroupMargin}" />
+            <Setter Property="AutomationProperties.Name" Value="Show chat" />
             <Style.Triggers>
                 <MultiDataTrigger>
                     <MultiDataTrigger.Conditions>
@@ -1226,38 +1182,51 @@
                     <Setter Property="Background" Value="{DynamicResource StudioAccentPressedBrush}" />
                     <Setter Property="BorderBrush" Value="{DynamicResource StudioAccentBrush}" />
                     <Setter Property="Foreground" Value="{DynamicResource StudioTextBrush}" />
+                    <Setter Property="AutomationProperties.Name" Value="Hide chat" />
                 </MultiDataTrigger>
                 <DataTrigger Binding="{Binding IsChatLayoutHidden}" Value="True">
                     <Setter Property="Background" Value="{DynamicResource StudioDisabledBrush}" />
                     <Setter Property="BorderBrush" Value="{DynamicResource StudioDisabledBorderBrush}" />
                     <Setter Property="Foreground" Value="{DynamicResource StudioTextBrush}" />
+                    <Setter Property="AutomationProperties.Name" Value="Toggle chat" />
+                    <Setter Property="ToolTip" Value="Chat is hidden by your chat layout setting" />
                 </DataTrigger>
             </Style.Triggers>
         </Style>
 
         <Style x:Key="MultiStreamToggleIconButton" TargetType="Button" BasedOn="{StaticResource TopControlIconButton}">
+            <Setter Property="Tag" Value="{StaticResource StudioIconGrid}" />
+            <Setter Property="AutomationProperties.Name" Value="Show multi-stream grid" />
             <Style.Triggers>
                 <DataTrigger Binding="{Binding IsMultiStreamEnabled}" Value="True">
                     <Setter Property="Background" Value="{DynamicResource StudioAccentPressedBrush}" />
                     <Setter Property="BorderBrush" Value="{DynamicResource StudioAccentBrush}" />
                     <Setter Property="Foreground" Value="{DynamicResource StudioTextBrush}" />
+                    <Setter Property="AutomationProperties.Name" Value="Show single stream" />
                 </DataTrigger>
             </Style.Triggers>
         </Style>
 
         <Style x:Key="SettingsToggleIconButton" TargetType="Button" BasedOn="{StaticResource TopControlIconButton}">
+            <Setter Property="Tag" Value="{StaticResource StudioIconSettings}" />
+            <Setter Property="AutomationProperties.Name" Value="Open settings" />
             <Style.Triggers>
                 <DataTrigger Binding="{Binding IsSettingsOpen}" Value="True">
                     <Setter Property="Background" Value="{DynamicResource StudioAccentPressedBrush}" />
                     <Setter Property="BorderBrush" Value="{DynamicResource StudioAccentBrush}" />
                     <Setter Property="Foreground" Value="{DynamicResource StudioTextBrush}" />
+                    <Setter Property="AutomationProperties.Name" Value="Close settings" />
                 </DataTrigger>
             </Style.Triggers>
         </Style>
 
-        <Style x:Key="MuteToggleIconButton" TargetType="Button" BasedOn="{StaticResource TopControlIconButtonLast}">
+        <Style x:Key="MuteToggleIconButton" TargetType="Button" BasedOn="{StaticResource TopControlIconButton}">
+            <Setter Property="Tag" Value="{StaticResource StudioIconVolume}" />
+            <Setter Property="AutomationProperties.Name" Value="Mute audio" />
             <Style.Triggers>
                 <DataTrigger Binding="{Binding SelectedTab.IsMuted}" Value="True">
+                    <Setter Property="Tag" Value="{StaticResource StudioIconVolumeMuted}" />
+                    <Setter Property="AutomationProperties.Name" Value="Unmute audio" />
                     <Setter Property="Background" Value="{DynamicResource StudioAccentPressedBrush}" />
                     <Setter Property="BorderBrush" Value="{DynamicResource StudioAccentBrush}" />
                     <Setter Property="Foreground" Value="{DynamicResource StudioTextBrush}" />
@@ -1280,6 +1249,7 @@
         </Style>
 
         <Style x:Key="NeverMuteToggleButton" TargetType="ToggleButton" BasedOn="{StaticResource TopControlButtonBase}">
+            <Setter Property="Tag" Value="{StaticResource StudioIconVolumeLock}" />
             <Setter Property="ToolTip" Value="Never mute: keep this tab unmuted, including when switching tabs." />
             <Style.Triggers>
                 <Trigger Property="IsChecked" Value="True">
@@ -1295,10 +1265,14 @@
         </Style>
 
         <Style x:Key="PauseResumeIconButton" TargetType="Button" BasedOn="{StaticResource TopControlIconButton}">
-            <Setter Property="Content" Value="&#xE769;" />
+            <Setter Property="Tag" Value="{StaticResource StudioIconPause}" />
+            <Setter Property="Background" Value="{DynamicResource StudioSurface2Brush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource StudioBorderBrush}" />
+            <Setter Property="AutomationProperties.Name" Value="Pause playback" />
             <Style.Triggers>
                 <DataTrigger Binding="{Binding SelectedTab.Status}" Value="{x:Static models:PlaybackStatus.Paused}">
-                    <Setter Property="Content" Value="&#xE768;" />
+                    <Setter Property="Tag" Value="{StaticResource StudioIconPlay}" />
+                    <Setter Property="AutomationProperties.Name" Value="Resume playback" />
                     <Setter Property="Background" Value="{DynamicResource StudioAccentPressedBrush}" />
                     <Setter Property="BorderBrush" Value="{DynamicResource StudioAccentBrush}" />
                 </DataTrigger>
@@ -1657,6 +1631,20 @@
                 </DataTrigger>
             </Style.Triggers>
         </Style>
+        <Style x:Key="PlaybackFollowButton" TargetType="Button" BasedOn="{StaticResource PlaybackTopControlIconButton}">
+            <Setter Property="Tag" Value="{StaticResource StudioIconHeart}" />
+            <Setter Property="Background" Value="{DynamicResource StudioSurface1Brush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource StudioBorderStrongBrush}" />
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsSelectedChannelFollowed}" Value="True">
+                    <Setter Property="Background" Value="{DynamicResource StudioAccentPressedBrush}" />
+                    <Setter Property="BorderBrush" Value="{DynamicResource StudioAccentBrush}" />
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="PlaybackGroupStartButton" TargetType="Button" BasedOn="{StaticResource PlaybackTopControlIconButton}">
+            <Setter Property="Margin" Value="{StaticResource PlaybackControlGroupMargin}" />
+        </Style>
         <Style x:Key="PlaybackPauseResumeIconButton" TargetType="Button" BasedOn="{StaticResource PauseResumeIconButton}">
             <Style.Triggers>
                 <DataTrigger Binding="{Binding IsHomeSelected}" Value="True">
@@ -1837,7 +1825,7 @@
                       Height="{Binding ViewportHeight, ElementName=DockedChatViewport}"
                       MinWidth="180" MinHeight="138">
                     <Grid.RowDefinitions>
-                        <RowDefinition Height="58" />
+                        <RowDefinition Height="Auto" MinHeight="54" />
                         <RowDefinition Height="*" />
                         <RowDefinition Height="58" />
                     </Grid.RowDefinitions>
@@ -1871,31 +1859,35 @@
                         </Thumb.Template>
                     </Thumb>
                     <Border Grid.Row="0"
-                            Margin="12,10,12,6"
-                            Padding="10,0"
+                            Padding="12,9"
                             Background="{DynamicResource StudioSurface1Brush}"
                             BorderBrush="{DynamicResource StudioBorderBrush}"
-                            BorderThickness="1"
-                            CornerRadius="9">
+                            BorderThickness="0,0,0,1">
                         <StackPanel VerticalAlignment="Center">
                             <DockPanel LastChildFill="True">
-                                <Border DockPanel.Dock="Left"
-                                        VerticalAlignment="Center"
-                                        Background="{DynamicResource StudioSuccessSubtleBrush}"
-                                        BorderBrush="{DynamicResource StudioSuccessBrush}"
-                                        BorderThickness="1"
-                                        CornerRadius="4"
-                                        Padding="5,1"
-                                        Margin="0,0,8,0">
-                                    <TextBlock Text="{Binding SelectedTab.ChatModeText}"
-                                               FontSize="9"
-                                               FontWeight="Bold"
-                                               Foreground="{DynamicResource StudioSuccessBrush}" />
+                                <Border DockPanel.Dock="Left" Width="28" Height="28" CornerRadius="7" Margin="0,0,9,0"
+                                        Background="{DynamicResource StudioAccentPressedBrush}">
+                                    <Path Style="{StaticResource StudioLineIcon}" Data="{StaticResource StudioIconChat}" Width="15" Height="15"
+                                          HorizontalAlignment="Center" Stroke="{DynamicResource StudioAccentTextBrush}" />
                                 </Border>
-                                <TextBlock Text="{Binding SelectedTab.DockedChatHeaderText}"
+                                <Border DockPanel.Dock="Right"
+                                        VerticalAlignment="Center"
+                                        Background="{DynamicResource StudioSurface0Brush}"
+                                        BorderBrush="{DynamicResource StudioBorderBrush}"
+                                        BorderThickness="1"
+                                        CornerRadius="10"
+                                        Padding="7,2"
+                                        Margin="8,0,0,0">
+                                    <TextBlock Text="{Binding SelectedTab.ChatModeText}"
+                                               FontSize="10"
+                                               FontWeight="SemiBold"
+                                               Foreground="{DynamicResource StudioTextSecondaryBrush}" />
+                                </Border>
+                                <TextBlock Text="{Binding SelectedTab.Target.Channel, StringFormat='Chat in {0}'}"
                                            ToolTip="{Binding SelectedTab.DockedChatHeaderText}"
+                                           AutomationProperties.Name="{Binding SelectedTab.DockedChatHeaderText}"
                                            VerticalAlignment="Center"
-                                           FontSize="12"
+                                           FontSize="13"
                                            FontWeight="SemiBold"
                                            TextTrimming="CharacterEllipsis" />
                             </DockPanel>
@@ -1905,7 +1897,7 @@
                                        Foreground="{DynamicResource StudioTextMutedBrush}"
                                        TextWrapping="Wrap"
                                        FontSize="11"
-                                       Margin="0,6,0,6" />
+                                       Margin="0,6,0,0" />
                         </StackPanel>
                     </Border>
                     <ListBox x:Name="DockedChatListBox"
@@ -1940,21 +1932,43 @@
                             </Style>
                         </ListBox.ItemContainerStyle>
                     </ListBox>
-                    <DockPanel Grid.Row="2" Margin="12,6,12,12" LastChildFill="True">
-                        <Button DockPanel.Dock="Right"
-                                Content="Send" Style="{StaticResource StudioPrimaryButtonStyle}"
-                                Command="{Binding SelectedTab.SendChatMessageCommand}"
-                                Padding="12,6"
-                                MinWidth="62"
-                                Margin="8,0,0,0" />
-                        <TextBox x:Name="ChatInputTextBox"
-                                 Text="{Binding SelectedTab.OutgoingChatText, UpdateSourceTrigger=PropertyChanged}"
-                                 Padding="12,0"
-                                 VerticalContentAlignment="Center"
-                                 KeyDown="ChatInputTextBox_KeyDown"
-                                 AutomationProperties.Name="Chat message"
-                                 ToolTip="Chat message" />
-                    </DockPanel>
+                    <Border Grid.Row="2" Padding="12,8,12,10" Background="{DynamicResource StudioSurface1Brush}"
+                            BorderBrush="{DynamicResource StudioBorderBrush}" BorderThickness="0,1,0,0">
+                        <DockPanel LastChildFill="True">
+                            <Button DockPanel.Dock="Right"
+                                    Content="Send" Style="{StaticResource StudioPrimaryButtonStyle}"
+                                    Command="{Binding SelectedTab.SendChatMessageCommand}"
+                                    Padding="12,6"
+                                    MinWidth="62"
+                                    Margin="8,0,0,0" />
+                            <Grid>
+                                <TextBox x:Name="ChatInputTextBox"
+                                         Text="{Binding SelectedTab.OutgoingChatText, UpdateSourceTrigger=PropertyChanged}"
+                                         Padding="12,0"
+                                         VerticalContentAlignment="Center"
+                                         KeyDown="ChatInputTextBox_KeyDown"
+                                         AutomationProperties.Name="Chat message" />
+                                <TextBlock IsHitTestVisible="False" Margin="12,0,8,0"
+                                           VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
+                                           Foreground="{DynamicResource StudioTextPlaceholderBrush}">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                            <Setter Property="Text" Value="Write a message" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding Text, ElementName=ChatInputTextBox}" Value="">
+                                                    <Setter Property="Visibility" Value="Visible" />
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding SelectedTab.CanSendChatMessages}" Value="False">
+                                                    <Setter Property="Text" Value="Chat is read-only" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </Grid>
+                        </DockPanel>
+                    </Border>
                 </Grid>
                 </ScrollViewer>
             </Border>
@@ -2084,7 +2098,7 @@
                         <RowDefinition Height="*" />
                     </Grid.RowDefinitions>
 
-                    <Border x:Name="LibraryRail" Grid.RowSpan="2" Width="224" Padding="16,28,16,20"
+                    <Border x:Name="LibraryRail" Grid.RowSpan="2" Width="224" Padding="14,22,14,16"
                             Background="{DynamicResource StudioSurface0Brush}" BorderBrush="{DynamicResource StudioBorderBrush}" BorderThickness="0,0,1,0">
                         <Border.Style>
                             <Style TargetType="Border">
@@ -2102,10 +2116,12 @@
                                         Command="{Binding ToggleSettingsCommand}" AutomationProperties.Name="Open settings" />
                             </StackPanel>
                             <StackPanel>
-                                <TextBlock Text="YOUR LIBRARY" Style="{StaticResource StudioEyebrow}" FontSize="10" Margin="12,0,0,18" />
+                                <TextBlock Text="BROWSE" Style="{StaticResource StudioEyebrow}" FontSize="11" Margin="12,0,0,10" />
                                 <Button Content="Following" Style="{StaticResource StudioRailLive}" Command="{Binding ShowFollowedHomePageCommand}" />
                                 <Button Content="Discover" Style="{StaticResource StudioRailBrowse}" Command="{Binding ShowBrowseHomePageCommand}" />
                                 <Button Content="Past broadcasts" Style="{StaticResource StudioRailVods}" Command="{Binding ShowTwitchVodsHomePageCommand}" />
+                                <Border Height="1" Background="{DynamicResource StudioBorderBrush}" Margin="12,13,12,15" />
+                                <TextBlock Text="YOUR LIBRARY" Style="{StaticResource StudioEyebrow}" FontSize="11" Margin="12,0,0,10" />
                                 <Button Content="Downloads" Style="{StaticResource StudioRailDownloads}" Command="{Binding ShowDownloadsHomePageCommand}"
                                         AutomationProperties.Name="Downloaded VOD library" />
                                 <Button Content="Recently watched" Style="{StaticResource StudioRailRecent}" Command="{Binding ShowRecentHomePageCommand}" />
@@ -2116,9 +2132,8 @@
                     <Border x:Name="HomeHeader" Grid.Column="1" Grid.Row="0"
                             Background="Transparent"
                             BorderBrush="{DynamicResource StudioBorderBrush}"
-                            BorderThickness="0"
-                            CornerRadius="0"
-                            Padding="0,0,0,4">
+                            BorderThickness="0,0,0,1"
+                            Padding="0,0,0,14">
                         <Border.Style>
                             <Style TargetType="Border">
                                 <Setter Property="Margin" Value="24,20,24,0" />
@@ -2177,17 +2192,18 @@
                             <Border Grid.Row="1" Grid.Column="2"
                                     Background="Transparent"
                                     Padding="0"
-                                    Margin="18,0,0,0"
+                                    Margin="10,0,0,0"
                                     Visibility="{Binding IsFollowedHomePageSelected, Converter={StaticResource BoolToVisibility}}"
                                     VerticalAlignment="Center">
                                 <DockPanel LastChildFill="False">
                                     <TextBlock Text="{Binding FollowedChannelsLastUpdatedText}"
+                                               ToolTip="{Binding FollowedChannelsLastUpdatedText}"
                                                Foreground="{DynamicResource StudioTextMutedBrush}"
-                                               FontSize="10"
-                                               MaxWidth="140"
+                                               FontSize="11"
+                                               MaxWidth="190"
                                                TextTrimming="CharacterEllipsis"
                                                VerticalAlignment="Center"
-                                               Margin="0,0,8,0">
+                                               Margin="0,0,10,0">
                                         <TextBlock.Style>
                                             <Style TargetType="TextBlock">
                                                 <Style.Triggers>
@@ -2202,8 +2218,21 @@
                                             Command="{Binding RefreshFollowedChannelsCommand}"
                                             AutomationProperties.Name="Refresh followed channels"
                                             ToolTip="Refresh followed channels">
-                                        <Path Style="{StaticResource StudioLineIcon}" Data="{StaticResource StudioIconRefresh}" Width="15" Height="15"
-                                              Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+                                        <StackPanel Orientation="Horizontal">
+                                            <Path Style="{StaticResource StudioLineIcon}" Data="{StaticResource StudioIconRefresh}" Width="15" Height="15"
+                                                  Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+                                            <TextBlock Text="Refresh" FontFamily="Segoe UI" FontSize="13" VerticalAlignment="Center" Margin="8,0,0,0">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock">
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsCompact, ElementName=HomeHeaderLayout}" Value="True">
+                                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+                                        </StackPanel>
                                     </Button>
                                 </DockPanel>
                             </Border>
@@ -2551,7 +2580,7 @@
 
                     <ScrollViewer x:Name="HomeContentScrollViewer"
                                   Grid.Column="1" Grid.Row="1"
-                                  VerticalScrollBarVisibility="Auto"
+                                  VerticalScrollBarVisibility="Visible"
                                   HorizontalScrollBarVisibility="Auto"
                                   Padding="{Binding Settings.KeepHomeCardRightGap, Converter={StaticResource HomeContentPadding}}"
                                   PreviewMouseDown="HomeContentScrollViewer_PreviewMouseDown"
@@ -2560,75 +2589,106 @@
                                   LostMouseCapture="HomeContentScrollViewer_LostMouseCapture"
                                   ScrollChanged="HomeContentScrollViewer_ScrollChanged">
                         <ScrollViewer.Resources>
-                            <Style TargetType="{x:Type ScrollBar}" BasedOn="{StaticResource HomeScrollBarStyle}" />
+                            <Style TargetType="{x:Type ScrollBar}" BasedOn="{StaticResource HomeScrollBarStyle}">
+                                <Style.Triggers>
+                                    <!-- Keep the gutter stable when card heights change with the viewport width. -->
+                                    <MultiDataTrigger>
+                                        <MultiDataTrigger.Conditions>
+                                            <Condition Binding="{Binding Orientation, RelativeSource={RelativeSource Self}}" Value="Vertical" />
+                                            <Condition Binding="{Binding ScrollableHeight, RelativeSource={RelativeSource AncestorType=ScrollViewer}}" Value="0" />
+                                        </MultiDataTrigger.Conditions>
+                                        <Setter Property="Opacity" Value="0" />
+                                        <Setter Property="IsHitTestVisible" Value="False" />
+                                    </MultiDataTrigger>
+                                </Style.Triggers>
+                            </Style>
                         </ScrollViewer.Resources>
                         <StackPanel Width="{Binding ViewportWidth, ElementName=HomeContentScrollViewer}" MinWidth="240">
                             <Grid Visibility="{Binding IsFollowedHomePageVisible, Converter={StaticResource BoolToVisibility}}">
                                 <StackPanel>
-                            <controls:ResponsiveDockPanel LastChildFill="False"
-                                       Margin="0,0,0,14">
-                                <Border DockPanel.Dock="Right" Style="{StaticResource StudioStatusPill}" ToolTip="{Binding FollowedChannelsStatus}">
-                                    <DockPanel LastChildFill="False">
-                                        <TextBlock Text="{Binding FollowedChannelsStatus}"
-                                                   MaxWidth="520"
-                                                   FontSize="12"
-                                                   Foreground="{DynamicResource StudioTextSecondaryBrush}"
-                                                   TextTrimming="CharacterEllipsis" />
-                                    </DockPanel>
-                                </Border>
-                            </controls:ResponsiveDockPanel>
+                            <Grid Margin="0,0,0,14">
+                                <Grid.Style>
+                                    <Style TargetType="Grid">
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsFollowedChannelsEmptyVisible}" Value="True">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Grid.Style>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Orientation="Horizontal" Margin="0,0,12,0"
+                                            Visibility="{Binding HasLiveFollowedChannels, Converter={StaticResource BoolToVisibility}}">
+                                    <Ellipse Fill="{DynamicResource StudioDangerBrush}" Width="8" Height="8" Margin="0,1,8,0" />
+                                    <TextBlock Text="Live now" Style="{StaticResource StudioSectionTitleStyle}" Margin="0"
+                                               AutomationProperties.HeadingLevel="Level2" />
+                                </StackPanel>
+                                <TextBlock Grid.Column="1" Text="{Binding FollowedChannelsStatus}" ToolTip="{Binding FollowedChannelsStatus}"
+                                           FontSize="12" Foreground="{DynamicResource StudioTextMutedBrush}" VerticalAlignment="Center"
+                                           HorizontalAlignment="Right" TextTrimming="CharacterEllipsis" />
+                            </Grid>
 
                             <ProgressBar Height="4"
                                          IsIndeterminate="True"
                                          Margin="0,0,0,18"
                                          Visibility="{Binding IsFollowedChannelsRefreshing, Converter={StaticResource BoolToVisibility}}" />
 
-                            <StackPanel HorizontalAlignment="Center"
-                                        MaxWidth="560"
-                                        Margin="12,48,12,24"
-                                        Visibility="{Binding IsFollowedChannelsEmptyVisible, Converter={StaticResource BoolToVisibility}}">
-                                <Border Style="{StaticResource StudioEmptyStateGlyph}">
-                                    <TextBlock Text="&#xE7F4;"
-                                               FontFamily="Segoe MDL2 Assets"
+                            <Border Style="{StaticResource StudioCardStyle}" Background="{DynamicResource StudioSurface0Brush}"
+                                    Margin="0,0,0,4" Padding="12,28,12,24"
+                                    Visibility="{Binding IsFollowedChannelsEmptyVisible, Converter={StaticResource BoolToVisibility}}">
+                                <StackPanel HorizontalAlignment="Center" MaxWidth="560">
+                                    <Border Style="{StaticResource StudioEmptyStateGlyph}">
+                                        <Path Style="{StaticResource StudioLineIcon}" Data="{StaticResource StudioIconLive}" Width="24" Height="24"
+                                              HorizontalAlignment="Center" Stroke="{DynamicResource StudioAccentTextBrush}" />
+                                    </Border>
+                                    <TextBlock Text="No live channels"
                                                FontSize="22"
-                                               HorizontalAlignment="Center"
-                                               VerticalAlignment="Center" />
-                                </Border>
-                                <TextBlock Text="Your next stream is waiting"
-                                           FontSize="22"
-                                           FontWeight="SemiBold"
-                                           HorizontalAlignment="Center" TextWrapping="Wrap" TextAlignment="Center" />
-                                <TextBlock Text="{Binding FollowedChannelsStatus}"
-                                           Foreground="{DynamicResource StudioTextMutedBrush}"
-                                           TextWrapping="Wrap"
-                                           TextAlignment="Center"
-                                           Margin="0,10,0,0" />
-                                <WrapPanel HorizontalAlignment="Center" Margin="0,24,0,0">
-                                    <Button Content="Discover channels" Command="{Binding ShowBrowseHomePageCommand}" Style="{StaticResource StudioPrimaryButtonStyle}" Margin="0,0,10,8" />
-                                    <Button Content="Connect accounts" Click="OpenAccountsSettings_Click" Margin="0,0,0,8" />
-                                </WrapPanel>
-                            </StackPanel>
+                                               FontWeight="SemiBold"
+                                               HorizontalAlignment="Center" TextWrapping="Wrap" TextAlignment="Center" />
+                                    <TextBlock Text="{Binding FollowedChannelsStatus}"
+                                               Foreground="{DynamicResource StudioTextMutedBrush}"
+                                               TextWrapping="Wrap"
+                                               TextAlignment="Center"
+                                               Margin="0,10,0,0" />
+                                    <WrapPanel HorizontalAlignment="Center" Margin="0,24,0,0">
+                                        <Button Content="Discover channels" Command="{Binding ShowBrowseHomePageCommand}" Style="{StaticResource StudioPrimaryButtonStyle}" Margin="0,0,10,8" />
+                                        <Button Content="Connect accounts" Click="OpenAccountsSettings_Click" Margin="0,0,0,8" />
+                                    </WrapPanel>
+                                </StackPanel>
+                            </Border>
 
                             <ItemsControl ItemsSource="{Binding LiveFollowedChannels}"
                                           ItemsPanel="{StaticResource HomeCardItemsPanel}"
                                           ItemTemplate="{StaticResource LiveStreamCardTemplate}"
                                           Visibility="{Binding HasLiveFollowedChannels, Converter={StaticResource BoolToVisibility}}">
                             </ItemsControl>
-                            <Expander x:Name="OfflineFollowedChannelsSection" IsExpanded="True" Margin="0,28,0,0"
+                            <Border Height="1" Margin="0,24,0,0" Background="{DynamicResource StudioBorderBrush}" />
+                            <Expander x:Name="OfflineFollowedChannelsSection" IsExpanded="True" Margin="0,16,0,0"
                                       HorizontalContentAlignment="Stretch" Foreground="{DynamicResource StudioTextBrush}">
                                 <Expander.Header>
                                     <StackPanel Margin="4,0,0,0">
-                                        <TextBlock Text="Offline followed channels" FontSize="20" FontWeight="SemiBold" TextWrapping="Wrap" />
+                                        <TextBlock Text="Offline followed channels" Style="{StaticResource StudioSectionTitleStyle}"
+                                                   Margin="0" TextWrapping="Wrap" AutomationProperties.HeadingLevel="Level2" />
                                         <TextBlock Text="{Binding OfflineFollowedChannelsCountText}" FontSize="12"
-                                                   Foreground="{DynamicResource StudioTextSecondaryBrush}" Margin="0,4,0,0" />
+                                                   Foreground="{DynamicResource StudioTextSecondaryBrush}" Margin="0,4,0,0">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsExpanded, RelativeSource={RelativeSource AncestorType=Expander}}" Value="True">
+                                                            <Setter Property="Visibility" Value="Collapsed" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
                                     </StackPanel>
                                 </Expander.Header>
                                 <StackPanel Margin="0,14,0,0">
                                     <TextBlock Text="{Binding OfflineFollowedChannelsStatus}" TextWrapping="Wrap"
                                                Foreground="{DynamicResource StudioTextSecondaryBrush}" Margin="0,0,0,14" />
-                                    <TextBlock Text="Your followed channels appear here when they are offline." TextWrapping="Wrap"
-                                               Foreground="{DynamicResource StudioTextDimBrush}" Margin="0,0,0,14"
-                                               Visibility="{Binding IsOfflineFollowedChannelsEmptyVisible, Converter={StaticResource BoolToVisibility}}" />
                                     <ItemsControl x:Name="OfflineFollowedChannelsList" ItemsSource="{Binding OfflineFollowedChannels}"
                                                   ItemsPanel="{StaticResource HomeCardItemsPanel}"
                                                   ItemTemplate="{StaticResource OfflineFollowedChannelTemplate}"
@@ -2860,8 +2920,8 @@
 
                                                         <controls:AspectRatioDecorator>
                                                         <controls:RoundedClipBorder Grid.Row="0"
-                                                                                    Background="{DynamicResource StudioBaseBrush}"
-                                                                                    CornerRadius="13,13,0,0">
+                                                                                    Style="{StaticResource HomeCardArtwork}"
+                                                                                    Background="{DynamicResource StudioBaseBrush}">
                                                             <Grid>
                                                                 <TextBlock Text="&#xE8B2;"
                                                                            FontFamily="Segoe MDL2 Assets"
@@ -3185,9 +3245,7 @@
                                                                 </Grid.RowDefinitions>
 
                                                                 <controls:AspectRatioDecorator Grid.Row="0" AspectRatio="0.75">
-                                                                <controls:RoundedClipBorder
-                                                                        Background="{DynamicResource StudioSurface2Brush}"
-                                                                        CornerRadius="11,11,0,0">
+                                                                <controls:RoundedClipBorder Style="{StaticResource HomeCardArtwork}">
                                                                     <Grid>
                                                                         <StackPanel HorizontalAlignment="Center"
                                                                                     VerticalAlignment="Center"
@@ -3770,8 +3828,9 @@
                             </Style.Triggers>
                         </Style>
                     </Grid.Style>
-                    <TextBlock x:Name="WorkspacePageContextTitle" FontFamily="Segoe UI Variable Display, Segoe UI" FontSize="18"
-                               FontWeight="SemiBold" VerticalAlignment="Center" TextTrimming="CharacterEllipsis">
+                    <TextBlock x:Name="WorkspacePageContextTitle" FontFamily="Segoe UI Variable Display, Segoe UI" FontSize="21"
+                               FontWeight="SemiBold" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
+                               AutomationProperties.HeadingLevel="Level1">
                         <TextBlock.Style>
                             <Style TargetType="TextBlock">
                                 <Setter Property="Text" Value="Following" />
@@ -3814,10 +3873,14 @@
                         </Style>
                     </ToolBar.Style>
                     <Button Style="{StaticResource FollowedHomeSegmentButton}"
-                            Content="Live"
+                            Content="Following"
                             Command="{Binding ShowFollowedHomePageCommand}" />
+                    <Button Style="{StaticResource BrowseHomeSegmentButton}"
+                            Content="Discover"
+                            Command="{Binding ShowBrowseHomePageCommand}" />
                     <Button Style="{StaticResource TwitchVodsHomeSegmentButton}"
                             Content="VODs"
+                            AutomationProperties.Name="Past broadcasts"
                             Command="{Binding ShowTwitchVodsHomePageCommand}" />
                     <Button Content="Downloads" Command="{Binding ShowDownloadsHomePageCommand}"
                             AutomationProperties.Name="Open downloaded VODs">
@@ -3832,11 +3895,9 @@
                             </Style>
                         </Button.Style>
                     </Button>
-                    <Button Style="{StaticResource BrowseHomeSegmentButton}"
-                            Content="Browse"
-                            Command="{Binding ShowBrowseHomePageCommand}" />
                     <Button Style="{StaticResource RecentHomeSegmentButton}"
                             Content="Recent"
+                            AutomationProperties.Name="Recently watched"
                             Command="{Binding ShowRecentHomePageCommand}" />
                 </ToolBar>
 
@@ -3867,9 +3928,9 @@
                             Margin="4,0,0,0"
                             Tag="{Binding SelectedTabStripItem}" Click="CloseTabButton_Click"
                             ToolTip="Close selected tab" AutomationProperties.Name="Close selected tab" />
-                    <ComboBox x:Name="CompactTabSelector" MinWidth="0" MinHeight="0" Height="34" Padding="4,0"
+                    <ComboBox x:Name="CompactTabSelector" MinWidth="0" MinHeight="0" Height="36" Padding="7,0"
                               ItemsSource="{Binding TabStripItems}" SelectedItem="{Binding SelectedTabStripItem}"
-                              FontSize="11"
+                              FontSize="12"
                               AutomationProperties.Name="Stream tabs">
                         <ComboBox.ItemContainerStyle>
                             <Style TargetType="{x:Type ComboBoxItem}" BasedOn="{StaticResource StudioComboBoxItemStyle}">
@@ -3946,7 +4007,7 @@
                             <Setter Property="Padding" Value="0" />
                             <Setter Property="HorizontalContentAlignment" Value="Stretch" />
                             <Setter Property="VerticalContentAlignment" Value="Stretch" />
-                            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+                            <Setter Property="FocusVisualStyle" Value="{StaticResource StudioFocusVisualStyle}" />
                             <Setter Property="Panel.ZIndex" Value="0" />
                             <Setter Property="Template">
                                 <Setter.Value>
@@ -3970,9 +4031,9 @@
                     <ListBox.ItemTemplate>
                         <DataTemplate>
                             <Border x:Name="TabChrome"
+                                    Width="212" Height="42"
                                     Margin="2,0"
-                                    Padding="7,3"
-                                    CornerRadius="8"
+                                    CornerRadius="{StaticResource StudioCornerSmall}"
                                     BorderBrush="{DynamicResource StudioBorderBrush}"
                                     BorderThickness="1"
                                     Background="{DynamicResource StudioSurface1Brush}"
@@ -3982,23 +4043,19 @@
                                     <ToolTip Content="{Binding PlacementTarget.DataContext.ToolTip, RelativeSource={RelativeSource Self}}"
                                              ContentTemplate="{StaticResource StreamDetailsToolTipTemplate}" />
                                 </Border.ToolTip>
-                                <DockPanel LastChildFill="True">
-                                    <Button x:Name="TabCloseControl"
-                                            DockPanel.Dock="Right"
-                                            Style="{StaticResource TabCloseButton}"
-                                            Margin="5,0,0,0"
-                                            Tag="{Binding}"
-                                            Click="CloseTabButton_Click"
-                                            ToolTip="Close tab" />
-                                    <controls:RoundedClipBorder DockPanel.Dock="Left"
-                                                                Width="22"
-                                                                Height="22"
-                                                                CornerRadius="11"
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <controls:RoundedClipBorder Width="26" Height="26"
+                                                                CornerRadius="13"
                                                                 ClipToBounds="True"
                                                                 Background="{DynamicResource StudioSurface0Brush}"
                                                                 BorderBrush="{DynamicResource StudioBorderBrush}"
                                                                 BorderThickness="1"
-                                                                Margin="0,0,8,0"
+                                                                Margin="8,0,8,0"
                                                                 DataContext="{Binding ProfileImageUrl}"
                                                                 VerticalAlignment="Center">
                                         <Grid>
@@ -4013,56 +4070,45 @@
                                                                          Stretch="UniformToFill" />
                                         </Grid>
                                     </controls:RoundedClipBorder>
-                                    <StackPanel Width="122">
-                                        <DockPanel LastChildFill="True">
-                                            <TextBlock x:Name="TabNeverMuteIcon" DockPanel.Dock="Right"
-                                                       Style="{StaticResource NeverMuteTabIndicator}" />
-                                            <controls:EmojiTextBlock x:Name="TabTitleTextBox"
-                                                       SourceText="{Binding Title}"
-                                                       FontSize="11"
-                                                       FontWeight="SemiBold"
-                                                       TextTrimming="CharacterEllipsis" />
-                                        </DockPanel>
-                                        <DockPanel Margin="0,2,0,0" LastChildFill="True">
-                                            <Border x:Name="TabViewerCountBox"
-                                                    DockPanel.Dock="Right"
-                                                    Width="60"
-                                                    MinHeight="16"
-                                                    Padding="3,1"
-                                                    Margin="5,0,0,0"
-                                                    CornerRadius="6"
-                                                    BorderThickness="1"
-                                                    BorderBrush="{DynamicResource StudioBorderStrongBrush}"
-                                                    Background="{DynamicResource StudioSurfaceCardBrush}"
-                                                    ToolTip="{Binding ViewerCountToolTip}">
-                                                <DockPanel HorizontalAlignment="Center"
+                                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                        <DockPanel>
+                                            <StackPanel x:Name="TabViewerCount"
+                                                        DockPanel.Dock="Right" Orientation="Horizontal"
+                                                        Margin="8,0,0,0" VerticalAlignment="Center"
+                                                        Background="Transparent"
+                                                        TextElement.Foreground="{DynamicResource StudioTextMutedBrush}"
+                                                        ToolTip="{Binding ViewerCountToolTip}">
+                                                <TextBlock x:Name="TabViewerCountIcon"
+                                                           Text="&#xE890;"
+                                                           FontFamily="Segoe MDL2 Assets"
+                                                           FontSize="10" Margin="0,0,4,0"
+                                                           VerticalAlignment="Center" />
+                                                <TextBlock Text="{Binding ViewerCountText}"
                                                            VerticalAlignment="Center"
-                                                           LastChildFill="False">
-                                                    <TextBlock x:Name="TabViewerCountIcon"
-                                                               DockPanel.Dock="Left"
-                                                               Text="&#xE890;"
-                                                               FontFamily="Segoe MDL2 Assets"
-                                                               FontSize="9"
-                                                               Margin="0,0,3,0"
-                                                               VerticalAlignment="Center" />
-                                                    <TextBlock x:Name="TabViewerCountTextBlock"
-                                                               Text="{Binding ViewerCountText}"
-                                                               DockPanel.Dock="Right"
-                                                               VerticalAlignment="Center"
-                                                               FontSize="9"
-                                                               FontWeight="SemiBold"
-                                                               TextTrimming="CharacterEllipsis" />
-                                                </DockPanel>
-                                            </Border>
-                                            <TextBlock x:Name="TabStatusTextBlock"
-                                                       Text="{Binding SubtitleText}"
-                                                       Foreground="{DynamicResource StudioTextMutedBrush}"
-                                                       FontSize="9"
-                                                       TextTrimming="CharacterEllipsis"
-                                                       VerticalAlignment="Center" />
+                                                           FontSize="10" FontWeight="SemiBold"
+                                                           Typography.NumeralAlignment="Tabular" />
+                                            </StackPanel>
+                                            <DockPanel>
+                                                <TextBlock x:Name="TabNeverMuteIcon" DockPanel.Dock="Right"
+                                                           Style="{StaticResource NeverMuteTabIndicator}" />
+                                                <controls:EmojiTextBlock SourceText="{Binding Title}"
+                                                                         FontSize="12" FontWeight="SemiBold"
+                                                                         TextTrimming="CharacterEllipsis" />
+                                            </DockPanel>
                                         </DockPanel>
+                                        <TextBlock x:Name="TabStatusTextBlock"
+                                                   Text="{Binding SubtitleText}"
+                                                   Foreground="{DynamicResource StudioTextMutedBrush}"
+                                                   FontSize="10.5" Margin="0,1,0,0"
+                                                   TextTrimming="CharacterEllipsis" />
                                     </StackPanel>
-                                </DockPanel>
+                                    <Button x:Name="TabCloseControl" Grid.Column="2"
+                                            Style="{StaticResource TabCloseButton}"
+                                            Margin="5,0,6,0"
+                                            Tag="{Binding}"
+                                            Click="CloseTabButton_Click"
+                                            ToolTip="Close tab" />
+                                </Grid>
                             </Border>
                             <DataTemplate.Triggers>
                                 <DataTrigger Binding="{Binding Source, ElementName=ProfileAvatarImage}" Value="{x:Null}">
@@ -4085,20 +4131,13 @@
                                     <Setter TargetName="TabChrome" Property="BorderBrush" Value="{DynamicResource StudioBorderStrongBrush}" />
                                 </DataTrigger>
                                 <DataTrigger Binding="{Binding IsDetached}" Value="True">
-                                    <Setter TargetName="TabChrome" Property="BorderBrush" Value="{DynamicResource StudioAccentBrush}" />
                                     <Setter TargetName="TabStatusTextBlock" Property="Text" Value="Picture-in-picture" />
+                                    <Setter TargetName="TabStatusTextBlock" Property="Foreground" Value="{DynamicResource StudioAccentTextBrush}" />
                                 </DataTrigger>
                                 <DataTrigger Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType={x:Type ListBoxItem}}}" Value="True">
                                     <Setter TargetName="TabChrome" Property="Background" Value="{DynamicResource StudioAccentPressedBrush}" />
-                                    <Setter TargetName="TabChrome" Property="BorderBrush" Value="{DynamicResource StudioFocusBrush}" />
-                                    <Setter TargetName="TabTitleTextBox" Property="Foreground" Value="{DynamicResource StudioTextBrush}" />
-                                    <Setter TargetName="TabCloseControl" Property="Foreground" Value="{DynamicResource StudioTextBrush}" />
                                     <Setter TargetName="TabNeverMuteIcon" Property="Foreground" Value="{DynamicResource StudioTextBrush}" />
-                                    <Setter TargetName="TabStatusTextBlock" Property="Foreground" Value="{DynamicResource StudioTextMutedBrush}" />
-                                    <Setter TargetName="TabViewerCountBox" Property="Background" Value="{DynamicResource StudioSuccessSubtleBrush}" />
-                                    <Setter TargetName="TabViewerCountBox" Property="BorderBrush" Value="{DynamicResource StudioFocusBrush}" />
-                                    <Setter TargetName="TabViewerCountIcon" Property="Foreground" Value="{DynamicResource StudioTextBrush}" />
-                                    <Setter TargetName="TabViewerCountTextBlock" Property="Foreground" Value="{DynamicResource StudioTextBrush}" />
+                                    <Setter TargetName="TabViewerCount" Property="TextElement.Foreground" Value="{DynamicResource StudioAccentTextBrush}" />
                                 </DataTrigger>
                             </DataTemplate.Triggers>
                         </DataTemplate>
@@ -4106,86 +4145,68 @@
                 </ListBox>
 
                 <ToolBar x:Name="PlaybackActionsToolBar" Grid.Column="3"
-                         Style="{StaticResource ResponsiveToolBar}" Margin="4,0,6,0" LayoutUpdated="PlaybackActionsToolBar_LayoutUpdated">
-                        <Button x:Name="TopPlayPauseButton"
-                                Style="{StaticResource PlaybackPauseResumeIconButton}"
-                                Command="{Binding PauseSelectedCommand}"
-                                ToolTip="Pause or resume playback"
-                                AutomationProperties.Name="Pause or resume playback" />
-                        <Button Style="{StaticResource PlaybackTopControlIconButton}"
-                                Content="&#xE72C;"
-                                Command="{Binding ReloadSelectedCommand}"
-                                ToolTip="Reload stream" />
-                        <Button x:Name="TopClipButton"
-                                Style="{StaticResource PlaybackTopControlIconButton}"
-                                Command="{Binding CreateClipCommand}"
-                                ToolTip="{Binding ClipButtonToolTip}"
-                                ToolTipService.ShowOnDisabled="True"
-                                AutomationProperties.Name="Create stream clip">
-                            <Grid Width="20" Height="20" IsHitTestVisible="False">
-                                <Path Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
-                                      StrokeThickness="1.6"
-                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round">
-                                    <Path.Data>
-                                        <GeometryGroup>
-                                            <EllipseGeometry Center="5,5" RadiusX="2.5" RadiusY="2.5" />
-                                            <EllipseGeometry Center="5,15" RadiusX="2.5" RadiusY="2.5" />
-                                            <PathGeometry Figures="M7,6.5 L17.5,17 M7,13.5 L17.5,3" />
-                                        </GeometryGroup>
-                                    </Path.Data>
-                                </Path>
-                            </Grid>
-                        </Button>
-                        <Button x:Name="TopFollowButton"
-                                Style="{StaticResource PlaybackTopControlIconButton}"
-                                Width="Auto" MinWidth="82" Padding="9,0"
-                                FontFamily="Segoe UI" FontSize="12"
-                                Content="{Binding FollowButtonText}"
-                                Command="{Binding FollowSelectedChannelCommand}"
-                                ToolTip="{Binding FollowButtonToolTip}"
-                                ToolTipService.ShowOnDisabled="True"
-                                AutomationProperties.Name="{Binding FollowButtonAccessibleName}" />
-                        <Button Style="{StaticResource PlaybackChatToggleIconButton}"
-                                Content="&#xE8F2;"
-                                Command="{Binding ToggleChatCommand}"
-                                ToolTip="Show or hide chat" />
-                        <Button x:Name="TopMultiStreamButton"
-                                Style="{StaticResource PlaybackMultiStreamToggleIconButton}"
-                                Command="{Binding ToggleMultiStreamCommand}"
-                                ToolTip="{Binding MultiStreamToggleToolTip}"
-                                AutomationProperties.Name="Toggle multi-stream grid">
-                            <Grid Width="18" Height="18" IsHitTestVisible="False">
-                                <Path Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
-                                      Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
-                                      StrokeThickness="1.5">
-                                    <Path.Data>
-                                        <RectangleGeometry Rect="1,1,6,6" RadiusX="1.5" RadiusY="1.5" />
-                                    </Path.Data>
-                                </Path>
-                                <Path Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
-                                      StrokeThickness="1.5">
-                                    <Path.Data>
-                                        <GeometryGroup>
-                                            <RectangleGeometry Rect="11,1,6,6" RadiusX="1.5" RadiusY="1.5" />
-                                            <RectangleGeometry Rect="1,11,6,6" RadiusX="1.5" RadiusY="1.5" />
-                                            <RectangleGeometry Rect="11,11,6,6" RadiusX="1.5" RadiusY="1.5" />
-                                        </GeometryGroup>
-                                    </Path.Data>
-                                </Path>
-                            </Grid>
-                        </Button>
-                        <Button x:Name="TopFullscreenButton"
-                                Style="{StaticResource PlaybackTopControlIconButton}"
-                                Content="&#xE740;"
-                                Click="FullscreenButton_Click"
-                                ToolTip="Fullscreen stream"
-                                AutomationProperties.Name="Fullscreen stream" />
-                        <Button x:Name="TopTheatreButton"
-                                Style="{StaticResource PlaybackTopControlIconButton}"
-                                Content="&#xE7F4;"
-                                Click="TheatreButton_Click"
-                                ToolTip="Theatre mode"
-                                AutomationProperties.Name="Theatre mode" />
+                         Style="{StaticResource ResponsiveToolBar}" Margin="4,0,6,0" LayoutUpdated="PlaybackActionsToolBar_LayoutUpdated"
+                         AutomationProperties.Name="Playback controls">
+                    <Button x:Name="TopPlayPauseButton"
+                            Style="{StaticResource PlaybackPauseResumeIconButton}"
+                            Command="{Binding PauseSelectedCommand}" />
+                    <Button x:Name="TopMuteButton" Click="MuteButton_Click">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource MuteToggleIconButton}">
+                                <Setter Property="IsEnabled" Value="{Binding HasSelectedTab}" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding SelectedTab.NeverMute}" Value="True">
+                                        <Setter Property="IsEnabled" Value="False" />
+                                        <Setter Property="ToolTip" Value="Turn off Never mute for this tab to allow muting." />
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding IsHomeSelected}" Value="True">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                    </Button>
+                    <ToggleButton x:Name="TopNeverMuteButton"
+                                  Style="{StaticResource NeverMuteToggleButton}"
+                                  IsChecked="{Binding SelectedTab.NeverMute, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                  IsEnabled="{Binding HasSelectedTab}"
+                                  AutomationProperties.Name="Never mute tab"
+                                  AutomationProperties.HelpText="When enabled, this tab stays unmuted. Turn it off to allow muting." />
+
+                    <Button Style="{StaticResource PlaybackChatToggleIconButton}"
+                            Command="{Binding ToggleChatCommand}" />
+                    <Button x:Name="TopMultiStreamButton"
+                            Style="{StaticResource PlaybackMultiStreamToggleIconButton}"
+                            Command="{Binding ToggleMultiStreamCommand}"
+                            ToolTip="{Binding MultiStreamToggleToolTip}" />
+                    <Button x:Name="TopTheatreButton"
+                            Style="{StaticResource PlaybackTopControlIconButton}"
+                            Tag="{StaticResource StudioIconTheatre}"
+                            Click="TheatreButton_Click"
+                            AutomationProperties.Name="Theatre mode" />
+                    <Button x:Name="TopFullscreenButton"
+                            Style="{StaticResource PlaybackTopControlIconButton}"
+                            Tag="{StaticResource StudioIconFullscreen}"
+                            Click="FullscreenButton_Click"
+                            AutomationProperties.Name="Fullscreen stream" />
+
+                    <Button x:Name="TopClipButton"
+                            Style="{StaticResource PlaybackGroupStartButton}"
+                            Tag="{StaticResource StudioIconClip}" Content="Clip"
+                            Command="{Binding CreateClipCommand}"
+                            ToolTip="{Binding ClipButtonToolTip}"
+                            AutomationProperties.Name="Create stream clip" />
+                    <Button x:Name="TopFollowButton"
+                            Style="{StaticResource PlaybackFollowButton}"
+                            Content="{Binding FollowButtonText}"
+                            Command="{Binding FollowSelectedChannelCommand}"
+                            ToolTip="{Binding FollowButtonToolTip}"
+                            AutomationProperties.Name="{Binding FollowButtonAccessibleName}" />
+
+                    <Button Style="{StaticResource PlaybackGroupStartButton}"
+                            Tag="{StaticResource StudioIconRefresh}"
+                            Command="{Binding ReloadSelectedCommand}"
+                            AutomationProperties.Name="Reload stream" />
                     <Button x:Name="TopDownloadSettingsButton" Content="Download settings"
                             Command="{Binding ShowDownloadsSettingsCommand}"
                             Margin="3,0"
@@ -4215,55 +4236,7 @@
                         </Button.Style>
                     </Button>
                     <Button x:Name="TopSettingsButton" Style="{StaticResource SettingsToggleIconButton}"
-                            Command="{Binding ToggleSettingsCommand}"
-                            ToolTip="Open settings" AutomationProperties.Name="Open settings">
-                        <Path Style="{StaticResource StudioLineIcon}" Data="{StaticResource StudioIconSettings}" Width="17" Height="17"
-                              Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
-                    </Button>
-                    <Button x:Name="TopMuteButton"
-                            Content="&#xE74F;"
-                            Click="MuteButton_Click"
-                            ToolTipService.ShowOnDisabled="True"
-                            AutomationProperties.Name="Mute or unmute">
-                        <Button.Style>
-                            <Style TargetType="{x:Type Button}" BasedOn="{StaticResource MuteToggleIconButton}">
-                                <Setter Property="IsEnabled" Value="{Binding HasSelectedTab}" />
-                                <Setter Property="ToolTip" Value="Mute or unmute" />
-                                <Style.Triggers>
-                                    <DataTrigger Binding="{Binding SelectedTab.NeverMute}" Value="True">
-                                        <Setter Property="IsEnabled" Value="False" />
-                                        <Setter Property="ToolTip" Value="Turn off Never mute for this tab to allow muting." />
-                                    </DataTrigger>
-                                    <DataTrigger Binding="{Binding IsHomeSelected}" Value="True">
-                                        <Setter Property="Visibility" Value="Collapsed" />
-                                    </DataTrigger>
-                                </Style.Triggers>
-                            </Style>
-                        </Button.Style>
-                    </Button>
-                    <ToggleButton x:Name="TopNeverMuteButton"
-                                  Style="{StaticResource NeverMuteToggleButton}"
-                                  IsChecked="{Binding SelectedTab.NeverMute, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                  IsEnabled="{Binding HasSelectedTab}"
-                                  AutomationProperties.Name="Never mute tab"
-                                  AutomationProperties.HelpText="When enabled, this tab stays unmuted. Turn it off to allow muting.">
-                        <Grid Width="20" Height="20" IsHitTestVisible="False">
-                            <Path Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ToggleButton}}"
-                                  StrokeThickness="1.6"
-                                  StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
-                                  Data="M2,8 L5,8 L9,4.5 L9,15.5 L5,12 L2,12 Z M11.5,7 A4.25,4.25 0 0 1 11.5,13" />
-                            <Path Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ToggleButton}}"
-                                  StrokeThickness="1.6"
-                                  StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round">
-                                <Path.Data>
-                                    <GeometryGroup>
-                                        <RectangleGeometry Rect="13.5,12,5,5" RadiusX="1" RadiusY="1" />
-                                        <PathGeometry Figures="M14.5,12 L14.5,10 A1.5,1.5 0 0 1 17.5,10 L17.5,12" />
-                                    </GeometryGroup>
-                                </Path.Data>
-                            </Path>
-                        </Grid>
-                    </ToggleButton>
+                            Command="{Binding ToggleSettingsCommand}" />
                 </ToolBar>
             </controls:ResponsiveGrid>
         </Border>

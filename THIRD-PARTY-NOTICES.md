@@ -185,4 +185,4 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 The LAN browser player bundles hls.js 1.7.3, copyright its contributors, under the Apache License 2.0.
 Source: https://github.com/video-dev/hls.js/tree/v1.7.3
-The upstream copyright/derivation notices are included at `src/StreamlinkVlcStudio.Infrastructure/LocalWeb/Assets/hls.LICENSE.txt`; the full Apache 2.0 license is in `hls.APACHE-2.0.txt` alongside it. Both are embedded and served with the browser assets.
+The upstream copyright/derivation notices are included at `src/StreamlinkVlcStudio.WebClient/Assets/hls.LICENSE.txt`; the full Apache 2.0 license is in `hls.APACHE-2.0.txt` alongside it. Both are embedded and served with the browser assets.

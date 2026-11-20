@@ -8,6 +8,7 @@ internal static partial class ApplicationTestCatalog
         Assert.Equal(PlatformKind.Twitch, target.Platform);
         Assert.Equal("xqc", target.Channel);
         Assert.Equal("https://www.twitch.tv/xqc", target.Url);
+        Assert.Equal(target, StreamInputParser.Parse("twitch.tv:443/xqc?ref=https://twitch.tv/videos/12345", PlatformKind.Kick));
         return Task.CompletedTask;
     }),
     ("parses Kick URL", () =>

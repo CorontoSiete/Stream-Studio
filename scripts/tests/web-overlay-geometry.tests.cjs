@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const assets = path.resolve(__dirname, '../../src/StreamlinkVlcStudio.Infrastructure/LocalWeb/Assets');
+const assets = path.resolve(__dirname, '../../src/StreamlinkVlcStudio.WebClient/Assets');
 const source = fs.readFileSync(path.join(assets, 'app.js'), 'utf8');
 const css = fs.readFileSync(path.join(assets, 'app.css'), 'utf8');
 const bounded = source.match(/^  const bounded = .*;$/m)?.[0];

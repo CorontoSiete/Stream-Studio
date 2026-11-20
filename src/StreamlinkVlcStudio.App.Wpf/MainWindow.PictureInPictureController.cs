@@ -2,8 +2,9 @@ using System.Collections.Specialized;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Interop;
-using StreamlinkVlcStudio.App.Wpf.ViewModels;
+using StreamlinkVlcStudio.App.Wpf.Controls;
 using StreamlinkVlcStudio.Core.Settings;
+using StreamlinkVlcStudio.Workspace.ViewModels;
 using static StreamlinkVlcStudio.App.Wpf.WindowInteropHelpers;
 
 namespace StreamlinkVlcStudio.App.Wpf;
@@ -287,7 +288,7 @@ public partial class MainWindow
                 // The main window may not realize its presenter until after Closing
                 // disconnects the PiP tree. Mark the current host transfer explicitly
                 // so that PiP teardown cannot bind VLC to a parking HWND in between.
-                tab.VideoSurfacePresenterOwner?.DetachSurfaceForTransfer();
+                VideoSurfacePresenter.GetOwner(tab)?.DetachSurfaceForTransfer();
             }
 
             RemoveDetachedWindowMappings(detachedWindow);
@@ -829,18 +830,8 @@ public partial class MainWindow
             return false;
         }
 
-        internal bool TryBeginDetachedResizeFromScreenClick(NativePoint screenPoint)
-        {
-            foreach (var window in detachedWindows.Values.Distinct().ToArray())
-            {
-                if (window.TryBeginResizeFromScreenClick(screenPoint.X, screenPoint.Y))
-                {
-                    return true;
-                }
-            }
-
-            return false;
-        }
+        internal bool TryBeginDetachedResizeFromScreenClick(NativePoint screenPoint) =>
+            TryRouteDetachedClick(screenPoint, static (window, x, y) => window.TryBeginResizeFromScreenClick(x, y));
 
         internal bool TryBeginDetachedVideoMoveFromScreenClick(NativePoint screenPoint)
         {
@@ -875,18 +866,8 @@ public partial class MainWindow
             }
         }
 
-        internal bool TryOpenDetachedVideoContextMenu(NativePoint screenPoint)
-        {
-            foreach (var window in detachedWindows.Values.Distinct().ToArray())
-            {
-                if (window.TryOpenVideoContextMenu(screenPoint.X, screenPoint.Y))
-                {
-                    return true;
-                }
-            }
-
-            return false;
-        }
+        internal bool TryOpenDetachedVideoContextMenu(NativePoint screenPoint) =>
+            TryRouteDetachedClick(screenPoint, static (window, x, y) => window.TryOpenVideoContextMenu(x, y));
 
         internal bool TryToggleDetachedStreamFullscreenFromVideoDoubleClick(NativePoint screenPoint)
         {
@@ -908,11 +889,14 @@ public partial class MainWindow
             return false;
         }
 
-        internal bool TryActivateDetachedVideoTabFromScreenClick(NativePoint screenPoint)
+        internal bool TryActivateDetachedVideoTabFromScreenClick(NativePoint screenPoint) =>
+            TryRouteDetachedClick(screenPoint, static (window, x, y) => window.TryActivateTabFromScreenClick(x, y));
+
+        private bool TryRouteDetachedClick(NativePoint screenPoint, Func<DetachedVideoWindow, int, int, bool> handle)
         {
             foreach (var window in detachedWindows.Values.Distinct().ToArray())
             {
-                if (window.TryActivateTabFromScreenClick(screenPoint.X, screenPoint.Y))
+                if (handle(window, screenPoint.X, screenPoint.Y))
                 {
                     return true;
                 }

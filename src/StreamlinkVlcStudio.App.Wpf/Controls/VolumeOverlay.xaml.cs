@@ -4,8 +4,8 @@ using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Threading;
-using StreamlinkVlcStudio.App.Wpf.ViewModels;
 using StreamlinkVlcStudio.Core.Settings;
+using StreamlinkVlcStudio.Workspace.ViewModels;
 
 namespace StreamlinkVlcStudio.App.Wpf.Controls;
 
@@ -187,7 +187,7 @@ public partial class VolumeOverlay : UserControl
     internal static UIElement ResolveTarget(StreamTabViewModel tab,
         IReadOnlyDictionary<StreamTabViewModel, VideoSurface> surfaces, UIElement fallback)
     {
-        if (tab.IsVodFinished && tab.VideoSurfacePresenterOwner?.Parent is UIElement { IsVisible: true } finishedScreen)
+        if (tab.IsVodFinished && VideoSurfacePresenter.GetOwner(tab)?.Parent is UIElement { IsVisible: true } finishedScreen)
         {
             return finishedScreen;
         }

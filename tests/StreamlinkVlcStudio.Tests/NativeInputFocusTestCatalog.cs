@@ -118,7 +118,7 @@ internal static class NativeInputFocusTestCatalog
         try
         {
             var elapsed = Stopwatch.StartNew();
-            var stop = tab.NativeOverlay.StopNativeOverlayChatAsync();
+            var stop = tab.NativeOverlay!.StopNativeOverlayChatAsync();
             elapsed.Stop();
             Assert.True(elapsed.Elapsed < TimeSpan.FromMilliseconds(100),
                 $"Chat shutdown blocked its caller for {elapsed.Elapsed.TotalMilliseconds:F0} ms before yielding.");

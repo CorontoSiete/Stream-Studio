@@ -1,3 +1,4 @@
+using System.Net;
 using System.Text;
 using StreamlinkVlcStudio.Infrastructure.Limits;
 using StreamlinkVlcStudio.Infrastructure.Text;
@@ -17,9 +18,15 @@ internal static class BoundedHttpContentReader
         ReadStringAsync(content, PayloadLimits.HttpJsonBytes, cancellationToken);
 
     internal static Task<string> ReadPlaylistAsync(
-        HttpContent content,
-        CancellationToken cancellationToken = default) =>
-        ReadStringAsync(content, PayloadLimits.PlaylistBytes, cancellationToken);
+        HttpResponseMessage response,
+        CancellationToken cancellationToken = default)
+    {
+        response.EnsureSuccessStatusCode();
+        if (response.StatusCode == HttpStatusCode.PartialContent)
+            throw new InvalidDataException("The media playlist is incomplete.");
+
+        return ReadStringAsync(response.Content, PayloadLimits.PlaylistBytes, cancellationToken);
+    }
 
     internal static Task<string> ReadRangeProbeAsync(
         HttpContent content,

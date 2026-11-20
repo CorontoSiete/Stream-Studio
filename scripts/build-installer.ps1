@@ -27,26 +27,6 @@ $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $scriptRoot ".."))
 $releaseContract = Read-ReleaseContract (Join-Path $repoRoot "shared\release-contract.json")
 $authenticode = Get-AuthenticodeSigningConfiguration
 
-function Test-ThreePartProductVersion([string]$Version) {
-    if ($Version -notmatch "^(?<major>\d+)\.(?<minor>\d+)\.(?<patch>\d+)$") {
-        return $false
-    }
-
-    foreach ($name in @("major", "minor", "patch")) {
-        [int]$part = 0
-        if (-not [int]::TryParse(
-                $Matches[$name],
-                [Globalization.NumberStyles]::None,
-                [Globalization.CultureInfo]::InvariantCulture,
-                [ref]$part) -or
-            $part -gt 255) {
-            return $false
-        }
-    }
-
-    $true
-}
-
 function Resolve-DotNetTool {
     if (-not [string]::IsNullOrWhiteSpace($env:DOTNET_HOST_PATH)) {
         if (-not (Test-Path -LiteralPath $env:DOTNET_HOST_PATH -PathType Leaf)) {
@@ -285,17 +265,13 @@ if (-not [string]::Equals($Runtime, "win-x64", [System.StringComparison]::Ordina
     throw "The MSI payload is x64-only. Runtime must be win-x64, not '$Runtime'."
 }
 
-$dependencyManifestPath = if ([string]::IsNullOrWhiteSpace($DependencyManifest)) {
-    Join-Path $repoRoot "dependencies\windows-installers.json"
-} else {
-    [IO.Path]::GetFullPath($DependencyManifest)
-}
+$dependencyManifestPath = Resolve-ReleasePath $DependencyManifest (Join-Path $repoRoot "dependencies\windows-installers.json")
 if (-not (Test-Path -LiteralPath $dependencyManifestPath -PathType Leaf)) {
     throw "Locked installer dependency manifest missing: $dependencyManifestPath"
 }
 $dependencyManifestData = Read-WindowsDependencyManifest $dependencyManifestPath
 if (-not [string]::IsNullOrWhiteSpace($DependencyCacheDirectory)) {
-    $DependencyCacheDirectory = [IO.Path]::GetFullPath($DependencyCacheDirectory)
+    $DependencyCacheDirectory = Resolve-ReleasePath $DependencyCacheDirectory
     Assert-NoReparsePointInExistingPath -Path $DependencyCacheDirectory
     if (-not (Test-Path -LiteralPath $DependencyCacheDirectory -PathType Container)) {
         throw "DependencyCacheDirectory must be an existing directory: $DependencyCacheDirectory"
@@ -338,27 +314,17 @@ foreach ($dependencyProperty in $dependencyManifestData.dependencies.PSObject.Pr
     }
 }
 
-if (-not (Test-ThreePartProductVersion $ProductVersion)) {
-    throw "ProductVersion must contain three numeric parts from 0 through 255, for example 1.0.0: $ProductVersion"
-}
+ConvertTo-StableReleaseVersion $ProductVersion | Out-Null
 
-$overlaySourcePath = if ([string]::IsNullOrWhiteSpace($OverlaySource)) {
-    Join-Path $repoRoot "src\StreamlinkVlcStudio.Infrastructure\Vlc\BundledOverlay"
-} else {
-    $OverlaySource
-}
-$overlaySourcePath = [System.IO.Path]::GetFullPath($overlaySourcePath)
+$overlaySourcePath = Resolve-ReleasePath $OverlaySource (Join-Path $repoRoot "src\StreamlinkVlcStudio.Infrastructure\Vlc\BundledOverlay")
 
-$outputRootPath = if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
-    if ([string]::IsNullOrWhiteSpace($ReleaseZip)) {
-        Join-Path $repoRoot "release"
-    } else {
-        Split-Path -Parent ([System.IO.Path]::GetFullPath($ReleaseZip))
-    }
+$defaultOutputRoot = if ([string]::IsNullOrWhiteSpace($ReleaseZip)) {
+    Join-Path $repoRoot "release"
 } else {
-    $OutputRoot
+    $ReleaseZip = Resolve-ReleasePath $ReleaseZip
+    Split-Path -Parent $ReleaseZip
 }
-$outputRootPath = [System.IO.Path]::GetFullPath($outputRootPath)
+$outputRootPath = Resolve-ReleasePath $OutputRoot $defaultOutputRoot
 Assert-NoReparsePointInExistingPath -Path $outputRootPath
 New-Item -ItemType Directory -Path $outputRootPath -Force | Out-Null
 
@@ -384,7 +350,7 @@ if ([string]::IsNullOrWhiteSpace($ReleaseZip)) {
     $ReleaseZip = Join-Path $outputRootPath "StreamlinkVlcStudio-release.zip"
 }
 
-$releaseZipPath = [System.IO.Path]::GetFullPath($ReleaseZip)
+$releaseZipPath = $ReleaseZip
 if (-not (Test-Path -LiteralPath $releaseZipPath -PathType Leaf)) {
     throw "Release zip was not found: $releaseZipPath"
 }

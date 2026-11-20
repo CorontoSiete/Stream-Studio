@@ -2,6 +2,7 @@ using System.Net.Http.Json;
 using System.Security.Cryptography.X509Certificates;
 using Microsoft.AspNetCore.Http;
 using StreamlinkVlcStudio.Infrastructure.LocalWeb;
+using StreamlinkVlcStudio.WebClient;
 
 internal static partial class LocalWebTestCatalog
 {
@@ -21,6 +22,7 @@ internal static partial class LocalWebTestCatalog
         ("local web: desktop browser launch opens the sign-in page without credentials", DesktopLaunchAsync),
         ("local web: server window follows every app theme while open", ServerWindowThemeAsync),
         ("local web: LAN CA signs an IP certificate trusted over real HTTPS", CertificateChainAsync),
+        ("local web: replacement client assets preserve the protected API and media routes", ReplacementClientAsync),
         ("local web: real HTTPS rejects unauthenticated media and hostile origins", HttpsAsync),
         ("local web: disconnect all revokes media and commands", DisconnectAsync),
         ("local web: concurrent disposal waits for the same session and server cleanup", SharedDisposalAsync),
@@ -34,8 +36,11 @@ internal static partial class LocalWebTestCatalog
         ("local web: media refuses private destinations and unsafe redirects", MediaSecurityAsync),
         ("local web: media proxy rewrites remote manifests and preserves byte ranges without upstream cookies", MediaProxyAsync),
         ("local web: native HLS range probe never turns an extensionless playlist into a partial manifest", MediaPartialPlaylistAsync),
+        ("local web: HLS master references identify extensionless variants and renditions", MediaExtensionlessMasterAsync),
         ("local web: offline media IDs cannot escape the validated file inventory", OfflineMediaAsync),
         ("local web: real workspace shares VOD history and isolates players", WorkspaceAsync),
+        ("local web: a failed replacement preserves the player and successful replacement reuses its slot", PlayerReplacementAsync),
+        ("local web: serving media during player closure returns not found", MediaDuringPlayerClosureAsync),
         ("local web: Kick VOD identities share desktop watch progress and preserve metadata", VodIdentityAsync),
         ("local web: offline last-live history preserves verified timestamps without blocking commands", FollowingLastLiveAsync),
         ("local web: offline pins sync with the desktop and persist across restarts", FollowingPinsAsync),
@@ -62,6 +67,7 @@ internal static partial class LocalWebTestCatalog
         ("local web: seek previews retain scoped live archive media, refresh and release it", LiveArchivePreviewAsync),
         ("local web: full live archive validates complete playlists and preserves normal VODs", LiveArchivePlaylistsAsync),
         ("local web: full live archive refresh measures the pinned rendition", LiveArchivePinnedRenditionAsync),
+        ("local web: full live archive follows rotating media playlist redirects", LiveArchiveRotatingRedirectAsync),
         ("local web: full live archive lookup never blocks commands and closes with its player", LiveArchiveCancellationAsync),
         ("local web: full live archive subscriber fallback refreshes sanitized remote playlists", LiveArchiveFallbackAsync),
         ("local web: full live archive browser decodes earlier history, grows and returns live", BrowserFullArchiveAsync),
@@ -159,13 +165,14 @@ internal static partial class LocalWebTestCatalog
 
     private const string TestUsername = "webtester";
     private const string TestPassword = "Test web password 123!";
-    private static async Task<LocalWebServer> Server(X509Certificate2 certificate, Func<ILocalWebWorkspace>? factory = null, Func<bool>? current = null)
+    private static async Task<LocalWebServer> Server(X509Certificate2 certificate, Func<ILocalWebWorkspace>? factory = null,
+        Func<bool>? current = null, IReadOnlyDictionary<string, LocalWebStaticAsset>? assets = null)
     {
         var path = Path.Combine(Path.GetTempPath(), "StreamStudioTests", "web-users-" + Guid.NewGuid().ToString("N") + ".json");
         var users = await LocalWebUserStore.OpenAsync(path);
         await users.AddAsync(TestUsername, TestPassword);
         return await LocalWebServer.StartCoreAsync(new("test", "loopback fixture", IPAddress.Loopback, 8), certificate, 0,
-            factory ?? (() => new TestWorkspace()), users, current ?? (() => true));
+            factory ?? (() => new TestWorkspace()), users, current ?? (() => true), assets: assets ?? BundledWebClient.Assets);
     }
 
     private static async Task CertificateChainAsync()
@@ -212,6 +219,38 @@ internal static partial class LocalWebTestCatalog
         var json = await login.Content.ReadFromJsonAsync<JsonElement>();
         Assert.Equal(false, json.ToString().Contains(password, StringComparison.Ordinal));
         return (cookie.Split(';')[0], json.GetProperty("csrf").GetString()!);
+    }
+
+    private static async Task ReplacementClientAsync()
+    {
+        using var certificate = Certificate();
+        var pageAsset = new LocalWebStaticAsset("replacement client"u8.ToArray(), "text/plain; charset=utf-8");
+        await using var server = await Server(certificate, assets: new Dictionary<string, LocalWebStaticAsset>
+        {
+            ["/"] = pageAsset,
+            ["/api/session"] = pageAsset,
+            ["/media/private/key"] = pageAsset,
+            ["/category-artwork/private"] = pageAsset,
+            ["/chat-assets/private"] = pageAsset
+        });
+        using var http = Client(certificate, server.Address);
+        Assert.Equal("replacement client", await http.GetStringAsync("/"));
+        using var headRequest = new HttpRequestMessage(HttpMethod.Head, "/");
+        using var headResponse = await http.SendAsync(headRequest);
+        Assert.Equal(HttpStatusCode.OK, headResponse.StatusCode);
+        Assert.Equal((long?)pageAsset.Content.Length, headResponse.Content.Headers.ContentLength);
+        Assert.Equal(pageAsset.ContentType, headResponse.Content.Headers.ContentType?.ToString());
+        Assert.Equal("", await headResponse.Content.ReadAsStringAsync());
+        foreach (var path in new[] { "/api/session", "/media/private/key", "/category-artwork/private", "/chat-assets/private", "/app.js" })
+        {
+            foreach (var method in new[] { HttpMethod.Get, HttpMethod.Head })
+            {
+                using var request = new HttpRequestMessage(method, path);
+                using var response = await http.SendAsync(request);
+                Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+            }
+        }
+        await Login(http);
     }
 
     private static async Task HttpsAsync()
@@ -281,6 +320,7 @@ internal static partial class LocalWebTestCatalog
     private static Task PlaylistAsync()
     {
         using var media = new LocalWebMedia("playback", new Uri("https://cdn.example/manifest.m3u8?secret=signed"));
+        Assert.Throws<InvalidDataException>(() => media.RewritePlaylist("#EXTM3U-invalid\nsegment.ts", new Uri("https://cdn.example/master.m3u8")));
         var rewritten = media.RewritePlaylist("""
             #EXTM3U
             #EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",URI="audio.m3u8?secret=key"
@@ -475,6 +515,45 @@ internal static partial class LocalWebTestCatalog
         context.Response.Body.Position = 0;
         var playlist = await new StreamReader(context.Response.Body).ReadToEndAsync();
         Assert.Contains("/media/id/", playlist);
+    }
+
+    private static async Task MediaExtensionlessMasterAsync()
+    {
+        using var http = new HttpClient(new AsyncHttpMessageHandler((request, _) =>
+        {
+            var path = request.RequestUri!.AbsolutePath;
+            var content = path == "/master"
+                ? "#EXTM3U\n#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"audio\",NAME=\"English\",URI=\"audio\"\n" +
+                  "#EXT-X-STREAM-INF:BANDWIDTH=2000,AUDIO=\"audio\"\nvariant\n"
+                : "#EXTM3U\n#EXTINF:6,\nsegment.ts\n";
+            var ranged = request.Headers.Range is not null;
+            return Task.FromResult(new HttpResponseMessage(ranged ? HttpStatusCode.RequestedRangeNotSatisfiable : HttpStatusCode.OK)
+            {
+                RequestMessage = request,
+                Content = new StringContent(ranged ? "" : content)
+            });
+        }));
+        using var media = new LocalWebMedia("id", new Uri("https://cdn.example/master"), http);
+        using var masterBody = new MemoryStream();
+        var master = new DefaultHttpContext();
+        master.Response.Body = masterBody;
+        await media.ServeAsync(master, media.Root);
+        var lines = Encoding.UTF8.GetString(masterBody.ToArray()).Split('\n');
+        var variant = lines.Single(line => line.StartsWith("/media/id/", StringComparison.Ordinal));
+        var audio = lines.Single(line => line.StartsWith("#EXT-X-MEDIA:", StringComparison.Ordinal)).Split('"')[^2];
+        foreach (var playlist in new[] { variant, audio })
+        {
+            using var body = new MemoryStream();
+            var probe = new DefaultHttpContext();
+            probe.Request.Method = "GET";
+            probe.Request.Headers.Range = "bytes=0-1";
+            probe.Response.Body = body;
+            await media.ServeAsync(probe, playlist.Split('/')[^1]);
+            Assert.Equal(200, probe.Response.StatusCode);
+            Assert.Equal("application/vnd.apple.mpegurl", probe.Response.ContentType);
+            Assert.True(playlist.EndsWith(".m3u8", StringComparison.Ordinal));
+            Assert.Contains("/media/id/", Encoding.UTF8.GetString(body.ToArray()));
+        }
     }
 
     private sealed class TestWorkspace : ILocalWebWorkspace

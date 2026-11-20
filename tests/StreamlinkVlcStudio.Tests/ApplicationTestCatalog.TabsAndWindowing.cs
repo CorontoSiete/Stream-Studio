@@ -908,10 +908,11 @@ internal static partial class ApplicationTestCatalog
             BindingFlags.Static | BindingFlags.NonPublic);
         Assert.NotNull(subSourceMethod);
 
-        var option = (string)subSourceMethod!.Invoke(null, ["svs_test", @"C:\state\overlay.txt"])!;
+        var option = (string)subSourceMethod!.Invoke(null, ["svs_test", @"C:\O'Neil, Jr\{state}\overlay.txt"])!;
         var options = LibVlcPlaybackEngine.BuildLibVlcOptionsForRenderer(VideoRendererMode.Gdi);
 
         Assert.Contains("show-placeholder=0", option);
+        Assert.Contains("position-state-path=\"C:/O'Neil, Jr/{state}/overlay.txt\"", option);
         Assert.DoesNotContain("show-placeholder=1", option);
         Assert.Equal(false, options.Any(item => item.StartsWith("--myoverlay-", StringComparison.Ordinal)));
         Assert.Equal(false, options.Any(item => item == "--myoverlay-show-placeholder=1"));
@@ -1141,6 +1142,11 @@ internal static partial class ApplicationTestCatalog
             var overlaySource = CreateValidOverlayDirectory(Path.Combine(root, "overlay-source"));
             var publishDir = Path.Combine(root, "publish");
             Directory.CreateDirectory(publishDir);
+            var compilerHelper = Path.Combine("scripts", "lib", "vlc-compiler.ps1");
+            Assert.True(File.Exists(Path.Combine(AppContext.BaseDirectory, compilerHelper)),
+                "The native rebuild scripts require the shared VLC compiler helper.");
+            Directory.CreateDirectory(Path.Combine(publishDir, "scripts", "lib"));
+            File.Copy(Path.Combine(AppContext.BaseDirectory, compilerHelper), Path.Combine(publishDir, compilerHelper));
             File.WriteAllText(Path.Combine(publishDir, "StreamlinkVlcStudio.App.Wpf.exe"), "fake exe");
             File.WriteAllText(Path.Combine(publishDir, "debug.log"), "do not ship");
             File.WriteAllText(Path.Combine(publishDir, "settings.json"), "{}");
@@ -1176,6 +1182,7 @@ internal static partial class ApplicationTestCatalog
                 .ToArray();
             Assert.True(entries.Contains("vlc-overlay/build/libmyoverlay_plugin.dll", StringComparer.OrdinalIgnoreCase));
             Assert.True(entries.Contains("vlc-overlay/build/vlc_chat_overlay.exe", StringComparer.OrdinalIgnoreCase));
+            Assert.True(entries.Contains("scripts/lib/vlc-compiler.ps1", StringComparer.OrdinalIgnoreCase));
             Assert.Equal(false, entries.Any(entry => entry.StartsWith("browser-extension/", StringComparison.OrdinalIgnoreCase)));
             Assert.True(entries.Contains("StreamStudio.exe", StringComparer.OrdinalIgnoreCase));
             Assert.True(entries.Contains("Uninstall.exe", StringComparer.OrdinalIgnoreCase));

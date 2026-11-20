@@ -45,35 +45,29 @@ Tradeoffs considered:
   - One Twitch GraphQL transport and one Kick website JSON/fallback reader shared by replay, chat, VOD, and browsing callers.
   - `ReplayResolver` and `BrowseService` remain compatibility façades; browse payload mapping, Twitch rate-limit coordination, and replay URL validation are separate components.
 
+- `StreamlinkVlcStudio.Workspace`
+  - Plain .NET library for desktop workflows. It owns stream and replay playback orchestration, chat and replay timing, search, browsing, follows, watch history, downloads, settings, and tab lifecycles.
+  - `MainViewModel` exposes the workspace's state and commands. `StreamTabViewModel` exposes per-stream playback and chat state. Both use service contracts and observable .NET state that a new UI can bind to or subscribe to.
+  - The workspace accepts host callbacks for UI dispatch, external links, theme changes, download confirmation, chat presentation, and optional native video and chat integration.
+
 - `StreamlinkVlcStudio.App.Wpf`
-  - WPF shell.
-  - Embedded HWND video surface.
-  - Per-tab view models.
-  - Single-stream and paged multi-stream video layout for up to 16 streams per page.
-  - Playback controls.
-  - Settings drawer.
-  - Home page for stream search, live and offline followed channels, platform VOD browsing, and recently watched streams.
-  - Docked chat rendering.
-  - Internal lifecycle controllers keep search cancellation/debounce, VOD and Browse pagination
-    generations, recent-stream transient state, tab grouping, inactive-tab playback policy,
-    background operation draining, tab-start throttling, deferred playback cleanup, and
-    tab lifecycle boundaries out of the UI-facing state adapters. The view models still
-    own WPF collections and public commands, while the controllers provide reusable, shutdown-safe
-    operation boundaries.
-  - `MainViewModelDependencies` and `StreamTabViewModelDependencies` are the required composition
-    records used by application startup. Tests use centralized `TestViewModels` builders so service
-    wiring is defined once instead of relying on positional constructor adapters.
-  - Playback teardown is isolated in `PlaybackResourceCoordinator`; chat event subscription and
-    Twitch prediction wiring are isolated in `ChatClientEventCoordinator`; native overlay capability
-    checks use the cancellable `NativeOverlayCapabilityProbe`. These coordinators own operation
-    lifetimes, not WPF collections or serialized settings.
-  - Native PiP hit testing goes through `IWindowHitTester` and `WindowHitTestPolicy`, allowing z-order
-    decisions to be tested without calling `user32` and keeping detached-window teardown predictable.
-  - Home middle-button scroll calculations are owned by `HomeAutoScrollController`; window events and tests call the shared policy directly.
-  - Native overlay transport uses one complete-message codec with a 32 MiB limit, bounded control-reserved write budgeting, generation/sequence-checked resize persistence, and identity-keyed capability probes.
+  - XAML, windows, controls, theme resources, input handling, and desktop composition.
+  - Owns the HWND surfaces and transfers the same surface between the main and detached windows. The workspace receives handles through `SetVideoHandle` and `ClearVideoHandle`.
+  - Provides Windows integrations including native chat overlay rendering, notifications, clipboard, and WebView2 sessions for website sign-in and provider features.
+  - Native PiP hit testing uses `IWindowHitTester` and `WindowHitTestPolicy`. Native overlay transport uses a bounded message codec, control-reserved write budgeting, and identity-keyed capability probes.
+
+- `StreamlinkVlcStudio.WebClient`
+  - The bundled LAN browser UI and its static assets. The desktop host passes them into `LocalWebServer`.
+  - The server and its playback, chat, and account operations live in Infrastructure. A different browser client can use the existing same-origin API and media routes.
 
 - `StreamlinkVlcStudio.Tests`
-  - Dependency-free console test runner for pure logic and config round trips.
+  - Dependency-free console test runner for logic, integration, and UI behavior.
+
+## Replacing the UI
+
+For a desktop rewrite, reference [Workspace](../src/StreamlinkVlcStudio.Workspace/StreamlinkVlcStudio.Workspace.csproj) and construct [MainViewModel](../src/StreamlinkVlcStudio.Workspace/ViewModels/MainViewModel.cs) with [MainViewModelDependencies](../src/StreamlinkVlcStudio.Workspace/ViewModels/MainViewModelDependencies.cs). Supply the core services and a dispatcher for the new UI's thread, call `Initialize` on that thread, and bind to the workspace's state and commands or call methods such as `OpenStreamAsync`. Supply video handles from the new player's view, use the optional parking surface factory for hidden VLC playback, and call `DisposeAsync` when closing the workspace. The [WPF host](../src/StreamlinkVlcStudio.App.Wpf/MainWindow.xaml.cs) shows the production wiring. A host without the native VLC chat overlay uses docked chat when the overlay layout is selected.
+
+For a browser rewrite, provide the replacement assets to [LocalWebServer](../src/StreamlinkVlcStudio.Infrastructure/LocalWeb/LocalWebServer.cs). The [local web guide](local-web-server.md) describes the browser features and service boundaries. The server owns authentication, session state, and playback and media access.
 
 ## Playback Flow
 

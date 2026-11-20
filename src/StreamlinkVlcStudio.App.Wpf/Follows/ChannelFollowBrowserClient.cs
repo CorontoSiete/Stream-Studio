@@ -15,14 +15,13 @@ internal sealed class ChannelFollowBrowserClient : IDisposable
 {
     private readonly CoreWebView2 core;
     private readonly ChannelFollowResponseTracker tracker;
+    private readonly WebView2ChannelNavigation navigation;
     private readonly CancellationTokenSource lifetime = new();
     private readonly TimeSpan operationTimeout;
     private readonly Func<CancellationToken, Task>? verifySession;
     private readonly Func<bool>? showVerification;
     private readonly string scriptKey = "__streamStudioFollow_" + Guid.NewGuid().ToString("N");
     private Task responseTail = Task.CompletedTask;
-    private int navigationVersion;
-    private string currentSource = "";
     private bool twitchMutationRequested;
     private bool disposed;
 
@@ -31,13 +30,12 @@ internal sealed class ChannelFollowBrowserClient : IDisposable
     {
         this.core = core;
         tracker = new ChannelFollowResponseTracker(target, desiredFollowing);
+        navigation = new(core, tracker.IsChannelPage, tracker.Reset);
         this.operationTimeout = operationTimeout ?? TimeSpan.FromSeconds(45);
         this.verifySession = verifySession;
         this.showVerification = showVerification;
         core.WebResourceResponseReceived += OnResponse;
         core.WebResourceRequested += OnRequest;
-        core.NavigationStarting += OnNavigation;
-        core.SourceChanged += OnSourceChanged;
     }
 
     internal async Task<ChannelFollowResult> FollowAsync(CancellationToken cancellationToken)
@@ -63,9 +61,9 @@ internal sealed class ChannelFollowBrowserClient : IDisposable
             while (true)
             {
                 token.ThrowIfCancellationRequested();
-                if (!tracker.IsChannelPage(core.Source))
+                if (!navigation.IsOnChannel)
                     throw new InvalidOperationException($"{tracker.Target.Platform} left the selected channel. The follow was not confirmed.");
-                if (clickAttempted && clickNavigationVersion != navigationVersion)
+                if (clickAttempted && clickNavigationVersion != navigation.Version)
                     throw new InvalidOperationException($"{tracker.Target.Platform} navigated during the follow. Check the channel before retrying.");
                 if (tracker.Error is { } error) throw new InvalidOperationException(error);
                 if (tracker.Confirmed) return Result();
@@ -95,9 +93,9 @@ internal sealed class ChannelFollowBrowserClient : IDisposable
                     continue;
                 }
 
-                var canClick = tracker.DesiredFollowing is not null && (tracker.Target.Platform == PlatformKind.Kick ||
+                var canClick = tracker.Target.Platform == PlatformKind.Kick ||
                     tracker.HasTwitchFollowState && tracker.TwitchDisplayName.Length != 0 &&
-                    (tracker.DesiredFollowing == false || tracker.TwitchCanFollow == true));
+                    (tracker.DesiredFollowing == false || tracker.TwitchCanFollow == true);
                 var canDispatch = canClick && (!clickAttempted ||
                     tracker.Target.Platform == PlatformKind.Twitch && tracker.DesiredFollowing == true && !twitchMutationRequested);
                 if (canDispatch && verifySession is not null) await verifySession(token);
@@ -105,7 +103,7 @@ internal sealed class ChannelFollowBrowserClient : IDisposable
                 if (clickAttempted && twitchMutationRequested) canDispatch = false;
                 if (canDispatch) tracker.Arm();
                 token.ThrowIfCancellationRequested();
-                var versionBeforeClick = navigationVersion;
+                var versionBeforeClick = navigation.Version;
                 var json = await core.ExecuteScriptAsync(ChannelFollowScript.Build(tracker.Target, scriptKey, canDispatch,
                     tracker.TwitchDisplayName, tracker.DesiredFollowing != false, retryUndispatched: clickAttempted && canDispatch))
                     .WaitAsync(token);
@@ -165,61 +163,20 @@ internal sealed class ChannelFollowBrowserClient : IDisposable
 
     private async Task NavigateAsync(CancellationToken token)
     {
-        var navigation = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        ulong? navigationId = null;
-        void Starting(object? sender, CoreWebView2NavigationStartingEventArgs args)
-        {
-            if (navigationId is null && tracker.IsChannelPage(args.Uri)) navigationId = args.NavigationId;
-        }
-        void Completed(object? sender, CoreWebView2NavigationCompletedEventArgs args)
-        {
-            // A previous about:blank/sign-in navigation can finish after Navigate is called again.
-            // Only the requested channel's navigation may release the follow operation.
-            if (navigationId != args.NavigationId) return;
-            if (args.IsSuccess && tracker.IsChannelPage(core.Source)) navigation.TrySetResult();
-            else navigation.TrySetException(new InvalidOperationException($"{tracker.Target.Platform} did not load. Check your connection and retry Follow."));
-        }
-        core.NavigationStarting += Starting;
-        core.NavigationCompleted += Completed;
-        try
-        {
-            token.ThrowIfCancellationRequested();
-            core.Navigate(tracker.ChannelUri.AbsoluteUri);
-            await navigation.Task.WaitAsync(token);
-        }
-        finally
-        {
-            core.NavigationStarting -= Starting;
-            core.NavigationCompleted -= Completed;
-        }
-    }
-
-    private void OnNavigation(object? sender, CoreWebView2NavigationStartingEventArgs args)
-    {
-        navigationVersion++;
-        tracker.Reset();
-    }
-
-    private void OnSourceChanged(object? sender, CoreWebView2SourceChangedEventArgs args)
-    {
-        if (tracker.IsChannelPage(currentSource) && !tracker.IsChannelPage(core.Source))
-        {
-            navigationVersion++;
-            tracker.Reset();
-        }
-        currentSource = core.Source;
+        if (!await navigation.NavigateAsync(tracker.ChannelUri, Timeout.InfiniteTimeSpan, token))
+            throw new InvalidOperationException($"{tracker.Target.Platform} did not load. Check your connection and retry Follow.");
     }
 
     private void OnResponse(object? sender, CoreWebView2WebResourceResponseReceivedEventArgs args)
     {
-        if (disposed || !tracker.IsChannelPage(core.Source) ||
+        if (disposed || !navigation.IsOnChannel ||
             !tracker.IsResponseCandidate(args.Request.Method, args.Request.Uri)) return;
         var requestBody = tracker.Target.Platform == PlatformKind.Twitch ? ReadRequestBody(args.Request) : "";
         // GetContentAsync must start while the native response event is active. Keep response processing ordered.
         var body = tracker.Target.Platform == PlatformKind.Twitch && args.Response.StatusCode is >= 200 and < 300
             ? ReadResponseBodyAsync(args.Response, lifetime.Token) : Task.FromResult("");
         responseTail = ObserveResponseAsync(responseTail, body, args.Request.Method, args.Request.Uri,
-            args.Response.StatusCode, requestBody, navigationVersion, lifetime.Token);
+            args.Response.StatusCode, requestBody, navigation.Version, lifetime.Token);
     }
 
     private async void OnRequest(object? sender, CoreWebView2WebResourceRequestedEventArgs args)
@@ -289,7 +246,7 @@ internal sealed class ChannelFollowBrowserClient : IDisposable
             await previous;
             var response = await body;
             token.ThrowIfCancellationRequested();
-            if (!disposed && version == navigationVersion && tracker.IsChannelPage(core.Source))
+            if (!disposed && navigation.IsCurrent(version))
                 tracker.Observe(method, address, status, requestBody, response);
         }
         catch (Exception)
@@ -349,8 +306,7 @@ internal sealed class ChannelFollowBrowserClient : IDisposable
         lifetime.Cancel();
         core.WebResourceResponseReceived -= OnResponse;
         core.WebResourceRequested -= OnRequest;
-        core.NavigationStarting -= OnNavigation;
-        core.SourceChanged -= OnSourceChanged;
+        navigation.Dispose();
         lifetime.Dispose();
     }
 }

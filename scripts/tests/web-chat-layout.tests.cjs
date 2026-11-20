@@ -89,3 +89,23 @@ test('disk/network save failures are visible and a subsequent adjustment retries
   f.failSave(false); await save(f, p, other);
   assert.deepEqual(fields(await fixture({ layouts: f.layouts }).open()), other);
 });
+
+test('a late layout save from a disconnected session does not show an error', async () => {
+  const started = Promise.withResolvers();
+  const response = Promise.withResolvers();
+  const f = fixture({ onRequest: url => {
+    if (url !== '/api/chat/layout') return;
+    started.resolve();
+    return response.promise;
+  } });
+  try {
+    const saving = save(f, await f.open(), first);
+    await started.promise;
+    f.disconnect();
+    response.resolve({ ok: true, text: async () => '{}' });
+    await saving;
+    assert.equal(f.document.querySelector('#notice').hidden, true);
+  } finally {
+    f.disconnect();
+  }
+});

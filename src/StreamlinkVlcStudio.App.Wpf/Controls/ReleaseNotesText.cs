@@ -4,7 +4,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Media;
-using StreamlinkVlcStudio.App.Wpf.Services;
+using StreamlinkVlcStudio.Workspace.Services;
 
 namespace StreamlinkVlcStudio.App.Wpf.Controls;
 

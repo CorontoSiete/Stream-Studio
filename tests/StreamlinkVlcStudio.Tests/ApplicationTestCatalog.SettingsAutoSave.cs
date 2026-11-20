@@ -9,6 +9,7 @@ internal static partial class ApplicationTestCatalog
         ("settings autosave: rapid edits share one write containing the final values", AutoSaveSettingsDebounceAsync),
         ("settings autosave: replacing settings groups observes the replacements and releases old groups", AutoSaveSettingsReplacementAsync),
         ("settings autosave: edits during a write are serialized and flushed before shutdown", AutoSaveSettingsDuringWriteAsync),
+        ("settings autosave: a failed write still saves an edit queued during it", AutoSaveSettingsAfterFailedWriteAsync),
         ("settings autosave: failed feedback cannot discard edits during shutdown", AutoSaveSettingsReportingFailureAsync),
         ("settings autosave: failed save feedback retains edits for retry", AutoSaveSettingsFailureReportingAsync),
         ("settings autosave: leaving settings and shutting down flush pending edits", AutoSaveSettingsOnCloseAsync)
@@ -209,6 +210,31 @@ internal static partial class ApplicationTestCatalog
         }
         finally { service.ReleaseFirstSave.TrySetResult(); }
     });
+
+    private static async Task AutoSaveSettingsAfterFailedWriteAsync()
+    {
+        var settings = new AppSettings();
+        var service = new AutoSaveRecordingSettingsService { HoldFirstSave = true };
+        var reported = new List<Exception?>();
+        await using var controller = new SettingsAutoSaveController(settings, service, action => action(), reported.Add);
+        try
+        {
+            settings.DefaultQuality = "720p";
+            var save = controller.FlushAsync();
+            settings.DefaultQuality = "480p";
+            Assert.True(ReferenceEquals(save, controller.FlushAsync()));
+
+            var error = new IOException("Temporary settings write failure.");
+            service.ReleaseFirstSave.TrySetException(error);
+            await save.WaitAsync(TimeSpan.FromSeconds(3));
+
+            Assert.Equal(2, service.Snapshots.Count);
+            Assert.Equal("480p", service.Snapshots[1].DefaultQuality);
+            Assert.Equal(1, service.MaximumConcurrentSaves);
+            Assert.SequenceEqual(new Exception?[] { error, null }, reported);
+        }
+        finally { service.ReleaseFirstSave.TrySetResult(); }
+    }
 
     private static async Task AutoSaveSettingsReportingFailureAsync()
     {

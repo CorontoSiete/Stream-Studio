@@ -1519,7 +1519,7 @@ internal sealed class FakeLiveNotificationService : ILiveNotificationService
     private readonly List<LiveChannelNotification> notifications = [];
     private bool isEnabled = true;
 
-    public event Action<NotificationActivation>? Activated;
+    public event Action<NotificationActivation>? Activated { add { } remove { } }
 
     public bool IsEnabled
     {
@@ -1561,11 +1561,6 @@ internal sealed class FakeLiveNotificationService : ILiveNotificationService
 
             notifications.Add(notification);
         }
-    }
-
-    public void RaiseActivated(NotificationActivation activation)
-    {
-        Activated?.Invoke(activation);
     }
 }
 
@@ -1781,7 +1776,6 @@ internal sealed class FakeBrowseService : IBrowseService
 {
     private readonly object gate = new();
     private readonly Queue<BrowseResult<BrowseCategory>> categoryResults = new();
-    private readonly Queue<BrowseResult<BrowseCategoryViewerCount>> categoryViewerCountResults = new();
     private readonly Queue<BrowseResult<BrowseLiveStream>> streamResults = new();
     private readonly List<BrowseCategoryRequest> categoryRequests = [];
     private readonly List<BrowseCategoryViewerCountRequest> categoryViewerCountRequests = [];
@@ -1833,14 +1827,6 @@ internal sealed class FakeBrowseService : IBrowseService
         lock (gate)
         {
             categoryResults.Enqueue(result);
-        }
-    }
-
-    public void EnqueueCategoryViewerCounts(BrowseResult<BrowseCategoryViewerCount> result)
-    {
-        lock (gate)
-        {
-            categoryViewerCountResults.Enqueue(result);
         }
     }
 
@@ -1904,11 +1890,6 @@ internal sealed class FakeBrowseService : IBrowseService
             if (CategoryViewerCountResponder is not null)
             {
                 return CategoryViewerCountResponder(request);
-            }
-
-            if (categoryViewerCountResults.Count > 0)
-            {
-                return Task.FromResult(categoryViewerCountResults.Dequeue());
             }
         }
 
@@ -2151,6 +2132,9 @@ internal sealed class BlockingTransportSession : IStreamTransportSession
 
 internal static class TestViewModels
 {
+    internal static NativeChatOverlayController GetNativeOverlay(StreamTabViewModel tab) =>
+        (NativeChatOverlayController)(tab.NativeOverlay ?? throw new InvalidOperationException("The native overlay adapter was not configured."));
+
     public static MainViewModel CreateMain(
         AppSettings settings,
         ISettingsService settingsService,
@@ -2183,6 +2167,11 @@ internal static class TestViewModels
         new(new MainViewModelDependencies
         {
             Settings = settings,
+            CreateNativeChatOverlay = context => new NativeChatOverlayController(context),
+            CreateParkingVideoSurface = () => new ParkingVideoSurface(),
+            ConfigureChatPresentation = DockedChatBadgeCatalog.ConfigureShared,
+            ApplyTheme = StreamlinkVlcStudio.App.Wpf.Themes.ThemeManager.ApplyTheme,
+            KeepHomeOnOpen = () => (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control,
             SettingsService = settingsService,
             StreamlinkService = streamlinkService,
             PlaybackFactory = playbackFactory,
@@ -2230,6 +2219,9 @@ internal static class TestViewModels
         new(new StreamTabViewModelDependencies
         {
             Target = target,
+            CreateNativeChatOverlay = context => new NativeChatOverlayController(context),
+            CreateParkingVideoSurface = () => new ParkingVideoSurface(),
+            ConfigureChatPresentation = DockedChatBadgeCatalog.ConfigureShared,
             Quality = quality,
             StreamlinkService = streamlinkService,
             PlaybackFactory = playbackFactory,
@@ -2366,6 +2358,7 @@ internal sealed class FakePlaybackEngine : IPlaybackEngine
     public Func<TimeSpan, CancellationToken, Task>? SeekOverride { get; init; }
     public TaskCompletionSource SeekStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     public Task StopCompletion { get; init; } = Task.CompletedTask;
+    public Func<CancellationToken, Task>? StopOverride { get; init; }
     public TaskCompletionSource StopStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     public FakeSharedAudioState? SharedAudioState { get; init; }
     public ConcurrentQueue<FakePlaybackAudioCall>? AudioCallLog { get; init; }
@@ -2477,7 +2470,7 @@ internal sealed class FakePlaybackEngine : IPlaybackEngine
     public async Task StopAsync(CancellationToken cancellationToken = default)
     {
         StopStarted.TrySetResult();
-        await StopCompletion.WaitAsync(cancellationToken);
+        await (StopOverride?.Invoke(cancellationToken) ?? StopCompletion.WaitAsync(cancellationToken));
         StopCount++;
         Stopped = true;
         Paused = true;

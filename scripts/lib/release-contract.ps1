@@ -1,8 +1,22 @@
+function Resolve-ReleasePath([string]$Path, [string]$DefaultPath) {
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        if ([string]::IsNullOrWhiteSpace($DefaultPath)) { throw 'A release path is required.' }
+        $Path = $DefaultPath
+    }
+    $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)
+}
+
+function Get-ReleaseContractPublicKeyPath([string]$ContractPath, $Contract) {
+    $directory = Split-Path -Parent $ContractPath
+    $root = if ((Split-Path -Leaf $directory) -ieq 'shared') { Split-Path -Parent $directory } else { $directory }
+    Join-Path $root ([string]$Contract.release.manifestSignature.publicKey)
+}
+
 function ConvertTo-StableReleaseVersion {
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)][string]$Version)
 
-    if ($Version -notmatch '^(?<major>0|[1-9][0-9]*)\.(?<minor>0|[1-9][0-9]*)\.(?<patch>0|[1-9][0-9]*)$') {
+    if ($Version -notmatch '^(?<major>0|[1-9][0-9]*)\.(?<minor>0|[1-9][0-9]*)\.(?<patch>0|[1-9][0-9]*)\z') {
         throw "Release version must be exactly MAJOR.MINOR.PATCH with no prerelease, metadata, or leading zeroes: '$Version'."
     }
 
@@ -29,7 +43,7 @@ function Get-StableReleaseIdentity {
         [Parameter(Mandatory = $true)][string]$Tag,
         [string]$MinimumVersion = '1.7.0')
 
-    if ($Tag -notmatch '^v(?<version>(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))$') {
+    if ($Tag -cnotmatch '^v(?<version>(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))\z') {
         throw "Stable releases require an exact vMAJOR.MINOR.PATCH tag: '$Tag'."
     }
     $versionText = $Matches.version
@@ -51,7 +65,7 @@ function Get-PemSubjectPublicKeyInfoBytes {
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)][string]$Path)
 
-    $fullPath = [IO.Path]::GetFullPath($Path)
+    $fullPath = Resolve-ReleasePath $Path
     if (-not (Test-Path -LiteralPath $fullPath -PathType Leaf)) {
         throw "Release public key is missing: $fullPath"
     }
@@ -70,13 +84,32 @@ function Get-PemSubjectPublicKeyInfoBytes {
     $bytes
 }
 
+function Get-ArtifactRecord([string]$Path, [string]$ExpectedName) {
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "Release metadata input is missing: $Path"
+    }
+    $file = Get-Item -LiteralPath $Path
+    if ($file.Name -cne $ExpectedName -or $file.Length -le 0) {
+        throw "Release metadata input must be a non-empty $ExpectedName file: $Path"
+    }
+    [ordered]@{
+        name = $file.Name
+        length = $file.Length
+        sha256 = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+    }
+}
+
 function Get-ReleasePublicKeyId {
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)][string]$Path)
 
+    Get-ReleaseKeyFingerprint (Get-PemSubjectPublicKeyInfoBytes $Path)
+}
+
+function Get-ReleaseKeyFingerprint([byte[]]$SubjectPublicKeyInfo) {
     $algorithm = [Security.Cryptography.SHA256]::Create()
     try {
-        ([BitConverter]::ToString($algorithm.ComputeHash((Get-PemSubjectPublicKeyInfoBytes $Path)))).Replace('-', '').ToLowerInvariant()
+        ([BitConverter]::ToString($algorithm.ComputeHash($SubjectPublicKeyInfo))).Replace('-', '').ToLowerInvariant()
     } finally {
         $algorithm.Dispose()
     }
@@ -91,7 +124,7 @@ function Get-MsiPropertyValue {
         [ValidatePattern('^[A-Za-z][A-Za-z0-9_]*$')][string]$Column = 'Value',
         [ValidatePattern('^[A-Za-z][A-Za-z0-9_]*$')][string]$KeyColumn = 'Property')
 
-    $fullPath = [IO.Path]::GetFullPath($Path)
+    $fullPath = Resolve-ReleasePath $Path
     if (-not (Test-Path -LiteralPath $fullPath -PathType Leaf)) {
         throw "MSI database is missing: $fullPath"
     }
@@ -156,7 +189,7 @@ function Read-ReleaseContract {
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)][string]$Path)
 
-    $fullPath = [IO.Path]::GetFullPath($Path)
+    $fullPath = Resolve-ReleasePath $Path
     if (-not (Test-Path -LiteralPath $fullPath -PathType Leaf)) {
         throw "Release contract missing: $fullPath"
     }
@@ -180,16 +213,7 @@ function Read-ReleaseContract {
         -not (Test-SafeWindowsRelativePath ([string]$contract.release.manifestSignature.publicKey))) {
         throw "Release contract contains an invalid stable-release or manifest-signing policy: $fullPath"
     }
-    $contractDirectory = Split-Path -Parent $fullPath
-    $repositoryRoot = if ([string]::Equals(
-            (Split-Path -Leaf $contractDirectory),
-            'shared',
-            [StringComparison]::OrdinalIgnoreCase)) {
-        Split-Path -Parent $contractDirectory
-    } else {
-        $contractDirectory
-    }
-    $publicKeyPath = [IO.Path]::GetFullPath((Join-Path $repositoryRoot ([string]$contract.release.manifestSignature.publicKey)))
+    $publicKeyPath = Get-ReleaseContractPublicKeyPath $fullPath $contract
     $actualKeyId = Get-ReleasePublicKeyId $publicKeyPath
     if ($actualKeyId -cne [string]$contract.release.manifestSignature.keyId) {
         throw "Release public-key ID mismatch. Contract: $($contract.release.manifestSignature.keyId); actual: $actualKeyId."
@@ -403,7 +427,8 @@ function New-VerifiedReleaseSet {
     param(
         [Parameter(Mandatory = $true)]$Contract,
         [Parameter(Mandatory = $true)][string]$RepositoryRoot,
-        [Parameter(Mandatory = $true)][string]$Destination)
+        [Parameter(Mandatory = $true)][string]$Destination,
+        [scriptblock]$ValidateStagedSet)
 
     $repository = [IO.Path]::GetFullPath($RepositoryRoot)
     $destinationRoot = [IO.Path]::GetFullPath($Destination)
@@ -449,6 +474,7 @@ function New-VerifiedReleaseSet {
 
         $stagedSet = @(Get-ReleaseSetFiles -Root $stage -Contract $Contract)
         Assert-ReleaseChecksums -ReleaseSetFiles $stagedSet -ChecksumPath $checksumPath
+        if ($ValidateStagedSet) { & $ValidateStagedSet $stagedSet | Out-Null }
 
         if (Test-Path -LiteralPath $destinationRoot -PathType Container) {
             [IO.Directory]::Move($destinationRoot, $backup)

@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -14,6 +15,23 @@ from urllib.request import Request, urlopen
 REPOSITORY = "CorontoSiete/Stream-Studio"
 RELEASE_PREFIX = f"https://github.com/{REPOSITORY}/releases/"
 WEBHOOK_PATTERN = r"https://discord\.com/api/(?:v10/)?webhooks/\d+/[A-Za-z0-9_-]+"
+
+
+def retry_delay(error):
+    try:
+        body = json.load(error)
+    except ValueError:
+        body = None
+    for value in (body.get("retry_after") if isinstance(body, dict) else None, (error.headers or {}).get("Retry-After")):
+        try:
+            seconds = float(value)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if math.isfinite(seconds) and seconds >= 0:
+            if seconds > 60:
+                raise RuntimeError(f"Announcement was rate limited. Retry after {seconds:g} seconds.") from None
+            return max(1, seconds)
+    return 1
 
 
 def request_json(url, *, payload=None, method=None, token=None):
@@ -31,32 +49,33 @@ def request_json(url, *, payload=None, method=None, token=None):
                 body = response.read()
                 return json.loads(body) if body else {}
         except HTTPError as error:
-            if error.code == 429 and attempt < 3:
-                try:
-                    delay = float(json.loads(error.read()).get("retry_after", 1))
-                except (ValueError, TypeError):
-                    delay = 1
-                time.sleep(min(max(delay, 1), 10))
-                continue
-            # Webhook URLs contain credentials; never print the request URL.
-            raise RuntimeError(f"Announcement request failed (HTTP {error.code}).") from None
+            with error:
+                if error.code != 429 or attempt == 3:
+                    # Webhook URLs contain credentials; never print the request URL.
+                    raise RuntimeError(f"Announcement request failed (HTTP {error.code}).") from None
+                delay = retry_delay(error)
+            time.sleep(delay)
         except (URLError, TimeoutError):
             # An ambiguous send must not be retried automatically.
             raise RuntimeError("Announcement connection failed; inspect the channel before retrying.") from None
 
 
+def utf16_prefix_length(text, limit):
+    remaining = limit
+    for index, character in enumerate(text):
+        remaining -= 2 if ord(character) > 0xFFFF else 1
+        if remaining < 0:
+            return index
+    return len(text)
+
+
 def split_notes(text, limit=3600):
     """Preserve text while respecting Discord's UTF-16 limits."""
+    if limit < 2:
+        raise ValueError("The note limit must accommodate any Unicode character.")
     chunks = []
     while text:
-        units = 0
-        end = 0
-        for character in text:
-            size = 2 if ord(character) > 0xFFFF else 1
-            if units + size > limit:
-                break
-            units += size
-            end += 1
+        end = utf16_prefix_length(text, limit)
         if end < len(text):
             boundary = text.rfind("\n\n", 0, end)
             if boundary >= end // 2:
@@ -89,7 +108,7 @@ def build_payloads(release, *, ping_everyone=True):
     messages = []
     for index, chunk in enumerate(chunks):
         embed = {
-            "title": title[:240] if index == 0 else f"Changelog continued ({index + 1}/{len(chunks)})",
+            "title": title[:utf16_prefix_length(title, 240)] if index == 0 else f"Changelog continued ({index + 1}/{len(chunks)})",
             "url": url,
             "description": chunk,
             "color": 0x74E3BF,
@@ -131,14 +150,14 @@ def main():
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--edit-message-id")
     args = parser.parse_args()
+    dry_run = args.dry_run or os.environ.get("DISCORD_DRY_RUN", "").lower() == "true"
     webhook = os.environ.get("DISCORD_RELEASE_WEBHOOK_URL", "").strip()
-    if not re.fullmatch(WEBHOOK_PATTERN, webhook):
+    if not (dry_run and args.release_json) and not re.fullmatch(WEBHOOK_PATTERN, webhook):
         raise ValueError("DISCORD_RELEASE_WEBHOOK_URL is missing or is not a Discord webhook.")
     if args.edit_message_id is not None and not args.edit_message_id.isdecimal():
         raise ValueError("The message ID must contain only digits.")
     release = load_release(args.release_json)
     messages = build_payloads(release, ping_everyone=args.edit_message_id is None)
-    dry_run = args.dry_run or os.environ.get("DISCORD_DRY_RUN", "").lower() == "true"
     message_ids = []
     if dry_run:
         if not args.release_json:

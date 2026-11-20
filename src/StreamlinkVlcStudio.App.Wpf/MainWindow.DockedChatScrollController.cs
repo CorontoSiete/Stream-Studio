@@ -4,8 +4,8 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Threading;
-using StreamlinkVlcStudio.App.Wpf.ViewModels;
 using StreamlinkVlcStudio.Core.Settings;
+using StreamlinkVlcStudio.Workspace.ViewModels;
 
 namespace StreamlinkVlcStudio.App.Wpf;
 

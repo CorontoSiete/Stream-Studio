@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -45,10 +46,12 @@ public sealed record LocalWebDependencies
 /// <summary>A device owns its players/chat. Desktop account credentials never enter a response.</summary>
 public sealed partial class LocalWebWorkspace(LocalWebDependencies services) : ILocalWebWorkspace
 {
+    private const int MaximumPlayers = 16;
+    private const string PlayerLimitMessage = "The browser player limit has been reached. Close a player first.";
     private readonly ConcurrentDictionary<string, Player> players = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, string> categoryArtworkUrls = new(StringComparer.Ordinal);
     private readonly Dictionary<string, StreamTarget> targets = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, string> targetIds = new(StringComparer.Ordinal);
+    private readonly Dictionary<(string Identity, bool LiveArchive), string> targetIds = [];
     private readonly HashSet<string> liveArchiveKeys = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource lifetime = new();
     private readonly AsyncOperationGate categoryViewerCountSlots = new(4);
@@ -64,6 +67,13 @@ public sealed partial class LocalWebWorkspace(LocalWebDependencies services) : I
     public async Task<object?> InvokeAsync(string action, JsonElement input, CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
+        // Closing releases resources even when desktop settings are unavailable.
+        if (action == "close")
+        {
+            if (players.TryRemove(RequiredText(input, "player", 64), out var closed))
+                await closed.DisposeAsync().ConfigureAwait(false);
+            return new { closed = true };
+        }
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, lifetime.Token);
         var token = linked.Token;
         if (action == "hotkeys" && services.GetDesktopHotkeysAsync is { } getDesktopHotkeys)
@@ -128,25 +138,20 @@ public sealed partial class LocalWebWorkspace(LocalWebDependencies services) : I
                 return new { items = settings.RecentStreams.Select(s => Card(StreamInputParser.FromChannel(s.Platform, s.Channel) with { ProfileImageUrl = s.ProfileImageUrl }, s.DisplayName, s.CategoryName, s.ThumbnailUrl, "Recent")).ToArray() };
             case "recent/remove":
                 var recent = Target(input);
-                await services.ChangeSettingsAsync(s => s.RecentStreams = s.RecentStreams.Where(r => r.Platform != recent.Platform || !r.Channel.Equals(recent.Channel, StringComparison.OrdinalIgnoreCase)).ToList(), token).ConfigureAwait(false);
+                await services.ChangeSettingsAsync(s => s.RecentStreams = s.RecentStreams.Where(r => !r.Matches(recent)).ToList(), token).ConfigureAwait(false);
                 return new { removed = true };
             case "started":
                 var playing = GetPlayer(input);
                 if (!playing.Target.IsExplicitVod && !playing.RecordedRecent)
                 {
                     var target = playing.Target;
-                    await services.ChangeSettingsAsync(s => s.RecentStreams = s.RecentStreams
-                        .Where(r => r.Platform != target.Platform || !r.Channel.Equals(target.Channel, StringComparison.OrdinalIgnoreCase))
-                        .Prepend(new RecentStreamSettings
-                        {
-                            Platform = target.Platform,
-                            Channel = target.Channel,
-                            Url = target.Url,
-                            DisplayName = target.Channel,
-                            ProfileImageUrl = playing.ProfileImageUrl,
-                            LastQuality = playing.Quality,
-                            LastWatchedAtUtc = DateTimeOffset.UtcNow
-                        }).Take(100).ToList(), token).ConfigureAwait(false);
+                    await services.ChangeSettingsAsync(s =>
+                    {
+                        var existing = s.RecentStreams.FirstOrDefault(r => r.Matches(target));
+                        var watched = RecentStreamSettings.FromPlayback(target, playing.Quality, DateTimeOffset.UtcNow,
+                            existing, profileImageUrl: playing.ProfileImageUrl);
+                        s.RecentStreams = s.RecentStreams.Where(r => !r.Matches(target)).Prepend(watched).Take(100).ToList();
+                    }, token).ConfigureAwait(false);
                     playing.RecordedRecent = true;
                 }
                 return new { recorded = true };
@@ -188,8 +193,6 @@ public sealed partial class LocalWebWorkspace(LocalWebDependencies services) : I
             case "downloads/retry": await services.Downloads.RetryAsync(Id(input), DownloadOptions(settings), token).ConfigureAwait(false); return new { retried = true };
             case "downloads/remove": await services.Downloads.RemoveAsync(Id(input), token).ConfigureAwait(false); return new { removed = true };
             case "open":
-                var replacement = Optional(input, "replacePlayer", 64);
-                if (replacement.Length > 0 && players.TryRemove(replacement, out var replaced)) await replaced.DisposeAsync().ConfigureAwait(false);
                 return await OpenAsync(input, settings, token).ConfigureAwait(false);
             case "channel/profile":
                 var profilePlayer = GetPlayer(input);
@@ -198,18 +201,14 @@ public sealed partial class LocalWebWorkspace(LocalWebDependencies services) : I
                     !LocalWebProfileImages.HasCachedImage(profilePlayer.Target))
                 {
                     profilePlayer.ProfileImageUrl = profile.ProfileImageUrl;
-                    if (settings.RecentStreams.Any(s => s.Platform == profilePlayer.Target.Platform &&
-                        s.Channel.Equals(profilePlayer.Target.Channel, StringComparison.OrdinalIgnoreCase) && s.ProfileImageUrl != profile.ProfileImageUrl))
+                    if (settings.RecentStreams.Any(s => s.Matches(profilePlayer.Target) && s.ProfileImageUrl != profile.ProfileImageUrl))
                         await services.ChangeSettingsAsync(s =>
                         {
-                            foreach (var recentStream in s.RecentStreams.Where(r => r.Platform == profilePlayer.Target.Platform &&
-                                r.Channel.Equals(profilePlayer.Target.Channel, StringComparison.OrdinalIgnoreCase))) recentStream.ProfileImageUrl = profile.ProfileImageUrl;
+                            foreach (var recentStream in s.RecentStreams.Where(r => r.Matches(profilePlayer.Target)))
+                                recentStream.ProfileImageUrl = profile.ProfileImageUrl;
                         }, token).ConfigureAwait(false);
                 }
                 return profile with { ProfileImageUrl = profilePlayer.ProfileImageUrl };
-            case "close":
-                if (players.TryRemove(RequiredText(input, "player", 64), out var closed)) await closed.DisposeAsync().ConfigureAwait(false);
-                return new { closed = true };
             case "chat":
                 return await ReadChatAsync(input, settings, token).ConfigureAwait(false);
             case "chat/presentation":
@@ -252,16 +251,8 @@ public sealed partial class LocalWebWorkspace(LocalWebDependencies services) : I
                 if (livePlayer.Target.IsExplicitVod) throw new ArgumentException("Already playing an archive.");
                 var replay = await services.Replay.ResolveCurrentReplayAsync(livePlayer.Target, livePlayer.Quality, settings, token).ConfigureAwait(false);
                 if (!replay.IsAvailable) return new { available = false, message = "The provider has no seekable replay for this stream." };
-                var replayTarget = livePlayer.Target with
-                {
-                    Kind = replay.Platform == PlatformKind.Twitch ? StreamTargetKind.TwitchVod : StreamTargetKind.KickVod,
-                    Url = replay.ReplayUrl,
-                    MediaId = replay.ReplayId,
-                    MediaDuration = replay.Duration,
-                    MediaStartedAtUtc = replay.StreamStartedAtUtc,
-                    ChatRoomId = replay.ChatRoomId,
-                    DisplayTitle = livePlayer.Target.Channel + " replay"
-                };
+                if (!MatchesBroadcast(livePlayer.Target, replay)) return new { available = false, message = "The archive does not match this broadcast." };
+                var replayTarget = ReplayTarget(livePlayer.Target, replay);
                 return new { available = true, key = Register(replayTarget) };
             case "live/archive":
                 return GetLiveArchive(input, settings);
@@ -318,8 +309,8 @@ public sealed partial class LocalWebWorkspace(LocalWebDependencies services) : I
     {
         try
         {
-            var result = await services.GetFollowStatusAsync(player.Target, player.Lifetime.Token).ConfigureAwait(false);
-            player.Lifetime.Token.ThrowIfCancellationRequested();
+            var result = await services.GetFollowStatusAsync(player.Target, player.Token).ConfigureAwait(false);
+            player.Token.ThrowIfCancellationRequested();
             if (result is null) return new(null, "Follow status is unavailable. Connect the website account in the desktop app, then reopen the channel.");
             ValidateFollowTarget(player.Target, result);
             return new(result.IsFollowing);
@@ -397,36 +388,33 @@ public sealed partial class LocalWebWorkspace(LocalWebDependencies services) : I
     {
         var channel = StreamInputParser.FromChannel(Platform(input), RequiredText(input, "channel", 100));
         var cursor = Optional(input, "cursor", 2048);
+        IEnumerable<(StreamTarget Target, string LegacyId)> videos;
+        string nextCursor, message;
         if (channel.Platform == PlatformKind.Twitch)
         {
             var type = Optional(input, "type", 16) switch { "highlight" => TwitchVodTypeFilter.Highlight, "upload" => TwitchVodTypeFilter.Upload, "all" => TwitchVodTypeFilter.All, _ => TwitchVodTypeFilter.Archive };
             var result = await services.TwitchVods.SearchAsync(new(channel.Channel, type, cursor, 50), settings, token).ConfigureAwait(false);
-            var cards = new List<object>();
-            foreach (var v in result.Videos.OrderByDescending(v => v.PublishedAtUtc ?? v.CreatedAtUtc))
-            {
-                var target = v.ToStreamTarget();
-                cards.Add(await VodCardAsync(target, v.ThumbnailUrl, v.PublishedAtUtc ?? v.CreatedAtUtc, token).ConfigureAwait(false));
-            }
-            return new { items = cards, result.NextCursor, result.Message };
+            videos = result.Videos.Select(video => (video.ToStreamTarget(), ""));
+            (nextCursor, message) = (result.NextCursor, result.Message);
         }
         else
         {
             var result = await services.KickVods.SearchAsync(new(channel.Channel, cursor), settings, token).ConfigureAwait(false);
-            var cards = new List<object>();
-            foreach (var v in result.Videos.OrderByDescending(v => v.CreatedAtUtc ?? v.StartedAtUtc))
-            {
-                var target = v.ToStreamTarget();
-                cards.Add(await VodCardAsync(target, v.ThumbnailUrl, v.CreatedAtUtc ?? v.StartedAtUtc, token, v.Id).ConfigureAwait(false));
-            }
-            return new { items = cards, result.NextCursor, result.Message };
+            videos = result.Videos.Select(video => (video.ToStreamTarget(), video.Id));
+            (nextCursor, message) = (result.NextCursor, result.Message);
         }
+
+        var cards = new List<object>();
+        foreach (var (target, legacyId) in videos.OrderByDescending(video => video.Target.MediaPublishedAtUtc))
+            cards.Add(await VodCardAsync(target, legacyId, token).ConfigureAwait(false));
+        return new { items = cards, nextCursor, message };
     }
 
-    private async Task<object> VodCardAsync(StreamTarget target, string thumbnail, DateTimeOffset? published, CancellationToken token,
-        string legacyMediaId = "")
+    private async Task<object> VodCardAsync(StreamTarget target, string legacyMediaId, CancellationToken token)
     {
-        thumbnail = LocalWebProfileImages.PublicUrl(thumbnail);
-        target = target with { MediaThumbnailUrl = thumbnail, MediaPublishedAtUtc = published };
+        var thumbnail = LocalWebProfileImages.PublicUrl(target.MediaThumbnailUrl);
+        var published = target.MediaPublishedAtUtc;
+        target = target with { MediaThumbnailUrl = thumbnail };
         RememberVodMetadata(target, new(thumbnail, published));
         var bookmark = await services.History.GetAsync(target, token).ConfigureAwait(false);
         if (bookmark is null && !string.IsNullOrWhiteSpace(legacyMediaId) &&
@@ -457,8 +445,15 @@ public sealed partial class LocalWebWorkspace(LocalWebDependencies services) : I
 
     private async Task<object> OpenAsync(JsonElement input, AppSettings settings, CancellationToken token)
     {
-        if (players.Count >= 16 || !await services.PlaybackSlots.WaitAsync(0, token).ConfigureAwait(false))
-            throw new ArgumentException("The browser player limit has been reached. Close a player first.");
+        var replacementId = Optional(input, "replacePlayer", 64);
+        players.TryGetValue(replacementId, out var replacement);
+        SemaphoreSlim? reservedSlot = null;
+        if (replacement is null)
+        {
+            if (players.Count >= MaximumPlayers || !await services.PlaybackSlots.WaitAsync(0, token).ConfigureAwait(false))
+                throw new ArgumentException(PlayerLimitMessage);
+            reservedSlot = services.PlaybackSlots;
+        }
         Player? player = null;
         IVodDownloadPlayback? offline = null;
         var transferred = false;
@@ -498,11 +493,15 @@ public sealed partial class LocalWebWorkspace(LocalWebDependencies services) : I
                 media.RewriteTwitchArchive = resolved.RewriteTwitchArchive;
                 if (isLiveArchive)
                 {
-                    try { await media.ReadArchiveDurationAsync(quality, token, selectVariant: true).ConfigureAwait(false); }
+                    try
+                    {
+                        var duration = await media.ReadArchiveDurationAsync(quality, token, selectVariant: true).ConfigureAwait(false);
+                        target = target with { MediaDuration = TimeSpan.FromSeconds(duration) };
+                    }
                     catch { media.Dispose(); throw; }
                 }
             }
-            player = new(target, quality, media, offline, services.PlaybackSlots, lifetime.Token);
+            player = new(target, quality, media, offline, reservedSlot, lifetime.Token);
             player.ProfileImageUrl = target.IsOfflineVod && LocalWebProfileImages.HasCachedImage(target)
                 ? $"/media/{id}/profile" : LocalWebProfileImages.PublicUrl(target.ProfileImageUrl);
             offline = null;
@@ -517,16 +516,29 @@ public sealed partial class LocalWebWorkspace(LocalWebDependencies services) : I
                 player.ChatConnection = ConnectChatAsync(player);
             }
             var bookmark = target.IsExplicitVod ? await services.History.GetAsync(target, token).ConfigureAwait(false) : null;
-            // Registration can reject a full session library. Keep the player owned by
-            // this method until every fallible setup step has completed.
-            var key = Register(target);
-            token.ThrowIfCancellationRequested();
+            string key;
             lock (playerGate)
             {
+                token.ThrowIfCancellationRequested();
                 if (disposed) throw new OperationCanceledException(token);
+                if (replacement is null && players.Count >= MaximumPlayers)
+                    throw new ArgumentException(PlayerLimitMessage);
+                key = RegisterTarget(target, liveArchive: isLiveArchive);
+                if (replacement is not null)
+                {
+                    // A reload uses the old player's slot. Keep serving it until the new player is ready.
+                    if (!players.TryRemove(replacementId, out _))
+                        throw new ArgumentException("The player was closed while reloading.");
+                    player.TakePlaybackSlotFrom(replacement);
+                }
                 players[id] = player;
             }
             transferred = true;
+            if (replacement is not null)
+            {
+                try { await replacement.DisposeAsync().ConfigureAwait(false); }
+                catch (Exception ex) { Trace.TraceWarning("Browser player cleanup failed ({0}).", ex.GetType().Name); }
+            }
             return new
             {
                 id,
@@ -535,7 +547,6 @@ public sealed partial class LocalWebWorkspace(LocalWebDependencies services) : I
                 channel = target.Channel,
                 platform = target.Platform.ToString(),
                 profileImageUrl = player.ProfileImageUrl,
-                chatLayout = (WebChatOverlayLayout?)null,
                 url = media.PathFor(media.Root),
                 isVod = target.IsExplicitVod,
                 isLiveArchive = media.GrowingArchive,
@@ -553,7 +564,7 @@ public sealed partial class LocalWebWorkspace(LocalWebDependencies services) : I
                 else
                 {
                     try { if (offline is not null) await offline.DisposeAsync().ConfigureAwait(false); }
-                    finally { services.PlaybackSlots.Release(); }
+                    finally { reservedSlot?.Release(); }
                 }
             }
         }
@@ -584,10 +595,10 @@ public sealed partial class LocalWebWorkspace(LocalWebDependencies services) : I
     {
         try
         {
-            await player.Chat!.ConnectAsync(player.Target, player.Lifetime.Token).ConfigureAwait(false);
+            await player.Chat!.ConnectAsync(player.Target, player.Token).ConfigureAwait(false);
             player.ChatStatus = "Connected";
         }
-        catch (OperationCanceledException) when (player.Lifetime.IsCancellationRequested) { }
+        catch (OperationCanceledException) when (player.Token.IsCancellationRequested) { }
         catch { player.ChatStatus = "Chat unavailable. Check the desktop account connection."; }
     }
 
@@ -665,16 +676,31 @@ public sealed partial class LocalWebWorkspace(LocalWebDependencies services) : I
     public async Task ServeMediaAsync(HttpContext context, string playbackId, string resourceId)
     {
         if (!players.TryGetValue(playbackId, out var player)) { context.Response.StatusCode = 404; return; }
-        using var linked = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted, player.Lifetime.Token);
-        context.RequestAborted = linked.Token;
-        if (resourceId == "profile")
+        var requestAborted = context.RequestAborted;
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(requestAborted, player.Token);
+        try
         {
-            await LocalWebProfileImages.ServeCachedAsync(context, player.Target).ConfigureAwait(false);
-            return;
+            linked.Token.ThrowIfCancellationRequested();
+            context.RequestAborted = linked.Token;
+            if (resourceId == "profile")
+            {
+                await LocalWebProfileImages.ServeCachedAsync(context, player.Target).ConfigureAwait(false);
+                return;
+            }
+            var previewMedia = player.ArchivePreview?.Media;
+            await (previewMedia is not null && previewMedia.ContainsResource(resourceId) ? previewMedia : player.Media)
+                .ServeAsync(context, resourceId).ConfigureAwait(false);
         }
-        var previewMedia = player.ArchivePreview?.Media;
-        await (previewMedia is not null && previewMedia.ContainsResource(resourceId) ? previewMedia : player.Media)
-            .ServeAsync(context, resourceId).ConfigureAwait(false);
+        catch (Exception error) when (error is OperationCanceledException or ObjectDisposedException &&
+            player.Token.IsCancellationRequested && !requestAborted.IsCancellationRequested)
+        {
+            if (context.Response.HasStarted) context.Abort();
+            else context.Response.StatusCode = 404;
+        }
+        finally
+        {
+            context.RequestAborted = requestAborted;
+        }
     }
 
     private object FollowingResponse(AppSettings settings, FollowedLiveStreamsResult following)
@@ -721,14 +747,15 @@ public sealed partial class LocalWebWorkspace(LocalWebDependencies services) : I
             lastLiveAtUtc
         };
 
-    private string Register(StreamTarget target)
+    private string Register(StreamTarget target, bool liveArchive = false)
     {
-        lock (playerGate) return RegisterTarget(target);
+        lock (playerGate) return RegisterTarget(target, liveArchive);
     }
 
-    private string RegisterTarget(StreamTarget target)
+    private string RegisterTarget(StreamTarget target, bool liveArchive)
     {
-        if (targetIds.TryGetValue(target.TabIdentityKey, out var key))
+        var identity = (target.TabIdentityKey, liveArchive);
+        if (targetIds.TryGetValue(identity, out var key))
         {
             // Refresh playback URLs, duration and chat metadata even when the provider
             // omits the avatar this time. Keep the last known picture in that case.
@@ -740,8 +767,9 @@ public sealed partial class LocalWebWorkspace(LocalWebDependencies services) : I
         }
         if (targets.Count >= 5000) throw new InvalidDataException("Library limit reached. Sign in again to start a fresh session.");
         key = LocalWebAuthentication.NewToken();
-        targetIds.Add(target.TabIdentityKey, key);
+        targetIds.Add(identity, key);
         targets.Add(key, target);
+        if (liveArchive) liveArchiveKeys.Add(key);
         return key;
     }
 
@@ -754,11 +782,11 @@ public sealed partial class LocalWebWorkspace(LocalWebDependencies services) : I
     {
         if (input.TryGetProperty("key", out _)) return Target(input);
         var value = RequiredText(input, "input", 250);
-        if (value.Contains("/videos/", StringComparison.Ordinal)) return VodDownloadUrlParser.Parse(value);
+        var path = value.Split(['?', '#'], 2)[0];
+        if (path.Contains("/videos/", StringComparison.OrdinalIgnoreCase)) return VodDownloadUrlParser.Parse(value);
         return StreamInputParser.Parse(value, Platform(input));
     }
     private Player GetPlayer(JsonElement input) => players.TryGetValue(RequiredText(input, "player", 64), out var player) ? player : throw new ArgumentException("Player not found.");
-    private static PlatformKind Platform(JsonElement input) => Optional(input, "platform", 10).ToLowerInvariant() switch { "kick" => PlatformKind.Kick, "twitch" or "" => PlatformKind.Twitch, _ => throw new ArgumentException() };
     private Task<LocalWebDesktopHotkeys> DesktopHotkeysAsync(AppSettings settings, CancellationToken token) =>
         services.GetDesktopHotkeysAsync?.Invoke(token) ?? Task.FromResult(LocalWebDesktopHotkeys.Capture(settings.Hotkeys));
 
@@ -786,19 +814,35 @@ public sealed partial class LocalWebWorkspace(LocalWebDependencies services) : I
         }
     }
 
-    private sealed class Player(StreamTarget target, string quality, LocalWebMedia media,
-        IVodDownloadPlayback? offline, SemaphoreSlim slots, CancellationToken token) : IAsyncDisposable
+    private sealed class Player : IAsyncDisposable
     {
         private readonly object chatGate = new();
         private readonly object disposalGate = new();
+        private readonly CancellationTokenSource lifetime;
+        private readonly IVodDownloadPlayback? offline;
         private readonly Queue<(long Sequence, ChatMessage Message)> messages = new();
         private long sequence;
         private bool disposed;
         private Task? disposalTask;
-        internal StreamTarget Target { get; } = target;
-        internal string Quality { get; } = quality;
+        private SemaphoreSlim? playbackSlot;
+        private Task<LiveArchiveState>? archiveLookup;
+
+        internal Player(StreamTarget target, string quality, LocalWebMedia media,
+            IVodDownloadPlayback? offline, SemaphoreSlim? reservedSlot, CancellationToken token)
+        {
+            Target = target;
+            Quality = quality;
+            Media = media;
+            this.offline = offline;
+            playbackSlot = reservedSlot;
+            lifetime = CancellationTokenSource.CreateLinkedTokenSource(token);
+            Token = lifetime.Token;
+        }
+
+        internal StreamTarget Target { get; }
+        internal string Quality { get; }
         internal string ProfileImageUrl { get; set; } = "";
-        internal LocalWebMedia Media { get; } = media;
+        internal LocalWebMedia Media { get; }
         internal IChatClient? Chat { get; set; }
         internal Dictionary<string, ChatMessage> PresentationMessages { get; } = new(StringComparer.Ordinal);
         internal Queue<string> PresentationOrder { get; } = new();
@@ -808,10 +852,9 @@ public sealed partial class LocalWebWorkspace(LocalWebDependencies services) : I
         internal TwitchPrediction? Prediction { get; set; }
         internal Task? ChatConnection { get; set; }
         internal Task<FollowState>? FollowStatus { get; set; }
-        internal Task<LiveArchiveState>? ArchiveLookup { get; set; }
         internal LiveArchivePreview? ArchivePreview { get; set; }
         internal DateTimeOffset ArchiveRetryAt { get; set; }
-        internal CancellationTokenSource Lifetime { get; } = CancellationTokenSource.CreateLinkedTokenSource(token);
+        internal CancellationToken Token { get; }
         internal void AddChat(ChatMessage message)
         {
             lock (chatGate)
@@ -824,17 +867,34 @@ public sealed partial class LocalWebWorkspace(LocalWebDependencies services) : I
         {
             lock (chatGate) return messages.Where(m => m.Sequence > after).ToArray();
         }
+
+        internal LiveArchiveState GetArchiveState(Func<Task<LiveArchiveState>> resolve)
+        {
+            lock (disposalGate)
+            {
+                if (disposed) return new();
+                // Publish the lookup before disposal can cancel the player and drain its work.
+                if (archiveLookup is null || archiveLookup.IsCompleted && DateTimeOffset.UtcNow >= ArchiveRetryAt)
+                    archiveLookup = Task.Run(resolve);
+                return archiveLookup.IsCompletedSuccessfully ? archiveLookup.Result : new(Pending: true);
+            }
+        }
+
         public ValueTask DisposeAsync() => new(AsyncDisposal.Begin(disposalGate, ref disposed, ref disposalTask, DisposeCoreAsync));
 
+        internal void TakePlaybackSlotFrom(Player previous) => playbackSlot = previous.TakePlaybackSlot();
+
+        private SemaphoreSlim? TakePlaybackSlot() => Interlocked.Exchange(ref playbackSlot, null);
+
         private Task DisposeCoreAsync() => AsyncDisposal.RunAllAsync(
-            () => new ValueTask(Lifetime.CancelAsync()),
+            () => new ValueTask(lifetime.CancelAsync()),
             () => new ValueTask(ChatConnection ?? Task.CompletedTask),
-            () => new ValueTask(ArchiveLookup ?? Task.CompletedTask),
+            () => new ValueTask(archiveLookup ?? Task.CompletedTask),
             () => Chat?.DisposeAsync() ?? ValueTask.CompletedTask,
             () => { Media.Dispose(); return ValueTask.CompletedTask; },
             () => { ArchivePreview?.Media.Dispose(); return ValueTask.CompletedTask; },
             () => offline?.DisposeAsync() ?? ValueTask.CompletedTask,
-            () => { Lifetime.Dispose(); return ValueTask.CompletedTask; },
-            () => { slots.Release(); return ValueTask.CompletedTask; });
+            () => { lifetime.Dispose(); return ValueTask.CompletedTask; },
+            () => { TakePlaybackSlot()?.Release(); return ValueTask.CompletedTask; });
     }
 }

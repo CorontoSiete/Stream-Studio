@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using StreamlinkVlcStudio.Infrastructure.LocalWeb;
 
 internal static partial class LocalWebTestCatalog

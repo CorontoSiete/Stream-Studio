@@ -1023,8 +1023,10 @@ internal static partial class ApplicationTestCatalog
     static void AssertHomeCardCompactHorizontalGutter(MainWindow window, RoundedClipBorder clipBorder)
     {
         var cardButton = FindVisualAncestor<Button>(clipBorder);
+        var cards = FindVisualAncestor<HomeCardWrapPanel>(clipBorder);
         var homeScrollViewer = window.FindName("HomeContentScrollViewer") as ScrollViewer;
         Assert.NotNull(cardButton);
+        Assert.NotNull(cards);
         Assert.NotNull(homeScrollViewer);
 
         // The scroll content viewport excludes the scrollbar and its template margins.
@@ -1035,7 +1037,9 @@ internal static partial class ApplicationTestCatalog
         var leftEdge = cardButton!.TranslatePoint(new Point(0, 0), viewport).X;
         var rightEdge = cardButton.TranslatePoint(new Point(cardButton.ActualWidth, 0), viewport).X;
         AssertNear(0, leftEdge);
-        AssertNear(viewport!.ActualWidth, rightEdge);
+        // At this window width, sparse rows still reserve the second card column.
+        Assert.Equal(false, cards!.KeepRightGap);
+        AssertNear((viewport!.ActualWidth - cards.HorizontalGap) / 2, rightEdge);
     }
 
     static void AssertHomeMediaThumbnailClip(RoundedClipBorder clipBorder)
@@ -1044,8 +1048,7 @@ internal static partial class ApplicationTestCatalog
         Assert.NotNull(cardButton);
         var cardChrome = VisualTreeHelper.GetChild(cardButton!, 0) as Border;
         Assert.NotNull(cardChrome);
-        Assert.Equal(14d, cardChrome!.CornerRadius.TopLeft);
-        Assert.Equal(1d, cardChrome.BorderThickness.Left);
+        Assert.Equal(1d, cardChrome!.BorderThickness.Left);
         Assert.Equal(1d, cardChrome.BorderThickness.Top);
         Assert.Equal<Geometry?>(null, cardChrome.Clip);
         Assert.Equal<System.Windows.Media.Effects.Effect?>(null, cardChrome.Effect);

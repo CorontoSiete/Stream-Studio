@@ -3,6 +3,8 @@
   <ItemGroup>
     <ProjectReference Include="..\StreamlinkVlcStudio.Core\StreamlinkVlcStudio.Core.csproj" />
     <ProjectReference Include="..\StreamlinkVlcStudio.Infrastructure\StreamlinkVlcStudio.Infrastructure.csproj" />
+    <ProjectReference Include="..\StreamlinkVlcStudio.Workspace\StreamlinkVlcStudio.Workspace.csproj" />
+    <ProjectReference Include="..\StreamlinkVlcStudio.WebClient\StreamlinkVlcStudio.WebClient.csproj" />
   </ItemGroup>
 
   <PropertyGroup>
@@ -52,7 +54,6 @@
   <ItemGroup>
     <Compile Include="..\..\shared\WindowsApplicationShutdown.cs" Link="Maintenance\WindowsApplicationShutdown.cs" />
     <EmbeddedResource Include="Twitch\ClaimChannelPoints.js" />
-    <EmbeddedResource Include="..\..\docs\releases\v*.md" LogicalName="StreamStudio.ReleaseNotes.%(Filename)%(Extension)" />
   </ItemGroup>
 
   <ItemGroup>

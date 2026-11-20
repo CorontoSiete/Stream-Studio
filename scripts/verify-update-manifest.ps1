@@ -21,18 +21,10 @@ $repoRoot = [IO.Path]::GetFullPath((Join-Path $scriptRoot '..'))
 . (Join-Path $scriptRoot 'lib\common.ps1')
 . (Join-Path $scriptRoot 'lib\dependency-manifest.ps1')
 . (Join-Path $scriptRoot 'lib\release-contract.ps1')
-$contractFile = if ([string]::IsNullOrWhiteSpace($ContractPath)) {
-    Join-Path $repoRoot 'shared\release-contract.json'
-} else {
-    [IO.Path]::GetFullPath($ContractPath)
-}
+$contractFile = Resolve-ReleasePath $ContractPath (Join-Path $repoRoot 'shared\release-contract.json')
 $contract = Read-ReleaseContract $contractFile
 
-if ([string]::IsNullOrWhiteSpace($PublicKeyPath)) {
-    $contractDirectory = Split-Path -Parent $contractFile
-    $contractRoot = if ((Split-Path -Leaf $contractDirectory) -ieq 'shared') { Split-Path -Parent $contractDirectory } else { $contractDirectory }
-    $PublicKeyPath = Join-Path $contractRoot ([string]$contract.release.manifestSignature.publicKey)
-}
+$PublicKeyPath = Resolve-ReleasePath $PublicKeyPath (Get-ReleaseContractPublicKeyPath $contractFile $contract)
 foreach ($path in @($ManifestPath, $SignaturePath, $PublicKeyPath)) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         throw "Update-manifest verification input is missing: $path"
@@ -41,6 +33,7 @@ foreach ($path in @($ManifestPath, $SignaturePath, $PublicKeyPath)) {
 if ([string]::IsNullOrWhiteSpace($SetupPath) -xor [string]::IsNullOrWhiteSpace($ZipPath)) {
     throw 'SetupPath and ZipPath must either both be supplied or both be omitted.'
 }
+$expectedKeyId = [string]$contract.release.manifestSignature.keyId
 
 $manifestBytes = [IO.File]::ReadAllBytes((Resolve-Path -LiteralPath $ManifestPath))
 if ($manifestBytes.Length -eq 0 -or
@@ -59,6 +52,10 @@ try {
     if ($rsa.KeySize -ne [int]$contract.release.manifestSignature.keyBits) {
         throw "Release verification key must be exactly $($contract.release.manifestSignature.keyBits) bits; found $($rsa.KeySize)."
     }
+    $verificationKeyId = Get-ReleaseKeyFingerprint ($rsa.ExportSubjectPublicKeyInfo())
+    if ($verificationKeyId -cne $expectedKeyId) {
+        throw 'Release verification key does not match the update trust root.'
+    }
     if (-not $rsa.VerifyData(
             $manifestBytes,
             $signatureBytes,
@@ -73,7 +70,6 @@ try {
 $manifestText = [Text.UTF8Encoding]::new($false, $true).GetString($manifestBytes)
 $manifest = $manifestText | ConvertFrom-Json
 $identity = Get-StableReleaseIdentity -Tag ([string]$manifest.tag) -MinimumVersion ([string]$contract.release.minimumVersion)
-$expectedKeyId = [string]$contract.release.manifestSignature.keyId
 if ($manifest.schemaVersion -ne 1 -or
     [int]$manifest.protocolVersion -ne [int]$contract.release.updaterProtocolVersion -or
     [string]$manifest.channel -cne 'stable' -or
@@ -81,7 +77,7 @@ if ($manifest.schemaVersion -ne 1 -or
     [string]$manifest.version -cne $identity.VersionText -or
     [string]$manifest.keyId -cne $expectedKeyId -or
     [string]$manifest.repository -cne $ExpectedRepository -or
-    [string]$manifest.commit -notmatch '^[0-9a-f]{40}$' -or
+    [string]$manifest.commit -cnotmatch '^[0-9a-f]{40}\z' -or
     [string]$manifest.releasePage -cne "https://github.com/$ExpectedRepository/releases/tag/$($identity.Tag)") {
     throw 'The signed update manifest contains inconsistent release metadata.'
 }
@@ -123,16 +119,12 @@ function Assert-ManifestAsset {
             [Globalization.CultureInfo]::InvariantCulture,
             [ref]$length) -or
         $length -le 0 -or $length -gt 1GB -or
-        [string]$Asset.sha256 -notmatch '^[0-9a-f]{64}$') {
+        [string]$Asset.sha256 -cnotmatch '^[0-9a-f]{64}\z') {
         throw "Signed update asset metadata is invalid for $ExpectedName."
     }
     if (-not [string]::IsNullOrWhiteSpace($LocalPath)) {
-        if (-not (Test-Path -LiteralPath $LocalPath -PathType Leaf)) {
-            throw "Signed update asset is missing: $LocalPath"
-        }
-        $file = Get-Item -LiteralPath $LocalPath
-        $hash = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-        if ($file.Name -cne $ExpectedName -or $file.Length -ne $length -or $hash -cne [string]$Asset.sha256) {
+        $local = Get-ArtifactRecord $LocalPath $ExpectedName
+        if ($local.length -ne $length -or $local.sha256 -cne [string]$Asset.sha256) {
             throw "Signed update asset does not match its exact name, length, and SHA-256: $LocalPath"
         }
     }

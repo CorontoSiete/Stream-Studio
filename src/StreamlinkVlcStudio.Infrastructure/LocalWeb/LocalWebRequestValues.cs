@@ -1,10 +1,18 @@
 using System.Text.Json;
+using StreamlinkVlcStudio.Core.Models;
 
 namespace StreamlinkVlcStudio.Infrastructure.LocalWeb;
 
 /// <summary>Strict browser input readers shared by workspace commands and account preferences.</summary>
 internal static class LocalWebRequestValues
 {
+    internal static PlatformKind Platform(JsonElement input) => Optional(input, "platform", 10).ToLowerInvariant() switch
+    {
+        "kick" => PlatformKind.Kick,
+        "twitch" or "" => PlatformKind.Twitch,
+        _ => throw new ArgumentException("Invalid platform.")
+    };
+
     internal static Guid Id(JsonElement input, string name = "id") => Guid.TryParse(RequiredText(input, name, 40), out var id)
         ? id : throw new ArgumentException("Invalid download ID.");
 

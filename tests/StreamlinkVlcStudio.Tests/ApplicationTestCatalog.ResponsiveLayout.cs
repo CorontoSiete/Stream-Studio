@@ -78,6 +78,7 @@ internal static partial class ApplicationTestCatalog
         ("responsive window native resize keeps WPF and video HWND inside the client", () =>
             WithResponsiveWindowAsync(withVideo: true, async (window, _) =>
             {
+                var toolbar = (ToolBar)window.FindName("PlaybackActionsToolBar");
                 foreach (var size in ResponsiveWindowSizes)
                 {
                     var client = ResizeResponsiveWindow(window, size.Width, size.Height);
@@ -107,12 +108,32 @@ internal static partial class ApplicationTestCatalog
                     AssertNear(wpfVideo.Width, nativeVideo.Width, 2);
                     AssertNear(wpfVideo.Height, nativeVideo.Height, 2);
                     AssertResponsiveActionAccessible(window, (Button)window.FindName("CloseWindowButton"), client);
-                    foreach (var name in new[] { "TopMultiStreamButton", "TopPlayPauseButton", "TopMuteButton", "TopNeverMuteButton", "TopFullscreenButton", "TopTheatreButton" })
+                    foreach (var action in toolbar.Items.OfType<ButtonBase>().Where(button => button.Visibility == Visibility.Visible))
                     {
-                        AssertResponsiveActionAccessible(window, (ButtonBase)window.FindName(name), client);
+                        AssertResponsiveActionAccessible(window, action, client);
+                    }
+                    if (size.Width == 320)
+                    {
+                        var fullscreen = (Button)window.FindName("TopFullscreenButton");
+                        Assert.True(ToolBar.GetIsOverflowItem(fullscreen));
+                        toolbar.IsOverflowOpen = true;
+                        try
+                        {
+                            PumpResponsiveLayout(window);
+                            var label = (TextBlock)fullscreen.Template.FindName("OverflowLabel", fullscreen);
+                            Assert.True(label.IsVisible);
+                            Assert.Equal("Fullscreen stream", label.Text);
+                            var popup = (Popup)toolbar.Template.FindName("PART_ToolBarOverflowPopup", toolbar);
+                            SaveResponsiveImage((FrameworkElement)popup.Child, "player-controls-menu");
+                        }
+                        finally
+                        {
+                            toolbar.IsOverflowOpen = false;
+                        }
                     }
                     await Task.Yield();
                 }
+                Assert.Equal(false, toolbar.HasOverflowItems);
                 Assert.Equal(0d, window.MinWidth);
                 Assert.Equal(0d, window.MinHeight);
             })),
@@ -452,7 +473,10 @@ internal static partial class ApplicationTestCatalog
             "The compact tab selector rendered a view-model type name instead of the stream title.");
     }
 
-    private static void SaveResponsiveWindowImage(Window window, string name)
+    private static void SaveResponsiveWindowImage(Window window, string name) =>
+        SaveResponsiveImage((FrameworkElement)window.Content, name);
+
+    private static void SaveResponsiveImage(FrameworkElement element, string name)
     {
         var directory = Environment.GetEnvironmentVariable("SVS_RESPONSIVE_SCREENSHOTS");
         if (string.IsNullOrWhiteSpace(directory))
@@ -461,7 +485,7 @@ internal static partial class ApplicationTestCatalog
         }
         System.IO.Directory.CreateDirectory(directory);
         var encoder = new PngBitmapEncoder();
-        encoder.Frames.Add(BitmapFrame.Create(WpfVisualTest.Render((FrameworkElement)window.Content)));
+        encoder.Frames.Add(BitmapFrame.Create(WpfVisualTest.Render(element)));
         using var output = System.IO.File.Create(System.IO.Path.Combine(directory, name + ".png"));
         encoder.Save(output);
     }

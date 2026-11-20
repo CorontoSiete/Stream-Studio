@@ -1,5 +1,6 @@
 bin/
 obj/
+*_wpftmp.csproj
 .tmp/
 .dotnet-home/
 .dotnet-cli-home/

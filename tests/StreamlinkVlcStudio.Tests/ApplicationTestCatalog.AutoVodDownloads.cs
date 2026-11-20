@@ -12,6 +12,7 @@ internal static partial class ApplicationTestCatalog
         ("VOD auto-download: paging and transient failures do not lose new broadcasts", AutoDownloadPagingAsync),
         ("VOD auto-download: paging advances through empty and unrelated results", AutoDownloadEmptyPagesAsync),
         ("VOD auto-download: disabling during a completion check prevents queuing", AutoDownloadDisableAsync),
+        ("VOD auto-download: enabling a new channel during a check schedules another pass", AutoDownloadEnableDuringCheckAsync),
         ("VOD auto-download: closing cancels an in-flight completion check", AutoDownloadShutdownAsync),
         ("VOD auto-download: startup and timer work without browsing and stop on disposal", AutoDownloadTimerAsync),
         ("VOD auto-download: settings normalize and survive a disk round trip", AutoDownloadSettingsAsync),
@@ -197,6 +198,38 @@ internal static partial class ApplicationTestCatalog
         release.SetResult(true);
         await pending;
         Assert.Equal(0, service.Requests.Count);
+    });
+
+    private static Task AutoDownloadEnableDuringCheckAsync() => TestSta.RunOffscreenAsync(async () =>
+    {
+        var now = DateTimeOffset.UtcNow;
+        var first = AutoVod(PlatformKind.Twitch, "101", now.AddMinutes(-10));
+        var other = AutoVod(PlatformKind.Twitch, "102", now.AddMinutes(-10), "anotherchannel");
+        var twitch = new FakeTwitchVodService(AutoTwitchResult(first), AutoTwitchResult(first), AutoTwitchResult(other));
+        var settings = new AppSettings();
+        settings.Downloads.AutoDownloadChannels = [new(PlatformKind.Twitch, "streamer", now.AddHours(-1))];
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var service = new CardDownloadTestService
+        {
+            CompletionProbe = (request, token) =>
+            {
+                if (request.Target.MediaId != first.Id) return Task.FromResult(true);
+                entered.TrySetResult();
+                return release.Task.WaitAsync(token);
+            }
+        };
+        await using var downloads = AutoDownloads(AutoDownloadDependencies(settings, service, twitch, interval: TimeSpan.Zero));
+        downloads.BindVodCards([first, other]);
+        downloads.Initialize();
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        var pending = downloads.CheckAutoDownloadsAsync();
+        other.IsAutoDownloadEnabled = true;
+        Assert.Equal(1, twitch.CallCount);
+
+        release.SetResult(true);
+        await pending;
+        Assert.SequenceEqual(new[] { first.Id, other.Id }, service.Requests.Select(request => request.Target.MediaId));
     });
 
     private static Task AutoDownloadTimerAsync() => TestSta.RunOffscreenAsync(async () =>

@@ -18,7 +18,7 @@ internal sealed class ChannelFollowResponseTracker
 
     internal ChannelFollowResponseTracker(StreamTarget target, bool? desiredFollowing = true)
     {
-        if (!TryGetChannel(target, out var channel))
+        if (!ChannelFollowTarget.TryResolve(target, out var channel))
             throw new InvalidOperationException("Select a Twitch or Kick broadcaster before following.");
         Target = channel;
         DesiredFollowing = desiredFollowing;
@@ -42,18 +42,6 @@ internal sealed class ChannelFollowResponseTracker
     internal bool TwitchIntegrityRetryPending { get; private set; }
     internal bool TwitchUserRetryPending { get; private set; }
     internal string? Error { get; private set; }
-
-    internal static bool TryGetChannel(StreamTarget? target, out StreamTarget channel)
-    {
-        channel = null!;
-        // A pasted Twitch VOD initially uses its numeric video ID as Channel. It is not a login.
-        if (target is null || target.Platform is not (PlatformKind.Twitch or PlatformKind.Kick) ||
-            target.IsExplicitTwitchVod && target.Channel == target.MediaId && string.IsNullOrEmpty(target.BroadcasterId))
-            return false;
-        if (!StreamInputParser.TryFromChannel(target.Platform, target.Channel, out var parsed)) return false;
-        channel = parsed;
-        return true;
-    }
 
     internal bool IsChannelPage(string address) =>
         Uri.TryCreate(address, UriKind.Absolute, out var uri) && uri.Scheme == "https" &&

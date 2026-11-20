@@ -41,8 +41,7 @@ public sealed partial class StreamlinkService
     private static bool RequiresTwitchVideo(StreamTransportRequest request) =>
         request.Target.Platform == PlatformKind.Twitch && request.Target.Kind == StreamTargetKind.Live &&
         !request.Quality.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .All(quality => quality.Equals("audio_only", StringComparison.OrdinalIgnoreCase) ||
-                quality.Equals("audio", StringComparison.OrdinalIgnoreCase));
+            .All(QualityOption.IsAudioOnly);
 
     private static bool HasOnlyAudioStreams(string line)
     {
@@ -52,8 +51,7 @@ public sealed partial class StreamlinkService
         var available = line[(index + prefix.Length)..].Split(['\r', '\n'], 2)[0];
         var names = StreamAliasesPattern().Replace(available, static _ => string.Empty)
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        return names.Length > 0 && names.All(name =>
-            name.Equals("audio_only", StringComparison.OrdinalIgnoreCase) || name.Equals("audio", StringComparison.OrdinalIgnoreCase));
+        return names.Length > 0 && names.All(QualityOption.IsAudioOnly);
     }
 
     private static bool HasCustomTwitchPlaybackIdentity(IReadOnlyList<string> arguments)

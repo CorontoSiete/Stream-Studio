@@ -67,6 +67,15 @@ module.exports = async ({ evaluate, wait, capture, viewport, fixture }) => {
   await wait(settled + " && document.querySelectorAll('.card').length===100 && document.querySelector('.card').dataset.key==='render-99'");
   assert.ok(await evaluate("window.renderCardsBefore.every((card,index)=>document.querySelectorAll('.card')[99-index]===card)"), 'sorting reuses the existing cards');
   assert.ok(await evaluate('document.activeElement===window.renderFocus'), 'sorting restores focus after moving its card');
+
+  const message = 'Loaded 50 categories from Twitch.';
+  fixture.categories = () => ({ items: categories.slice(0, 50), message });
+  await click('#refresh');
+  const notice = "document.querySelector('#notice')";
+  await wait(settled + ` && ${notice}.textContent.includes(${JSON.stringify(message)})`);
+  assert.equal(await evaluate(`getComputedStyle(${notice}).display`), 'flex');
+  await wait(`getComputedStyle(${notice}).display==='none'`);
+
   assert.equal(await evaluate('window.visualErrors.length'), 0);
-  console.log('PASS real-browser loading: canceled slow directories, desktop/phone navigation, unchanged refresh, 100 retained cards plus 25 new cards with zero removals, reordered cards retain focus, settings cancellation, zero JavaScript errors.');
+  console.log('PASS real-browser loading: canceled slow directories, desktop/phone navigation, unchanged refresh, 100 retained cards plus 25 new cards with zero removals, reordered cards retain focus, settings cancellation, Discover notice expires, zero JavaScript errors.');
 };

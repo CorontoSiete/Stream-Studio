@@ -36,7 +36,7 @@ internal static partial class LocalWebTestCatalog
             await WaitBrowser(core, "document.querySelector('#players video')?.readyState>=2");
             await core.ExecuteScriptAsync("window.vodVideo=document.querySelector('#players video');vodVideo.pause();vodVideo.currentTime=10");
             await WaitBrowser(core, "!vodVideo.seeking && document.querySelector('.chat-messages').textContent.includes('Archive 10')");
-            Assert.Equal("true", await core.ExecuteScriptAsync("document.querySelector('.chat-form').hidden && document.querySelector('.chat-live-indicator').textContent==='REPLAY'"));
+            Assert.Equal("true", await core.ExecuteScriptAsync("document.querySelector('.chat-form').hidden && document.querySelector('.chat-live-indicator').textContent==='Replay'"));
             Assert.Equal("11", await core.ExecuteScriptAsync("document.querySelectorAll('.chat-message').length"));
             Assert.Equal("false", await core.ExecuteScriptAsync("document.querySelector('.chat-messages').textContent.includes('Archive 11')"));
             await Task.Delay(500);

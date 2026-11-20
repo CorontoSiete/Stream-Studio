@@ -3,9 +3,6 @@
   <ItemGroup>
     <ProjectReference Include="..\StreamlinkVlcStudio.Core\StreamlinkVlcStudio.Core.csproj" />
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
-    <EmbeddedResource Include="LocalWeb\Assets\*" />
-    <EmbeddedResource Include="..\StreamlinkVlcStudio.App.Wpf\Assets\Studio.svg"
-                      LogicalName="StreamlinkVlcStudio.Infrastructure.LocalWeb.Assets.studio-logo.svg" />
   </ItemGroup>
 
   <PropertyGroup>
@@ -41,6 +38,8 @@
     <Content Include="..\..\native\chat-overlay\**\*" Link="native\chat-overlay\%(RecursiveDir)%(Filename)%(Extension)"
              CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
     <Content Include="..\..\scripts\build-chat-overlay.ps1" Link="scripts\build-chat-overlay.ps1"
+             CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
+    <Content Include="..\..\scripts\lib\vlc-compiler.ps1" Link="scripts\lib\vlc-compiler.ps1"
              CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
   </ItemGroup>
 

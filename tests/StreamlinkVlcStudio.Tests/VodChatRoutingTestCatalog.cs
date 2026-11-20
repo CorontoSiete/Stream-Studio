@@ -21,17 +21,8 @@ internal static class VodChatRoutingTestCatalog
             DateTimeOffset.UtcNow.AddDays(-4), MessageId: "archive-10");
         var provider = new FakeVodChatProvider(VodChatFetchResult.Completed(
             [new VodChatMessage(TimeSpan.FromSeconds(10), archived)], target.MediaDuration));
-        await using var tab = new StreamTabViewModel(new StreamTabViewModelDependencies
-        {
-            Target = target,
-            Quality = "best",
-            StreamlinkService = new FakeStreamlinkService(),
-            PlaybackFactory = factory,
-            ChatFactory = chat,
-            Logger = new MemoryLogger(),
-            Dispatch = action => action(),
-            VodChatProvider = provider
-        });
+        await using var tab = TestViewModels.CreateTab(target, "best", new FakeStreamlinkService(), factory,
+            chat, new MemoryLogger(), action => action(), vodChatProvider: provider);
         tab.SetVideoHandle(new IntPtr(42));
         await tab.StartAsync(settings);
         await tab.VodChatIdleTask;
@@ -55,16 +46,9 @@ internal static class VodChatRoutingTestCatalog
         settings.Chat.Layout = ChatLayout.Overlay;
         var factory = new FakePlaybackEngineFactory(() => new FakePlaybackEngine { UsesNativeOverlayOverride = true });
         var chat = new FakeChatClientFactory();
-        await using var tab = new StreamTabViewModel(new StreamTabViewModelDependencies
-        {
-            Target = VodResumeTestCatalog.Target() with { MediaDuration = TimeSpan.Zero },
-            Quality = "best",
-            StreamlinkService = new FakeStreamlinkService(),
-            PlaybackFactory = factory,
-            ChatFactory = chat,
-            Logger = new MemoryLogger(),
-            Dispatch = action => action()
-        });
+        var target = VodResumeTestCatalog.Target() with { MediaDuration = TimeSpan.Zero };
+        await using var tab = TestViewModels.CreateTab(target, "best", new FakeStreamlinkService(), factory,
+            chat, new MemoryLogger(), action => action());
         await tab.RestartChatAsync(settings);
         Assert.Equal(0, chat.Client.ConnectCount);
         tab.SetVideoHandle(new IntPtr(42));

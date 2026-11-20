@@ -99,7 +99,7 @@ internal static partial class TwitchChannelPointsTestCatalog
         await using var viewModel = TestViewModels.CreateMain(settings, new FakeSettingsService(settings),
             new FakeStreamlinkService(), new FakePlaybackEngineFactory(), new FakeChatClientFactory(), new MemoryLogger(),
             action => { if (dispatcher.CheckAccess()) action(); else dispatcher.BeginInvoke(action); },
-            followedStreamsService: service, followedChannelsRefreshInterval: TimeSpan.FromMilliseconds(100));
+            followedStreamsService: service, followedChannelsRefreshInterval: TimeSpan.Zero);
         viewModel.Initialize();
         using var browser = new FakeBrowser();
         using var controller = new TwitchChannelPointsController(settings, viewModel.LiveFollowedChannels,
@@ -108,6 +108,11 @@ internal static partial class TwitchChannelPointsTestCatalog
         Assert.Equal(0, viewModel.Tabs.Count);
         var alphaPage = browser.Pages.Single(page => page.Channel == "alpha");
         var bravoPage = browser.Pages.Single(page => page.Channel == "bravo");
+        // Trigger one automatic refresh so a periodic refresh cannot consume the
+        // results queued for the two manual requests below.
+        var followed = (FollowedChannelsViewModel)typeof(MainViewModel)
+            .GetField("followed", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(viewModel)!;
+        followed.RefreshFollowedChannelsOnUi();
         await refreshStarted.Task.WaitAsync(TimeSpan.FromSeconds(3));
         var checksWhileRefreshing = alphaPage.Checks;
         await Eventually(() => alphaPage.Checks > checksWhileRefreshing);
@@ -130,8 +135,7 @@ internal static partial class TwitchChannelPointsTestCatalog
         Assert.Equal(3, browser.OpenAttempts);
         service.EnqueueResult();
         await viewModel.RefreshFollowedChannelsCommand.ExecuteAsync();
-        Assert.True(browser.Pages.All(page => page.Disposed));
-        Assert.True(controller.HasNoChannelClaims);
+        await Eventually(() => browser.Pages.All(page => page.Disposed) && controller.HasNoChannelClaims);
         Assert.Equal(3, browser.OpenAttempts);
     });
 

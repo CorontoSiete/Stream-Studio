@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="src/StreamlinkVlcStudio.App.Wpf/Assets/Studio.svg" alt="Stream Studio logo" width="88" height="88">
+  <img src="shared/Studio.svg" alt="Stream Studio logo" width="88" height="88">
 </p>
 
 <h1 align="center">Stream Studio</h1>

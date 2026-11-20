@@ -8,27 +8,20 @@ public static partial class StreamInputParser
 {
     public static IReadOnlyList<StreamTarget> ParseCandidates(string input)
     {
-        var parsed = ParseInput(input);
-        if (parsed.VodId is not null)
+        if (ParseUrl(input) is { } target)
         {
-            return [FromTwitchVod(parsed.VodId)];
+            return [target];
         }
 
-        if (parsed.Platform is not null)
-        {
-            return [FromChannel(parsed.Platform.Value, parsed.Channel)];
-        }
-
-        var normalized = NormalizeChannel(parsed.Channel);
         var candidates = new List<StreamTarget>(2);
-        if (TryFromChannel(PlatformKind.Twitch, normalized, out var twitchTarget))
+        if (TryFromChannel(PlatformKind.Twitch, input, out var twitchTarget))
         {
-            candidates.Add(twitchTarget!);
+            candidates.Add(twitchTarget);
         }
 
-        if (TryFromChannel(PlatformKind.Kick, normalized, out var kickTarget))
+        if (TryFromChannel(PlatformKind.Kick, input, out var kickTarget))
         {
-            candidates.Add(kickTarget!);
+            candidates.Add(kickTarget);
         }
 
         if (candidates.Count == 0)
@@ -39,64 +32,38 @@ public static partial class StreamInputParser
         return candidates;
     }
 
-    public static StreamTarget Parse(string input, PlatformKind defaultPlatform)
-    {
-        var parsed = ParseInput(input);
-        return parsed.VodId is not null
-            ? FromTwitchVod(parsed.VodId)
-            : FromChannel(parsed.Platform ?? defaultPlatform, parsed.Channel);
-    }
+    public static StreamTarget Parse(string input, PlatformKind defaultPlatform) =>
+        ParseUrl(input) ?? FromChannel(defaultPlatform, input);
 
-    public static bool TryParsePlatformUrl(string input, out StreamTarget? target)
+    public static bool TryParsePlatformUrl(string input, [NotNullWhen(true)] out StreamTarget? target)
     {
-        target = null;
-
         try
         {
-            var parsed = ParseInput(input);
-            if (parsed.VodId is not null)
-            {
-                target = FromTwitchVod(parsed.VodId);
-                return true;
-            }
-
-            if (parsed.Platform is null)
-            {
-                return false;
-            }
-
-            target = FromChannel(parsed.Platform.Value, parsed.Channel);
-            return true;
+            target = ParseUrl(input);
+            return target is not null;
         }
         catch (ArgumentException)
         {
+            target = null;
             return false;
         }
     }
 
-    public static bool TryParseTwitchVodUrl(string input, out StreamTarget? target)
+    public static bool TryParseTwitchVodUrl(string input, [NotNullWhen(true)] out StreamTarget? target)
     {
+        if (TryParsePlatformUrl(input, out target) && target.IsExplicitTwitchVod) return true;
         target = null;
-
-        try
-        {
-            var parsed = ParseInput(input);
-            if (parsed.VodId is null)
-            {
-                return false;
-            }
-
-            target = FromTwitchVod(parsed.VodId);
-            return true;
-        }
-        catch (ArgumentException)
-        {
-            return false;
-        }
+        return false;
     }
 
-    private static StreamTarget FromTwitchVod(string vodId)
+    internal static StreamTarget? ParseTwitchVodPath(string[] segments)
     {
+        if (segments.Length != 2 || !segments[0].Equals("videos", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        var vodId = segments[1];
+        if (vodId.Length is 0 or > 32 || !vodId.All(char.IsAsciiDigit)) return null;
+
         return new StreamTarget(
             PlatformKind.Twitch,
             vodId,
@@ -106,7 +73,8 @@ public static partial class StreamInputParser
             $"VOD {vodId}");
     }
 
-    private static ParsedInput ParseInput(string input)
+    // A bare channel name has no explicit platform and is resolved by the caller.
+    private static StreamTarget? ParseUrl(string input)
     {
         if (string.IsNullOrWhiteSpace(input))
         {
@@ -114,35 +82,29 @@ public static partial class StreamInputParser
         }
 
         var trimmed = input.Trim();
-        var urlCandidate = trimmed;
-        if (!trimmed.Contains("://", StringComparison.Ordinal))
+        var urlCandidate = WithDefaultScheme(trimmed);
+        Uri.TryCreate(urlCandidate, UriKind.Absolute, out var uri);
+        var platform = uri is null ? null : PlatformFromHost(uri.IdnHost);
+        if (urlCandidate != trimmed && !trimmed.StartsWith("//", StringComparison.Ordinal) &&
+            platform is null)
         {
-            if (trimmed.StartsWith("//", StringComparison.Ordinal))
-            {
-                urlCandidate = "https:" + trimmed;
-            }
-            else if (!StartsWithKnownPlatformHost(trimmed))
-            {
-                return new ParsedInput(null, trimmed);
-            }
-            else
-            {
-                urlCandidate = "https://" + trimmed;
-            }
+            return null;
         }
 
-        if (!Uri.TryCreate(urlCandidate, UriKind.Absolute, out var uri))
+        if (uri is null)
         {
             throw new ArgumentException("The stream URL is not valid.", nameof(input));
         }
 
-        if (!uri.Scheme.Equals(Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) &&
-            !uri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+        if (!HasSupportedUrlAuthority(uri))
         {
-            throw new ArgumentException("Only HTTP and HTTPS stream URLs are supported.", nameof(input));
+            throw new ArgumentException("Use an HTTP or HTTPS stream URL with the default port and no embedded credentials.", nameof(input));
         }
 
-        var host = NormalizeHost(uri.Host);
+        if (platform is null)
+        {
+            throw new ArgumentException("Only Twitch and Kick URLs are supported.", nameof(input));
+        }
 
         var segments = uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         if (segments.Length == 0)
@@ -150,19 +112,9 @@ public static partial class StreamInputParser
             throw new ArgumentException("The stream URL does not include a channel name.", nameof(input));
         }
 
-        var platform = host.ToLowerInvariant() switch
+        if (platform == PlatformKind.Twitch && ParseTwitchVodPath(segments) is { } vod)
         {
-            "twitch.tv" => PlatformKind.Twitch,
-            "kick.com" => PlatformKind.Kick,
-            _ => throw new ArgumentException("Only Twitch and Kick URLs are supported.", nameof(input))
-        };
-
-        if (platform == PlatformKind.Twitch &&
-            segments.Length == 2 &&
-            segments[0].Equals("videos", StringComparison.OrdinalIgnoreCase) &&
-            TwitchVodIdPattern().IsMatch(segments[1]))
-        {
-            return new ParsedInput(platform, "", segments[1]);
+            return vod;
         }
 
         if (segments.Length != 1)
@@ -170,7 +122,7 @@ public static partial class StreamInputParser
             throw new ArgumentException("The stream URL must point directly to a channel.", nameof(input));
         }
 
-        return new ParsedInput(platform, NormalizeChannel(segments[0]));
+        return FromChannel(platform.Value, segments[0]);
     }
 
     public static StreamTarget FromChannel(PlatformKind platform, string? channel)
@@ -181,29 +133,12 @@ public static partial class StreamInputParser
         }
 
         var normalized = NormalizeChannel(channel);
-        if (normalized.Length == 0)
+        if (GetChannelError(platform, normalized) is { } error)
         {
-            throw new ArgumentException("Channel name cannot be empty.", nameof(channel));
+            throw new ArgumentException(error, nameof(channel));
         }
 
-        if (normalized is "." or ".." || PlatformRoutePolicy.IsNonChannelRoute(platform, normalized))
-        {
-            throw new ArgumentException("The channel name points to a platform page, not a channel.", nameof(channel));
-        }
-
-        if (!TryNormalizeChannelSlug(platform, normalized, out normalized))
-        {
-            var message = platform == PlatformKind.Twitch
-                ? "Twitch channel names must contain 3 to 25 letters, numbers, or underscores."
-                : "Kick channel names may contain letters, numbers, underscores, hyphens, and dots.";
-            throw new ArgumentException(message, nameof(channel));
-        }
-
-        var url = platform == PlatformKind.Twitch
-            ? $"https://www.twitch.tv/{normalized}"
-            : $"https://kick.com/{normalized}";
-
-        return new StreamTarget(platform, normalized, url);
+        return CreateChannelTarget(platform, normalized);
     }
 
     public static bool TryFromChannel(
@@ -211,16 +146,14 @@ public static partial class StreamInputParser
         string? channel,
         [NotNullWhen(true)] out StreamTarget? target)
     {
-        try
+        if (TryNormalizeChannelSlug(platform, channel, out var normalized))
         {
-            target = FromChannel(platform, channel);
+            target = CreateChannelTarget(platform, normalized);
             return true;
         }
-        catch (ArgumentException)
-        {
-            target = null;
-            return false;
-        }
+
+        target = null;
+        return false;
     }
 
     public static bool TryNormalizeChannelSlug(
@@ -229,24 +162,32 @@ public static partial class StreamInputParser
         out string normalized)
     {
         normalized = NormalizeChannel(channel);
-        if (!Enum.IsDefined(platform) ||
-            normalized.Length == 0 ||
-            normalized is "." or ".." ||
-            PlatformRoutePolicy.IsNonChannelRoute(platform, normalized))
-        {
-            normalized = "";
-            return false;
-        }
+        if (Enum.IsDefined(platform) && GetChannelError(platform, normalized) is null) return true;
 
-        var isValid = platform == PlatformKind.Twitch
-            ? TwitchChannelPattern().IsMatch(normalized)
-            : ChannelPattern().IsMatch(normalized);
-        if (!isValid)
-        {
-            normalized = "";
-        }
+        normalized = "";
+        return false;
+    }
 
-        return isValid;
+    private static StreamTarget CreateChannelTarget(PlatformKind platform, string channel)
+    {
+        var url = platform == PlatformKind.Twitch
+            ? $"https://www.twitch.tv/{channel}"
+            : $"https://kick.com/{channel}";
+        return new StreamTarget(platform, channel, url);
+    }
+
+    private static string? GetChannelError(PlatformKind platform, string channel)
+    {
+        if (channel.Length == 0) return "Channel name cannot be empty.";
+        if (channel is "." or ".." || PlatformRoutePolicy.IsNonChannelRoute(platform, channel))
+            return "The channel name points to a platform page, not a channel.";
+
+        if (platform == PlatformKind.Twitch)
+            return TwitchChannelPattern().IsMatch(channel)
+                ? null : "Twitch channel names must contain 3 to 25 letters, numbers, or underscores.";
+
+        return ChannelPattern().IsMatch(channel)
+            ? null : "Kick channel names may contain letters, numbers, underscores, hyphens, and dots.";
     }
 
     private static string NormalizeChannel(string? channel)
@@ -266,26 +207,29 @@ public static partial class StreamInputParser
             : normalized;
     }
 
-    private static bool StartsWithKnownPlatformHost(string input)
+    internal static string WithDefaultScheme(string input)
     {
-        return Uri.TryCreate("https://" + input, UriKind.Absolute, out var uri) &&
-            IsKnownPlatformHost(NormalizeHost(uri.Host));
+        if (input.StartsWith("//", StringComparison.Ordinal)) return "https:" + input;
+        var separator = input.IndexOf("://", StringComparison.Ordinal);
+        return separator > 0 && Uri.CheckSchemeName(input[..separator]) ? input : "https://" + input;
     }
 
-    private static bool IsKnownPlatformHost(string host)
+    internal static bool HasSupportedUrlAuthority(Uri uri) =>
+        uri.Scheme is ("https" or "http") && uri.IsDefaultPort && uri.UserInfo.Length == 0;
+
+    internal static PlatformKind? PlatformFromHost(string host)
     {
-        return host.Equals("twitch.tv", StringComparison.OrdinalIgnoreCase) ||
-            host.Equals("kick.com", StringComparison.OrdinalIgnoreCase);
+        return NormalizeHost(host).ToLowerInvariant() switch
+        {
+            "twitch.tv" => PlatformKind.Twitch,
+            "kick.com" => PlatformKind.Kick,
+            _ => null
+        };
     }
 
-    [GeneratedRegex("^[A-Za-z0-9_.-]{1,80}$", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"^[A-Za-z0-9_.-]{1,80}\z", RegexOptions.CultureInvariant)]
     private static partial Regex ChannelPattern();
 
-    [GeneratedRegex("^[A-Za-z0-9_]{3,25}$", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"^[A-Za-z0-9_]{3,25}\z", RegexOptions.CultureInvariant)]
     private static partial Regex TwitchChannelPattern();
-
-    [GeneratedRegex("^[0-9]+$", RegexOptions.CultureInvariant)]
-    private static partial Regex TwitchVodIdPattern();
-
-    private sealed record ParsedInput(PlatformKind? Platform, string Channel, string? VodId = null);
 }

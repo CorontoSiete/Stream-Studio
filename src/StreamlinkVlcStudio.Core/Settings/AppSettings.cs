@@ -270,17 +270,7 @@ public sealed class AppSettings : NotifyPropertyChangedObject
             .OfType<RecentStreamSettings>()
             .OrderByDescending(value => value.LastWatchedAtUtc))
         {
-            if (!Enum.IsDefined(value.Platform))
-            {
-                continue;
-            }
-
-            StreamTarget target;
-            try
-            {
-                target = StreamInputParser.FromChannel(value.Platform, value.Channel);
-            }
-            catch (ArgumentException)
+            if (!StreamInputParser.TryFromChannel(value.Platform, value.Channel, out var target))
             {
                 continue;
             }

@@ -32,16 +32,16 @@ internal sealed class LocalWebUserWorkspace(ILocalWebWorkspace inner, LocalWebUs
                 return new { saved = true };
             case "streams":
                 {
-                    var platform = Optional(input, "platform", 10).ToLowerInvariant() switch
+                    var key = CategoryLanguagePreferences.Key(Platform(input), RequiredText(input, "categoryId", 128));
+                    var hasLanguage = input.TryGetProperty("language", out _);
+                    var language = hasLanguage
+                        ? BrowseLanguages.Normalize(Optional(input, "language", 16))
+                        : users.PreferencesFor(userId).CategoryLanguages.GetValueOrDefault(key, "");
+                    if (hasLanguage)
                     {
-                        "kick" => PlatformKind.Kick,
-                        "twitch" or "" => PlatformKind.Twitch,
-                        _ => throw new ArgumentException("Invalid platform.")
-                    };
-                    var key = CategoryLanguagePreferences.Key(platform, RequiredText(input, "categoryId", 128));
-                    var language = input.TryGetProperty("language", out _) ? BrowseLanguages.Normalize(Optional(input, "language", 16)) :
-                        users.PreferencesFor(userId).CategoryLanguages.GetValueOrDefault(key, "");
-                    await users.SaveCategoryLanguageAsync(userId, key, language, token).ConfigureAwait(false);
+                        await users.SaveCategoryLanguageAsync(userId, key, language, token).ConfigureAwait(false);
+                    }
+
                     var request = JsonNode.Parse(input.GetRawText())!.AsObject();
                     request["language"] = language;
                     return await inner.InvokeAsync(action, JsonSerializer.SerializeToElement(request, LocalWebUserStore.JsonOptions), token).ConfigureAwait(false);
@@ -82,10 +82,9 @@ internal sealed class LocalWebUserWorkspace(ILocalWebWorkspace inner, LocalWebUs
                 }
             case "close":
                 {
-                    var result = await inner.InvokeAsync(action, input, token).ConfigureAwait(false);
-                    if (input.TryGetProperty("player", out var player) && player.ValueKind == JsonValueKind.String)
-                        playerKeys.TryRemove(player.GetString()!, out _);
-                    return result;
+                    var id = RequiredText(input, "player", 64);
+                    try { return await inner.InvokeAsync(action, input, token).ConfigureAwait(false); }
+                    finally { playerKeys.TryRemove(id, out _); }
                 }
             default: return await inner.InvokeAsync(action, input, token).ConfigureAwait(false);
         }

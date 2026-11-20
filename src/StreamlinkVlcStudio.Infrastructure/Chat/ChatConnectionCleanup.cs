@@ -21,6 +21,8 @@ internal static class ChatConnectionCleanup
             cancellationToken.ThrowIfCancellationRequested();
             throwIfDisposed();
             await disconnectAsync().ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            throwIfDisposed();
             try
             {
                 await connectAsync().ConfigureAwait(false);

@@ -3,10 +3,12 @@ using StreamlinkVlcStudio.Infrastructure.LocalWeb;
 
 internal static partial class LocalWebTestCatalog
 {
-    private static Task PlayerCleanupAsync() => WithWorkspaceAsync(f => VerifyPlayerCleanupAsync(f.Dependencies));
+    private static Task PlayerCleanupAsync() => WithWorkspaceAsync(f => VerifyPlayerCleanupAsync(f.Dependencies, f.Directory));
 
-    private static async Task VerifyPlayerCleanupAsync(LocalWebDependencies dependencies)
+    private static async Task VerifyPlayerCleanupAsync(LocalWebDependencies dependencies, string directory)
     {
+        var users = await LocalWebUserStore.OpenAsync(Path.Combine(directory, "cleanup-users.json"));
+        var user = await users.AddAsync("test-watcher", "Test watcher password 123!");
         foreach (var closePlayer in new[] { true, false })
         {
             var factory = new FakeChatClientFactory();
@@ -23,13 +25,22 @@ internal static partial class LocalWebTestCatalog
                 connected.TrySetResult();
                 await release.Task;
             };
-            var workspace = new LocalWebWorkspace(dependencies with { ChatFactory = _ => factory });
+            var settingsUnavailable = false;
+            var workspace = new LocalWebUserWorkspace(new LocalWebWorkspace(dependencies with
+            {
+                ChatFactory = _ => factory,
+                GetSettingsAsync = token => settingsUnavailable
+                    ? Task.FromException<AppSettings>(new IOException("Settings are unavailable."))
+                    : dependencies.GetSettingsAsync(token)
+            }), users, user.Id);
             try
             {
                 var opened = await Call(workspace, "open", new { input = "https://twitch.tv/streamer" });
                 await connected.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                var player = opened.GetProperty("id").GetString()!;
+                settingsUnavailable = true;
                 var closing = closePlayer
-                    ? Call(workspace, "close", new { player = opened.GetProperty("id").GetString()! })
+                    ? Call(workspace, "close", new { player })
                     : workspace.DisposeAsync().AsTask();
                 await canceled.Task.WaitAsync(TimeSpan.FromSeconds(5));
                 Assert.Equal(false, closing.IsCompleted);
@@ -37,7 +48,11 @@ internal static partial class LocalWebTestCatalog
                 await Assert.ThrowsAsync<AggregateException>(() => closing.WaitAsync(TimeSpan.FromSeconds(5)));
                 Assert.Equal(1, factory.Client.DisposeCount);
                 Assert.Equal(32, dependencies.PlaybackSlots.CurrentCount);
-                if (closePlayer) await workspace.DisposeAsync();
+                if (closePlayer)
+                {
+                    await Assert.ThrowsAsync<ArgumentException>(() => Call(workspace, "volume/save", new { player, volume = 0.4 }));
+                    await workspace.DisposeAsync();
+                }
                 else await Assert.ThrowsAsync<AggregateException>(() => workspace.DisposeAsync().AsTask());
             }
             finally

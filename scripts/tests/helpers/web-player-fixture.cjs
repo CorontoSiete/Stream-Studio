@@ -4,9 +4,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const source = fs.readFileSync(path.resolve(__dirname, '../../../src/StreamlinkVlcStudio.Infrastructure/LocalWeb/Assets/app.js'), 'utf8');
+const source = fs.readFileSync(path.resolve(__dirname, '../../../src/StreamlinkVlcStudio.WebClient/Assets/app.js'), 'utf8');
 
-function fixture({ storage = new Map(), volumes = new Map(), layouts = new Map(), media = 'hls', userAgent = 'Desktop', onRequest, code = source } = {}) {
+function fixture({ storage = new Map(), volumes = new Map(), layouts = new Map(), media = 'hls', userAgent = 'Desktop', onRequest, now = Date.now, code = source } = {}) {
   const pendingEvents = [];
   class Element extends EventTarget {
     constructor() {
@@ -85,7 +85,7 @@ function fixture({ storage = new Map(), volumes = new Map(), layouts = new Map()
   const layoutKey = p => p.platform.trim().toLowerCase() + ':' + p.channel.trim().toLowerCase();
   const volumeKey = p => p.platform.trim() + ':' + p.channel.trim().toLowerCase();
   let opened = 0, target = { channel: 'streamer', platform: 'Twitch', isVod: false, isMp4: false };
-  const context = vm.createContext({ document, localStorage, Event, URL, URLSearchParams, Option: Element, Hls, AbortController, DOMException, setTimeout, clearTimeout,
+  const context = vm.createContext({ document, localStorage, Event, URL, URLSearchParams, Option: Element, Hls, AbortController, DOMException, setTimeout, clearTimeout, Date: class extends Date { static now() { return now(); } },
     navigator: { userAgent, platform: 'Win32', maxTouchPoints: 0 },
     ResizeObserver: class { observe() {} disconnect() {} },
     window: Object.assign(new EventTarget(), { Hls, scrollTo() {} }), location: { hash: '', pathname: '/', search: '' },
@@ -127,7 +127,7 @@ function fixture({ storage = new Map(), volumes = new Map(), layouts = new Map()
   // Only replace startup authentication. All opening, replacement, closing, audio
   // selection, event handlers and persistence run from the actual application.
   assert.ok(code.includes('  restoreSession();'));
-  vm.runInContext(code.replace('  restoreSession();', '  globalThis.playerTest = { state, load, showPage, openPlayer, closePlayer, playerAction, selectPlayer, disconnect, flushVolumes, storeChatGeometry, resizeChat, positionChat, chatGeometry, normalizeHotkey, hotkeyFromEvent, loadHotkeys, setPreferences: value => Object.assign(preferences, value), seedVolumes: values => { for (const [key, volume] of values) streamVolumes.set(key, volume); }, flush: () => queue };'), context);
+  vm.runInContext(code.replace('  restoreSession();', '  globalThis.playerTest = { state, load, showPage, openPlayer, closePlayer, playerAction, selectPlayer, cyclePlayer, disconnect, flushVolumes, storeChatGeometry, resizeChat, positionChat, chatGeometry, normalizeHotkey, hotkeyFromEvent, loadHotkeys, setPreferences: value => Object.assign(preferences, value), seedVolumes: values => { for (const [key, volume] of values) streamVolumes.set(key, volume); }, flush: () => queue };'), context);
   const app = context.playerTest;
   app.state.authenticated = true;
   app.state.settings = { defaultQuality: 'best', qualities: ['best', '720p'], lowLatency: true };

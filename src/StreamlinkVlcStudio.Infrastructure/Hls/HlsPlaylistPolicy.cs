@@ -1,9 +1,12 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 
 namespace StreamlinkVlcStudio.Infrastructure.Hls;
 
 internal static class HlsPlaylistPolicy
 {
+    internal const string VariantTag = "#EXT-X-STREAM-INF:";
+
     internal static string[] SplitLines(string content)
     {
         var lines = content.Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
@@ -23,7 +26,7 @@ internal static class HlsPlaylistPolicy
     internal static TimeSpan? ReadPublishedDuration(string[] lines)
     {
         if (lines.Length == 0 || lines[0] != "#EXTM3U" || HasSkippedSegments(lines) ||
-            lines.Any(line => line.StartsWith("#EXT-X-STREAM-INF:", StringComparison.Ordinal))) return null;
+            lines.Any(line => line.StartsWith(VariantTag, StringComparison.Ordinal))) return null;
 
         decimal seconds = 0;
         decimal? pending = null;
@@ -51,6 +54,24 @@ internal static class HlsPlaylistPolicy
         return segments > 0 && !pending.HasValue
             ? TimeSpan.FromTicks((long)(seconds * TimeSpan.TicksPerSecond))
             : null;
+    }
+
+    internal static bool TryReadVariant(
+        string[] lines,
+        int index,
+        Uri baseUri,
+        [NotNullWhen(true)] out Dictionary<string, HlsAttributeValue>? attributes,
+        [NotNullWhen(true)] out Uri? uri)
+    {
+        attributes = null;
+        uri = null;
+        if (index + 1 >= lines.Length || !lines[index].StartsWith(VariantTag, StringComparison.Ordinal))
+            return false;
+
+        var reference = lines[index + 1];
+        return !reference.StartsWith('#') && !reference.Any(char.IsControl) &&
+            HlsAttributeList.TryParse(lines[index].AsSpan(VariantTag.Length), out attributes) &&
+            Uri.TryCreate(baseUri, reference, out uri);
     }
 
     internal static bool TryReadSegmentDuration(ReadOnlySpan<char> value, decimal maximumSeconds, out decimal seconds)

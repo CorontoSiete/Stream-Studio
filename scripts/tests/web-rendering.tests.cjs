@@ -43,6 +43,36 @@ test('an unchanged refresh reuses cards while changed metadata replaces only its
   } finally { f.disconnect(); }
 });
 
+test('Following labels live and offline groups and keeps retained cards through filtering', async () => {
+  const live = channel('live');
+  const offline = { ...channel('offline'), state: 'Offline' };
+  const unavailable = { ...channel('unavailable'), state: 'Unavailable' };
+  const f = fixture({ onRequest: url => url === '/api/following' ? json([unavailable, live, offline]) : undefined });
+  try {
+    await f.load();
+    const cards = f.document.querySelector('#cards');
+    const liveHeading = f.document.querySelector('#live-heading');
+    assert.equal(liveHeading.hidden, false);
+    const [liveCard, offlineHeading, firstOffline, secondOffline] = cards.children;
+    assert.equal(liveCard.dataset.key, 'live');
+    assert.equal(offlineHeading.textContent, 'Offline channels');
+    assert.deepEqual([firstOffline.dataset.key, secondOffline.dataset.key], ['unavailable', 'offline']);
+
+    const filter = f.document.querySelector('#live-filter');
+    filter.checked = true;
+    filter.dispatchEvent(new Event('change'));
+    assert.deepEqual(cards.children, [liveCard]);
+
+    filter.checked = false;
+    filter.dispatchEvent(new Event('change'));
+    assert.equal(cards.children[0], liveCard);
+    assert.equal(cards.children[1], offlineHeading);
+    await f.showPage('downloads');
+    assert.equal(liveHeading.hidden, true);
+    assert.equal(offlineHeading.parentElement, null);
+  } finally { f.disconnect(); }
+});
+
 test('refresh reorders retained cards and removes cards absent from the new response', async () => {
   let items = [channel('one'), channel('two'), channel('three')];
   const f = fixture({ onRequest: url => url === '/api/following' ? json(items) : undefined });

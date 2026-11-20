@@ -4,6 +4,7 @@ internal static class StartWatchWorkflowTestCatalog
 
     internal static IReadOnlyList<(string Name, Func<Task> Run)> All { get; } =
     [
+        ("start watch workflow: a host without WPF adapters can open, play and stop a stream", WithoutDesktopAdaptersAsync),
         ("start watch workflow: Twitch playback and chat do not wait for replay discovery", OptionalReplayAsync),
         ("start watch workflow: hiding a playing tab cancels pending replay discovery and suspends video", HideDuringReplayDiscoveryAsync),
         ("start watch workflow: Stop cancels an active transport resolution", () => CancelActiveStartAsync(waitForPlayer: false)),
@@ -20,6 +21,40 @@ internal static class StartWatchWorkflowTestCatalog
         ("start watch workflow: rapid Stop and Play before dispatch only starts the latest request", RestartBeforeDispatchAsync),
         ("start watch resources: suspended live tabs schedule no health callbacks and resume monitoring", SuspendedHealthWorkAsync)
     ];
+
+    private static async Task WithoutDesktopAdaptersAsync()
+    {
+        var settings = new AppSettings { VlcDirectory = "fake-vlc", StreamlinkPath = "fake-streamlink" };
+        settings.Chat.Layout = ChatLayout.Overlay;
+        settings.Chat.ConnectAutomatically = false;
+        var playback = new FakePlaybackEngineFactory();
+        var target = Target();
+        await using var workspace = new MainViewModel(new MainViewModelDependencies
+        {
+            Settings = settings,
+            SettingsService = new FakeSettingsService(settings),
+            StreamlinkService = new FakeStreamlinkService(),
+            PlaybackFactory = playback,
+            ChatFactory = new FakeChatClientFactory(),
+            Logger = new MemoryLogger(),
+            Dispatch = action => action()
+        });
+
+        await workspace.OpenStreamAsync(target);
+        var tab = workspace.Tabs.Single();
+        Assert.Equal(target, tab.Target);
+        var videoHandle = new IntPtr(1234);
+        tab.SetVideoHandle(videoHandle);
+        await TestWait.UntilAsync(() => tab.Status == PlaybackStatus.Playing, Timeout);
+        Assert.Equal(false, playback.LastEnableNativeOverlay);
+        Assert.True(tab.IsDockedChatOverrideActive);
+        Assert.Equal(videoHandle, playback.Engine!.VideoHandle);
+
+        tab.ClearVideoHandle(videoHandle);
+        Assert.Equal(IntPtr.Zero, playback.Engine.VideoHandle);
+        await tab.StopAsync().WaitAsync(Timeout);
+        Assert.Equal(PlaybackStatus.Stopped, tab.Status);
+    }
 
     private static Task OptionalReplayAsync() => TestSta.RunOffscreenAsync(async () =>
     {
@@ -238,22 +273,25 @@ internal static class StartWatchWorkflowTestCatalog
         var tab = fixture.CreateTab();
         await tab.StartAsync(fixture.Settings).WaitAsync(Timeout);
         await replay.Requested.Task.WaitAsync(Timeout);
-        await tab.PauseForTabSwitchAsync().WaitAsync(Timeout);
+        fixture.Main.SelectHomeCommand.Execute(null);
+        await fixture.Main.InactivePlaybackPolicyIdleTask.WaitAsync(Timeout);
+        Assert.True(tab.IsLivePlaybackConnectionSuspended);
         await tab.PlaybackCleanupIdleTask.WaitAsync(Timeout);
-        var resume = tab.ResumeFromTabSwitchAsync();
+        fixture.Main.SelectStreamTab(tab);
         try
         {
-            await resume.WaitAsync(Timeout);
+            await fixture.Main.InactivePlaybackPolicyIdleTask.WaitAsync(Timeout);
             Assert.Equal(PlaybackStatus.Playing, tab.Status);
             Assert.Equal(false, tab.IsBusy);
             Assert.Equal(2, fixture.Playback.Engine!.PlayCount);
-            await tab.PauseForTabSwitchAsync().WaitAsync(Timeout);
+            fixture.Main.SelectHomeCommand.Execute(null);
+            await fixture.Main.InactivePlaybackPolicyIdleTask.WaitAsync(Timeout);
             Assert.True(tab.IsLivePlaybackConnectionSuspended);
         }
         finally
         {
             replay.Release.TrySetResult(UnavailableReplay);
-            await resume.WaitAsync(Timeout);
+            await fixture.Main.InactivePlaybackPolicyIdleTask.WaitAsync(Timeout);
         }
     });
 
@@ -350,18 +388,8 @@ internal static class StartWatchWorkflowTestCatalog
             Settings.Chat.ConnectAutomatically = connectChat;
             Settings.Chat.Layout = ChatLayout.Docked;
             Playback = new FakePlaybackEngineFactory(engine is null ? null : () => engine);
-            Main = new MainViewModel(new MainViewModelDependencies
-            {
-                Settings = Settings,
-                SettingsService = new FakeSettingsService(Settings),
-                StreamlinkService = Streamlink,
-                PlaybackFactory = Playback,
-                ChatFactory = Chat,
-                Logger = logger,
-                Dispatch = this.dispatch,
-                ReplayResolver = replay,
-                TryDispatch = tryDispatch
-            });
+            Main = TestViewModels.CreateMain(Settings, new FakeSettingsService(Settings), Streamlink, Playback, Chat,
+                logger, this.dispatch, replayResolver: replay, tryDispatch: tryDispatch);
         }
 
         public StreamTabViewModel CreateTab()

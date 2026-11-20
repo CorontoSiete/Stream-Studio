@@ -19,22 +19,14 @@ $repoRoot = [IO.Path]::GetFullPath((Join-Path $scriptRoot '..'))
 . (Join-Path $scriptRoot 'lib\common.ps1')
 . (Join-Path $scriptRoot 'lib\dependency-manifest.ps1')
 . (Join-Path $scriptRoot 'lib\release-contract.ps1')
-$contractFile = if ([string]::IsNullOrWhiteSpace($ContractPath)) {
-    Join-Path $repoRoot 'shared\release-contract.json'
-} else {
-    [IO.Path]::GetFullPath($ContractPath)
-}
+$contractFile = Resolve-ReleasePath $ContractPath (Join-Path $repoRoot 'shared\release-contract.json')
 $contract = Read-ReleaseContract $contractFile
 $identity = Get-StableReleaseIdentity -Tag $Tag -MinimumVersion ([string]$contract.release.minimumVersion)
 if ($identity.VersionText -cne $Version) { throw "Tag must exactly match version: v$Version" }
 if ($Commit -cne $Commit.ToLowerInvariant()) { throw 'Commit must use lowercase hexadecimal.' }
 if ($Repository -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') { throw "Repository must be an owner/name pair: $Repository" }
-if ([string]::IsNullOrWhiteSpace($PublicKeyPath)) {
-    $contractDirectory = Split-Path -Parent $contractFile
-    $contractRoot = if ((Split-Path -Leaf $contractDirectory) -ieq 'shared') { Split-Path -Parent $contractDirectory } else { $contractDirectory }
-    $PublicKeyPath = Join-Path $contractRoot ([string]$contract.release.manifestSignature.publicKey)
-}
-foreach ($path in @($SetupPath, $ZipPath, $PrivateKeyPath, $PublicKeyPath)) {
+$PublicKeyPath = Resolve-ReleasePath $PublicKeyPath (Get-ReleaseContractPublicKeyPath $contractFile $contract)
+foreach ($path in @($PrivateKeyPath, $PublicKeyPath)) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Required update-manifest input is missing: $path" }
 }
 $dependencyManifestPath = Join-Path $repoRoot 'dependencies\windows-installers.json'
@@ -42,11 +34,6 @@ $dependencyManifest = Read-WindowsDependencyManifest $dependencyManifestPath
 $dependencyMinimums = [ordered]@{}
 foreach ($entry in $dependencyManifest.dependencies.PSObject.Properties) {
     $dependencyMinimums[$entry.Name] = Get-DependencyMinimumVersion $entry.Value
-}
-$setup = Get-Item -LiteralPath $SetupPath
-$zip = Get-Item -LiteralPath $ZipPath
-if ($setup.Name -cne 'StreamlinkVlcStudio-Setup.exe' -or $zip.Name -cne 'StreamlinkVlcStudio-release.zip') {
-    throw 'Update package names do not match the updater protocol.'
 }
 
 $manifest = [ordered]@{
@@ -56,38 +43,28 @@ $manifest = [ordered]@{
     prerelease = $false
     version = $Version
     tag = $Tag
-    commit = $Commit.ToLowerInvariant()
+    commit = $Commit
     repository = $Repository
     releasePage = "https://github.com/$Repository/releases/tag/$Tag"
     keyId = [string]$contract.release.manifestSignature.keyId
     dependencyMinimums = $dependencyMinimums
-    setup = [ordered]@{
-        name = $setup.Name
-        length = $setup.Length
-        sha256 = (Get-FileHash -LiteralPath $setup.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-    }
-    zip = [ordered]@{
-        name = $zip.Name
-        length = $zip.Length
-        sha256 = (Get-FileHash -LiteralPath $zip.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-    }
+    setup = (Get-ArtifactRecord $SetupPath 'StreamlinkVlcStudio-Setup.exe')
+    zip = (Get-ArtifactRecord $ZipPath 'StreamlinkVlcStudio-release.zip')
 }
 
-$output = [IO.Path]::GetFullPath($OutputDirectory)
+$output = Resolve-ReleasePath $OutputDirectory
 [IO.Directory]::CreateDirectory($output) | Out-Null
 $manifestPath = Join-Path $output 'UPDATE-MANIFEST.json'
 $signaturePath = Join-Path $output 'UPDATE-MANIFEST.sig'
 $utf8 = [Text.UTF8Encoding]::new($false)
 $bytes = $utf8.GetBytes(($manifest | ConvertTo-Json -Depth 8 -Compress))
-[IO.File]::WriteAllBytes($manifestPath, $bytes)
 
 $rsa = [Security.Cryptography.RSA]::Create()
 try {
     $pem = [IO.File]::ReadAllText((Resolve-Path -LiteralPath $PrivateKeyPath))
     $rsa.ImportFromPem($pem)
     if ($rsa.KeySize -ne [int]$contract.release.manifestSignature.keyBits) { throw "Release signing key must be exactly $($contract.release.manifestSignature.keyBits) bits; found $($rsa.KeySize)." }
-    $privateKeyId = [Convert]::ToHexString(
-        [Security.Cryptography.SHA256]::HashData($rsa.ExportSubjectPublicKeyInfo())).ToLowerInvariant()
+    $privateKeyId = Get-ReleaseKeyFingerprint ($rsa.ExportSubjectPublicKeyInfo())
     if ($privateKeyId -cne [string]$contract.release.manifestSignature.keyId -or
         $privateKeyId -cne (Get-ReleasePublicKeyId $PublicKeyPath)) {
         throw "Protected release private key does not match the committed update trust root. Expected $($contract.release.manifestSignature.keyId); found $privateKeyId."
@@ -96,26 +73,41 @@ try {
         $bytes,
         [Security.Cryptography.HashAlgorithmName]::SHA256,
         [Security.Cryptography.RSASignaturePadding]::Pss)
-    [IO.File]::WriteAllBytes($signaturePath, $signature)
-    if (-not $rsa.VerifyData($bytes, $signature, [Security.Cryptography.HashAlgorithmName]::SHA256, [Security.Cryptography.RSASignaturePadding]::Pss)) {
-        throw 'The generated update-manifest signature did not verify.'
-    }
 } finally {
     $rsa.Dispose()
 }
 
-& (Join-Path $scriptRoot 'verify-update-manifest.ps1') `
-    -ManifestPath $manifestPath `
-    -SignaturePath $signaturePath `
-    -ContractPath $contractFile `
-    -PublicKeyPath $PublicKeyPath `
-    -SetupPath $SetupPath `
-    -ZipPath $ZipPath `
-    -ExpectedVersion $Version `
-    -ExpectedTag $Tag `
-    -ExpectedCommit $Commit `
-    -ExpectedRepository $Repository `
-    -DependencyManifestPath $dependencyManifestPath
+$stage = Join-Path $output ('.update-manifest-' + [Guid]::NewGuid().ToString('N'))
+$stagedManifest = "$stage.json"
+$stagedSignature = "$stage.sig"
+try {
+    [IO.File]::WriteAllBytes($stagedManifest, $bytes)
+    [IO.File]::WriteAllBytes($stagedSignature, $signature)
+    & (Join-Path $scriptRoot 'verify-update-manifest.ps1') `
+        -ManifestPath $stagedManifest `
+        -SignaturePath $stagedSignature `
+        -ContractPath $contractFile `
+        -PublicKeyPath $PublicKeyPath `
+        -SetupPath $SetupPath `
+        -ZipPath $ZipPath `
+        -ExpectedVersion $Version `
+        -ExpectedTag $Tag `
+        -ExpectedCommit $Commit `
+        -ExpectedRepository $Repository `
+        -DependencyManifestPath $dependencyManifestPath
+
+    $promotionLock = [IO.FileStream]::new((Join-Path $output '.update-manifest.lock'),
+        [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None, 1, [IO.FileOptions]::DeleteOnClose)
+    try {
+        Promote-ValidatedFileSetAtomically @(
+            @{ Source = $stagedManifest; Destination = $manifestPath }
+            @{ Source = $stagedSignature; Destination = $signaturePath }
+        )
+    } finally { $promotionLock.Dispose() }
+} finally {
+    [IO.File]::Delete($stagedManifest)
+    [IO.File]::Delete($stagedSignature)
+}
 
 Write-Output $manifestPath
 Write-Output $signaturePath

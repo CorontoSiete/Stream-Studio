@@ -1,6 +1,6 @@
 # Web UI Twitch dark theme
 
-The browser client uses Twitch-style neutral charcoal surfaces, purple actions, light text, and red LIVE badges. The theme is applied in `src/StreamlinkVlcStudio.Infrastructure/LocalWeb/Assets/app.css`, which the local web server embeds and serves to browsers.
+The browser client uses Twitch-style neutral charcoal surfaces, purple actions, light text, and red LIVE badges. The theme is applied in `src/StreamlinkVlcStudio.WebClient/Assets/app.css`, which the local web server embeds and serves to browsers.
 
 The reference is the user-supplied Twitch screenshot. Pixel sampling established these values:
 

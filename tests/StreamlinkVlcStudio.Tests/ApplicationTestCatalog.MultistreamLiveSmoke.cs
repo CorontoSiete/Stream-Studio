@@ -64,7 +64,7 @@ internal static partial class ApplicationTestCatalog
                     TimeSpan.FromSeconds(65));
                 var engines = viewModel.Tabs.Select(tab => (LibVlcPlaybackEngine)GetStartWatchPlaybackEngine(tab)).ToArray();
                 foreach (var engine in engines) await WaitForStartWatchFramesAsync(engine);
-                await TestWait.UntilAsync(() => viewModel.Tabs.All(tab => tab.NativeOverlay.IsNativeOverlayChatCurrent(settings)),
+                await TestWait.UntilAsync(() => viewModel.Tabs.All(tab => tab.NativeOverlay!.IsNativeOverlayChatCurrent(settings)),
                     TimeSpan.FromSeconds(15));
                 await Task.Delay(TimeSpan.FromSeconds(warmup));
                 var dimensions = new List<object>();
@@ -137,7 +137,7 @@ internal static partial class ApplicationTestCatalog
                     afterProcesses,
                     gpuError = processes.GpuError,
                     samples,
-                    applicationSha256 = FileHash(typeof(MainViewModel).Assembly.Location),
+                    applicationSha256 = FileHash(typeof(MainWindow).Assembly.Location),
                     infrastructureSha256 = FileHash(typeof(StreamlinkService).Assembly.Location),
                     testsSha256 = FileHash(typeof(ApplicationTestCatalog).Assembly.Location)
                 });
@@ -151,7 +151,7 @@ internal static partial class ApplicationTestCatalog
                 }
                 Assert.True(displayed.All(frames => frames >= seconds * 20), "One live input did not keep advancing.");
                 Assert.True(processes.GpuError is null, processes.GpuError ?? "GPU counters unavailable.");
-                Assert.True(viewModel.Tabs.All(tab => tab.NativeOverlay.IsNativeOverlayChatCurrent(settings)));
+                Assert.True(viewModel.Tabs.All(tab => tab.NativeOverlay!.IsNativeOverlayChatCurrent(settings)));
                 Assert.Equal(1, viewModel.Tabs.Count(tab => !tab.IsAutoMuted));
                 Console.WriteLine($"Live cycle {cycle}: {cpu / elapsed:F3} CPU cores; {string.Join(',', displayed)} displayed pictures; native chat controllers active on all {targets.Length} tabs.");
             }

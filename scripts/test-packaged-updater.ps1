@@ -43,8 +43,8 @@ try {
         throw "Packaged updater ownership mismatch. Expected $ExpectedInstallKind; got $($report.InstallKind)."
     }
     if ($VerifyBundleLayout) {
-        if (@($report.Package.ManagedAssemblyLocations.PSObject.Properties).Count -ne 3 -or
-            @($report.Package.ManagedAssemblyLocations.PSObject.Properties | Where-Object { $_.Value -ne '' }).Count -ne 0) {
+        $assemblyLocations = @($report.Package.ManagedAssemblyLocations.PSObject.Properties)
+        if ($assemblyLocations.Count -eq 0 -or @($assemblyLocations | Where-Object { $_.Value -ne '' }).Count -ne 0) {
             throw 'The package extracts managed assemblies instead of loading them directly from its executable.'
         }
         if ((Test-Path -LiteralPath $extractionRoot) -and

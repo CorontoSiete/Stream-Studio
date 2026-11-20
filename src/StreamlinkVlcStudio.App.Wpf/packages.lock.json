@@ -64,7 +64,20 @@
       "streamlinkvlcstudio.infrastructure": {
         "type": "Project",
         "dependencies": {
-          "StreamlinkVlcStudio.Core": "[1.8.11, )"
+          "StreamlinkVlcStudio.Core": "[1.8.14, )"
+        }
+      },
+      "streamlinkvlcstudio.webclient": {
+        "type": "Project",
+        "dependencies": {
+          "StreamlinkVlcStudio.Infrastructure": "[1.8.14, )"
+        }
+      },
+      "streamlinkvlcstudio.workspace": {
+        "type": "Project",
+        "dependencies": {
+          "StreamlinkVlcStudio.Core": "[1.8.14, )",
+          "StreamlinkVlcStudio.Infrastructure": "[1.8.14, )"
         }
       }
     },

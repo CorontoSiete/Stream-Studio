@@ -1,7 +1,8 @@
+using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
-using StreamlinkVlcStudio.App.Wpf.ViewModels;
+using StreamlinkVlcStudio.Workspace.ViewModels;
 
 namespace StreamlinkVlcStudio.App.Wpf.Controls;
 
@@ -25,6 +26,8 @@ public sealed class VideoSurfacePresenter : ContentControl
         typeof(StreamTabViewModel),
         typeof(VideoSurfacePresenter),
         new FrameworkPropertyMetadata(null, OnTabChanged));
+
+    private static readonly ConditionalWeakTable<StreamTabViewModel, TabVideoSurface> TabSurfaces = new();
 
     private StreamTabViewModel? attachedTab;
     private VideoSurface? attachedSurface;
@@ -52,16 +55,16 @@ public sealed class VideoSurfacePresenter : ContentControl
     /// <summary>Raised with the underlying VideoSurface as sender when it leaves this presenter.</summary>
     public event RoutedEventHandler? SurfaceUnloaded;
 
+    internal static VideoSurfacePresenter? GetOwner(StreamTabViewModel tab) =>
+        TabSurfaces.TryGetValue(tab, out var entry) ? entry.Owner : null;
+
     internal void DetachSurfaceForTransfer()
     {
         Dispatcher.VerifyAccess();
-        if (attachedSurface is null)
+        if (attachedSurface is not null)
         {
-            return;
+            DetachSurface(preserveVideoHandle: true);
         }
-
-        attachedSurface.IsHostTransferPending = true;
-        DetachSurface(preserveVideoHandle: true);
     }
 
     private static void OnTabChanged(DependencyObject dependencyObject, DependencyPropertyChangedEventArgs e)
@@ -94,7 +97,8 @@ public sealed class VideoSurfacePresenter : ContentControl
             return;
         }
 
-        var surface = tab.GetOrCreateVideoSurface();
+        var entry = TabSurfaces.GetValue(tab, static _ => new TabVideoSurface());
+        var surface = entry.Surface;
         if (ReferenceEquals(attachedTab, tab) && ReferenceEquals(attachedSurface, surface))
         {
             return;
@@ -102,12 +106,9 @@ public sealed class VideoSurfacePresenter : ContentControl
 
         DetachSurface(preserveVideoHandle: attachedSurface?.IsHostTransferPending == true);
 
-        var previousOwner = tab.VideoSurfacePresenterOwner;
-        var isTransfer = previousOwner is not null && !ReferenceEquals(previousOwner, this);
-        if (isTransfer)
+        if (entry.Owner is { } previousOwner && !ReferenceEquals(previousOwner, this))
         {
-            surface.IsHostTransferPending = true;
-            previousOwner!.DetachSurfaceForTransfer();
+            previousOwner.DetachSurfaceForTransfer();
         }
 
         attachedTab = tab;
@@ -115,7 +116,7 @@ public sealed class VideoSurfacePresenter : ContentControl
         surface.Tag = tab;
         surface.Loaded += VideoSurfaceOnLoaded;
         surface.Unloaded += VideoSurfaceOnUnloaded;
-        tab.VideoSurfacePresenterOwner = this;
+        entry.Owner = this;
         SetValue(SurfacePropertyKey, surface);
         Content = surface;
 
@@ -138,11 +139,7 @@ public sealed class VideoSurfacePresenter : ContentControl
         var surface = attachedSurface;
         if (surface is null)
         {
-            if (ReferenceEquals(tab?.VideoSurfacePresenterOwner, this))
-            {
-                tab.VideoSurfacePresenterOwner = null;
-            }
-
+            ClearOwner(tab);
             attachedTab = null;
             attachedSurfaceIsLoaded = false;
             SetValue(SurfacePropertyKey, null);
@@ -154,17 +151,19 @@ public sealed class VideoSurfacePresenter : ContentControl
         RaiseSurfaceUnloaded(surface);
         surface.Loaded -= VideoSurfaceOnLoaded;
         surface.Unloaded -= VideoSurfaceOnUnloaded;
-
-        if (ReferenceEquals(tab?.VideoSurfacePresenterOwner, this))
-        {
-            tab.VideoSurfacePresenterOwner = null;
-        }
+        ClearOwner(tab);
 
         attachedTab = null;
         attachedSurface = null;
         attachedSurfaceIsLoaded = false;
         SetValue(SurfacePropertyKey, null);
         Content = null;
+    }
+
+    private void ClearOwner(StreamTabViewModel? tab)
+    {
+        if (tab is not null && TabSurfaces.TryGetValue(tab, out var entry) && ReferenceEquals(entry.Owner, this))
+            entry.Owner = null;
     }
 
     private void VideoSurfaceOnLoaded(object sender, RoutedEventArgs e)
@@ -205,5 +204,11 @@ public sealed class VideoSurfacePresenter : ContentControl
 
         attachedSurfaceIsLoaded = false;
         SurfaceUnloaded?.Invoke(surface, new RoutedEventArgs());
+    }
+
+    private sealed class TabVideoSurface
+    {
+        public VideoSurface Surface { get; } = new();
+        public VideoSurfacePresenter? Owner { get; set; }
     }
 }

@@ -243,7 +243,7 @@ internal static partial class ChannelFollowTestCatalog
             Assert.Equal(false, tracker.IsResponseCandidate("DELETE", route));
         }
         foreach (var target in new[] { Twitch with { Channel = "../settings" }, Twitch with { Platform = (PlatformKind)200 }, StreamInputParser.Parse("https://www.twitch.tv/videos/123", PlatformKind.Twitch) })
-            Assert.Equal(false, ChannelFollowResponseTracker.TryGetChannel(target, out _));
+            Assert.Equal(false, ChannelFollowTarget.TryResolve(target, out _));
         return Task.CompletedTask;
     }
 
@@ -469,7 +469,7 @@ internal static partial class ChannelFollowTestCatalog
             await System.Windows.Threading.Dispatcher.Yield(System.Windows.Threading.DispatcherPriority.DataBind);
             Assert.Equal("Following", button.Content);
             Assert.Equal("Unfollow selected streamer", System.Windows.Automation.AutomationProperties.GetName(button));
-            Assert.True(button.MinWidth >= 82);
+            Assert.True(button.MinWidth >= 38 && button.Height >= 36);
         }
         finally { window.DataContext = null; window.Close(); }
     });

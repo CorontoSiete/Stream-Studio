@@ -5,6 +5,7 @@ using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using StreamlinkVlcStudio.Core.Models;
+using StreamlinkVlcStudio.Core.Settings;
 using StreamlinkVlcStudio.Core.Parsing;
 using StreamlinkVlcStudio.Core.Security;
 using StreamlinkVlcStudio.Core.Text;
@@ -36,6 +37,9 @@ internal sealed class DockedChatBadgeCatalog
     private readonly CatalogChangeNotifier catalogChangeNotifier;
 
     public static DockedChatBadgeCatalog Shared { get; } = new();
+
+    internal static void ConfigureShared(ChatSettings settings) =>
+        Shared.ConfigureTwitchCredentials(settings.TwitchClientId, settings.TwitchOAuthToken);
 
     internal DockedChatBadgeCatalog() : this(SharedHttpClient)
     {

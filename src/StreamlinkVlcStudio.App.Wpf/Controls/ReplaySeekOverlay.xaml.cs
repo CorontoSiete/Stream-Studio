@@ -7,7 +7,7 @@ using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Threading;
-using StreamlinkVlcStudio.App.Wpf.ViewModels;
+using StreamlinkVlcStudio.Workspace.ViewModels;
 
 namespace StreamlinkVlcStudio.App.Wpf.Controls;
 

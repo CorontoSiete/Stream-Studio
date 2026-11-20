@@ -1,6 +1,9 @@
+using System.Globalization;
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using StreamlinkVlcStudio.Core.Json;
+using StreamlinkVlcStudio.Core.Models;
 using StreamlinkVlcStudio.Infrastructure.Http;
 
 namespace StreamlinkVlcStudio.Infrastructure.Twitch;
@@ -16,6 +19,42 @@ internal sealed class TwitchGraphQlTransport(HttpClient httpClient)
     /// </summary>
     internal static string CreateDeviceId() =>
         Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
+
+    internal async Task<Uri> GetPlaybackMasterUriAsync(StreamTarget target, CancellationToken cancellationToken)
+    {
+        var vod = target.IsExplicitTwitchVod;
+        var payload = JsonSerializer.Serialize(new
+        {
+            operationName = "PlaybackAccessToken",
+            variables = new
+            {
+                isLive = !vod,
+                login = vod ? "" : target.Channel,
+                isVod = vod,
+                vodID = vod ? target.MediaId : "",
+                playerType = "embed",
+                platform = "site"
+            },
+            extensions = new { persistedQuery = new { version = 1, sha256Hash = "ed230aa1e33e07eebb8928504583da78a5173989fadfb1ac94be06a04f3cdbe9" } }
+        });
+        // Live previews use Streamlink's anonymous identity. A new device ID
+        // changes the live token and can introduce an unnecessary preroll.
+        using var document = await SendAsync(payload, PublicClientId, vod ? CreateDeviceId() : null, cancellationToken).ConfigureAwait(false);
+        var root = document.RootElement;
+        if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Object ||
+            !data.TryGetProperty(vod ? "videoPlaybackAccessToken" : "streamPlaybackAccessToken", out var access) ||
+            !JsonElementReader.TryGetNonEmptyString(access, "signature", out var signature) || string.IsNullOrWhiteSpace(signature) ||
+            !JsonElementReader.TryGetNonEmptyString(access, "value", out var value) || string.IsNullOrWhiteSpace(value))
+            throw new InvalidDataException($"Twitch did not return a {(vod ? "video" : "live")} playback token.");
+
+        var path = vod ? $"vod/v2/{target.MediaId}" : $"api/v2/channel/hls/{Uri.EscapeDataString(target.Channel)}";
+        var nonce = Random.Shared.Next(999999).ToString(CultureInfo.InvariantCulture);
+        var encodedSignature = Uri.EscapeDataString(signature);
+        var encodedToken = Uri.EscapeDataString(value);
+        var credentials = vod ? $"nauthsig={encodedSignature}&nauth={encodedToken}" : $"fast_bread=true&sig={encodedSignature}&token={encodedToken}";
+        return new Uri($"https://usher.ttvnw.net/{path}.m3u8?platform=web&p={nonce}&allow_source=true&allow_audio_only=true" +
+            $"&playlist_include_framerate=true&supported_codecs=h264&{credentials}");
+    }
 
     internal async Task<JsonDocument> SendAsync(
         string payload,

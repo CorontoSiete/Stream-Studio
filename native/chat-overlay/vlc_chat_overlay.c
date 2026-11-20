@@ -29,7 +29,7 @@
  *   --max-messages N
  *   --font-size N           message text and badge size in 1080p reference pixels
  *   --owner-process-id N    parent PID; we exit when it does
- *   --vlc-process-id N      VLC PID; reserved for future use (ignored today)
+ *   --vlc-process-id N      optional VLC PID for keyboard focus checks
  *   --position-state-path P plugin/controller state path used to avoid
  *                           clobbering a saved per-channel drag position
  *   --twitch-badge-manifest PATH
@@ -64,6 +64,7 @@
 
 #include "protocol.h"
 #include "tls.h"
+#include "windows-files.h"
 
 /* ===== Configuration ==================================================== */
 
@@ -251,7 +252,7 @@ static char          g_kick_channel_id[64]      = {0};
 static char          g_kick_realtime_client_id[37] = {0};
 static char          g_kick_broadcaster_user_id[64] = {0};
 static char          g_kick_chat_token[MAX_OAUTH_TOKEN] = {0};
-static char          g_kick_chat_token_file[MAX_PATH] = {0};
+static char          g_kick_chat_token_file[UTF8_PATH_CAPACITY] = {0};
 static bool          g_kick_chat_auth_ready      = false;
 static bool          g_kick_send_as_bot          = false;
 static int           g_kick_subscriber_badge_versions[KICK_BADGE_VERSION_CAP] = {0};
@@ -262,9 +263,9 @@ static char          g_twitch_client_id[128]     = {0};
 static char          g_twitch_room_id[64]        = {0};
 static char          g_twitch_chat_login[MAX_USERNAME] = {0};
 static char          g_twitch_chat_oauth[MAX_OAUTH_TOKEN] = {0};
-static char          g_twitch_chat_token_file[MAX_PATH] = {0};
-static char          g_twitch_badge_manifest_path[IMAGE_PATH_MAX] = {0};
-static char          g_kick_badge_manifest_path[IMAGE_PATH_MAX] = {0};
+static char          g_twitch_chat_token_file[UTF8_PATH_CAPACITY] = {0};
+static char          g_twitch_badge_manifest_path[UTF8_PATH_CAPACITY] = {0};
+static char          g_kick_badge_manifest_path[UTF8_PATH_CAPACITY] = {0};
 static bool          g_twitch_chat_auth_ready    = false;
 static char          g_pipe_name[128]           = "vlc_overlay";
 static int           g_width                    = 420;
@@ -274,8 +275,8 @@ static int           g_init_y                   = 302;
 static int           g_max_messages             = 18;
 static DWORD         g_owner_pid                = 0;
 static DWORD         g_vlc_pid                  = 0;
-static char          g_position_state_path[MAX_PATH] = {0};
-static char          g_size_state_path[MAX_PATH] = {0};
+static char          g_position_state_path[UTF8_PATH_CAPACITY] = {0};
+static char          g_size_state_path[UTF8_PATH_CAPACITY] = {0};
 static bool          g_size_state_loaded          = false;
 static bool          g_size_state_reference       = false;
 
@@ -1195,24 +1196,6 @@ static void set_target_chat_size(int width, int height) {
     InterlockedExchange(&g_target_size, MYO_PACK_SIZE_EVENT(source_width, source_height));
 }
 
-static bool ensure_parent_directory(const char *path) {
-    if (!path || !path[0]) return false;
-
-    char dir[MAX_PATH];
-    strncpy(dir, path, sizeof(dir) - 1);
-    dir[sizeof(dir) - 1] = '\0';
-
-    char *slash = strrchr(dir, '\\');
-    char *fslash = strrchr(dir, '/');
-    if (!slash || (fslash && fslash > slash)) slash = fslash;
-    if (!slash) return true;
-    *slash = '\0';
-    if (!dir[0]) return true;
-
-    if (CreateDirectoryA(dir, NULL)) return true;
-    return GetLastError() == ERROR_ALREADY_EXISTS;
-}
-
 static void init_size_state_path(void) {
     if (g_position_state_path[0]) {
         int n = snprintf(g_size_state_path, sizeof(g_size_state_path),
@@ -1221,13 +1204,7 @@ static void init_size_state_path(void) {
         g_size_state_path[0] = '\0';
     }
 
-    const char *appdata = getenv("APPDATA");
-    if (!appdata || !appdata[0]) return;
-    int n = snprintf(g_size_state_path, sizeof(g_size_state_path),
-                     "%s\\vlc-overlay\\chat-size.txt", appdata);
-    if (n <= 0 || n >= (int)sizeof(g_size_state_path)) {
-        g_size_state_path[0] = '\0';
-    }
+    build_appdata_path(g_size_state_path, sizeof(g_size_state_path), "\\vlc-overlay\\chat-size.txt");
 }
 
 static bool parse_size_state_text(const char *text, int *width, int *height,
@@ -1267,7 +1244,7 @@ static bool parse_size_state_text(const char *text, int *width, int *height,
 static void load_saved_chat_size(void) {
     if (!g_size_state_path[0]) return;
 
-    FILE *f = fopen(g_size_state_path, "r");
+    FILE *f = open_utf8_file(g_size_state_path, L"r");
     if (!f) return;
     char text[256];
     size_t n = fread(text, 1, sizeof(text) - 1, f);
@@ -1289,7 +1266,7 @@ static void save_chat_size(int width, int height) {
     clamp_chat_size(&width, &height);
     if (!ensure_parent_directory(g_size_state_path)) return;
 
-    FILE *f = fopen(g_size_state_path, "w");
+    FILE *f = open_utf8_file(g_size_state_path, L"w");
     if (!f) return;
     fprintf(f, "reference %d %d\n", width, height);
     fclose(f);
@@ -1316,7 +1293,7 @@ static bool file_read_bytes(const char *path, size_t max_bytes, byte_buf_t *out)
     memset(out, 0, sizeof(*out));
     if (!path || !path[0]) return false;
 
-    FILE *f = fopen(path, "rb");
+    FILE *f = open_utf8_file(path, L"rb");
     if (!f) return false;
     if (fseek(f, 0, SEEK_END) != 0) {
         fclose(f);
@@ -1401,15 +1378,6 @@ static bool image_load_queue_pop(image_load_queue_t *q, image_load_request_t *ou
     }
     LeaveCriticalSection(&q->cs);
     return ok;
-}
-
-static bool utf8_to_wide_path(const char *src, wchar_t *dst, int dst_cap) {
-    int n = MultiByteToWideChar(CP_UTF8, 0, src, -1, dst, dst_cap);
-    if (n <= 0) {
-        if (dst_cap > 0) dst[0] = L'\0';
-        return false;
-    }
-    return true;
 }
 
 static bool split_https_url(const char *url, char *host, int host_cap,
@@ -2353,7 +2321,7 @@ static const char *channel_display_name(void) {
 
 static bool read_text_file_trimmed(const char *path, char *out, int out_cap) {
     if (!path || !path[0] || !out || out_cap <= 0) return false;
-    FILE *f = fopen(path, "rb");
+    FILE *f = open_utf8_file(path, L"rb");
     if (!f) return false;
     size_t n = fread(out, 1, (size_t)out_cap - 1, f);
     fclose(f);
@@ -2362,34 +2330,13 @@ static bool read_text_file_trimmed(const char *path, char *out, int out_cap) {
     return out[0] != '\0';
 }
 
-static void default_twitch_token_file(char *out, int out_cap) {
-    if (!out || out_cap <= 0) return;
-    out[0] = '\0';
-    const char *appdata = getenv("APPDATA");
-    if (!appdata || !appdata[0]) return;
-    int n = snprintf(out, (size_t)out_cap,
-                     "%s\\streamlink\\twitch-oauth-token.txt", appdata);
-    if (n <= 0 || n >= out_cap) out[0] = '\0';
-}
-
-static void default_twitch_client_id_file(char *out, int out_cap) {
-    if (!out || out_cap <= 0) return;
-    out[0] = '\0';
-    const char *appdata = getenv("APPDATA");
-    if (!appdata || !appdata[0]) return;
-    int n = snprintf(out, (size_t)out_cap,
-                     "%s\\streamlink\\twitch-chat-client-id.txt", appdata);
-    if (n <= 0 || n >= out_cap) out[0] = '\0';
-}
-
-static void default_kick_token_file(char *out, int out_cap) {
-    if (!out || out_cap <= 0) return;
-    out[0] = '\0';
-    const char *appdata = getenv("APPDATA");
-    if (!appdata || !appdata[0]) return;
-    int n = snprintf(out, (size_t)out_cap,
-                     "%s\\streamlink\\kick-oauth-token.txt", appdata);
-    if (n <= 0 || n >= out_cap) out[0] = '\0';
+static void resolve_token_file(char *path, int capacity, const wchar_t *configured,
+                               const wchar_t *legacy, const char *default_path)
+{
+    if (!read_path_environment(configured, path, capacity) &&
+        !read_path_environment(legacy, path, capacity) && !path[0]) {
+        build_appdata_path(path, capacity, default_path);
+    }
 }
 
 static void input_set_notice_ms(DWORD ms, const char *fmt, ...) {
@@ -2585,9 +2532,8 @@ static void load_twitch_client_id(void) {
         return;
     }
 
-    char path[MAX_PATH];
-    default_twitch_client_id_file(path, sizeof(path));
-    if (path[0]) {
+    char path[UTF8_PATH_CAPACITY];
+    if (build_appdata_path(path, sizeof(path), "\\streamlink\\twitch-chat-client-id.txt")) {
         read_text_file_trimmed(path, g_twitch_client_id,
                                sizeof(g_twitch_client_id));
     }
@@ -2667,18 +2613,9 @@ static void load_twitch_chat_auth(void) {
     }
 
     if (!g_twitch_chat_oauth[0]) {
-        const char *env_token_file = getenv("TWITCH_CHAT_TOKEN_FILE");
-        if (!env_token_file || !env_token_file[0]) {
-            env_token_file = getenv("STREAMLINK_TWITCH_CHAT_TOKEN_FILE");
-        }
-        if (env_token_file && env_token_file[0]) {
-            strncpy(g_twitch_chat_token_file, env_token_file,
-                    sizeof(g_twitch_chat_token_file) - 1);
-        }
-        if (!g_twitch_chat_token_file[0]) {
-            default_twitch_token_file(g_twitch_chat_token_file,
-                                      sizeof(g_twitch_chat_token_file));
-        }
+        resolve_token_file(g_twitch_chat_token_file, sizeof(g_twitch_chat_token_file),
+                           L"TWITCH_CHAT_TOKEN_FILE", L"STREAMLINK_TWITCH_CHAT_TOKEN_FILE",
+                           "\\streamlink\\twitch-oauth-token.txt");
         if (g_twitch_chat_token_file[0]) {
             read_text_file_trimmed(g_twitch_chat_token_file,
                                    g_twitch_chat_oauth,
@@ -2740,18 +2677,9 @@ static void load_kick_chat_auth(void) {
     }
 
     if (!g_kick_chat_token[0]) {
-        const char *env_token_file = getenv("KICK_CHAT_TOKEN_FILE");
-        if (!env_token_file || !env_token_file[0]) {
-            env_token_file = getenv("STREAMLINK_KICK_CHAT_TOKEN_FILE");
-        }
-        if (env_token_file && env_token_file[0]) {
-            strncpy(g_kick_chat_token_file, env_token_file,
-                    sizeof(g_kick_chat_token_file) - 1);
-        }
-        if (!g_kick_chat_token_file[0]) {
-            default_kick_token_file(g_kick_chat_token_file,
-                                    sizeof(g_kick_chat_token_file));
-        }
+        resolve_token_file(g_kick_chat_token_file, sizeof(g_kick_chat_token_file),
+                           L"KICK_CHAT_TOKEN_FILE", L"STREAMLINK_KICK_CHAT_TOKEN_FILE",
+                           "\\streamlink\\kick-oauth-token.txt");
         if (g_kick_chat_token_file[0]) {
             read_text_file_trimmed(g_kick_chat_token_file,
                                    g_kick_chat_token,
@@ -3170,10 +3098,7 @@ static bool emote_catalog_add_file(const char *code, const char *path,
         return false;
     }
 
-    DWORD attrs = GetFileAttributesA(path);
-    if (attrs == INVALID_FILE_ATTRIBUTES || (attrs & FILE_ATTRIBUTE_DIRECTORY) != 0) {
-        return false;
-    }
+    if (!utf8_file_exists(path)) return false;
 
     EnterCriticalSection(&g_bttv.cs);
     int idx = bttv_find_or_add_locked(code);
@@ -3429,12 +3354,6 @@ static bool make_twitch_channel_badge_code(const char *room_id,
 {
     return make_twitch_badge_code_raw("channel", room_id, id, version,
                                       out, out_size);
-}
-
-static bool make_twitch_badge_code(const char *id, const char *version,
-                                   char *out, int out_size)
-{
-    return make_twitch_global_badge_code(id, version, out, out_size);
 }
 
 static bool append_badge_candidate(char candidates[][MAX_BADGE_ID],
@@ -3793,6 +3712,17 @@ static void kick_register_subscriber_badge_version(int version)
             g_kick_subscriber_badge_versions[index];
         g_kick_subscriber_badge_versions[index] = tmp;
         index--;
+    }
+}
+
+static void kick_record_subscriber_badge(const char *id, const char *version)
+{
+    int version_number = 0;
+    char normalized_id[MAX_BADGE_ID] = {0};
+    normalize_badge_id(id, normalized_id, sizeof(normalized_id));
+    if (ascii_equals_ci(normalized_id, "subscriber")
+        && parse_positive_int_string(version, &version_number)) {
+        kick_register_subscriber_badge_version(version_number);
     }
 }
 
@@ -4219,8 +4149,12 @@ static int twitch_badges_parse_helix_json(const char *json, size_t len,
 static bool full_path_from_utf8(const char *path, char *out, int out_cap)
 {
     if (!path || !path[0] || !out || out_cap <= 0) return false;
-    DWORD n = GetFullPathNameA(path, (DWORD)out_cap, out, NULL);
-    return n > 0 && n < (DWORD)out_cap;
+    wchar_t input[MAX_PATH], full[MAX_PATH];
+    if (!utf8_to_wide_path(path, input, MAX_PATH)) return false;
+    DWORD length = GetFullPathNameW(input, MAX_PATH, full, NULL);
+    return length > 0 && length < MAX_PATH &&
+        WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, full, -1,
+                            out, out_cap, NULL, NULL) > 0;
 }
 
 static bool directory_from_path(const char *path, char *out, int out_cap)
@@ -4267,7 +4201,7 @@ static bool build_manifest_image_path(const char *root_dir,
         return false;
     }
 
-    char combined[IMAGE_PATH_MAX * 2];
+    char combined[UTF8_PATH_CAPACITY * 2];
     if (path_is_absolute_win32(relative)) {
         int n = snprintf(combined, sizeof(combined), "%s", relative);
         if (n <= 0 || n >= (int)sizeof(combined)) return false;
@@ -4286,24 +4220,20 @@ static bool build_manifest_image_path(const char *root_dir,
     return _strnicmp(out, root_dir, root_len) == 0;
 }
 
-static bool bttv_preload_image_by_code(const char *code);
-
-static int twitch_badges_load_bundled_manifest(void)
+static int load_bundled_badge_manifest(
+    const char *provider, const char *path, int size,
+    bool (*make_code)(const char *, const char *, char *, int),
+    void (*record_badge)(const char *, const char *))
 {
-    static int cached_added = -1;
-    if (cached_added >= 0) return cached_added;
-    cached_added = 0;
+    if (!path[0]) return 0;
 
-    if (!g_twitch_badge_manifest_path[0]) return 0;
-
-    char manifest_path[IMAGE_PATH_MAX];
-    if (!full_path_from_utf8(g_twitch_badge_manifest_path,
-                             manifest_path, sizeof(manifest_path))) {
+    char manifest_path[UTF8_PATH_CAPACITY];
+    if (!full_path_from_utf8(path, manifest_path, sizeof(manifest_path))) {
         return 0;
     }
     normalize_path_separators(manifest_path);
 
-    char root_dir[IMAGE_PATH_MAX];
+    char root_dir[UTF8_PATH_CAPACITY];
     if (!directory_from_path(manifest_path, root_dir, sizeof(root_dir))) {
         return 0;
     }
@@ -4311,7 +4241,7 @@ static int twitch_badges_load_bundled_manifest(void)
 
     byte_buf_t json;
     if (!file_read_bytes(manifest_path, HTTP_MAX_JSON, &json)) {
-        log_msg("Bundled Twitch badge manifest unavailable: %s", manifest_path);
+        log_msg("Bundled %s badge manifest unavailable: %s", provider, manifest_path);
         return 0;
     }
 
@@ -4344,31 +4274,41 @@ static int twitch_badges_load_bundled_manifest(void)
                                           version, sizeof(version))
                 && json_get_string_direct(entry, entry_end, "image",
                                           image, sizeof(image))
-                && make_twitch_badge_code(id, version, code, sizeof(code))
+                && make_code(id, version, code, sizeof(code))
                 && build_manifest_image_path(root_dir, image,
                                              image_path, sizeof(image_path))
-                && emote_catalog_add_file(code, image_path, 18, 18)) {
+                && emote_catalog_add_file(code, image_path, size, size)) {
                 if (bttv_preload_image_by_code(code)) {
                     preloaded++;
                 }
+                if (record_badge) record_badge(id, version);
                 added++;
             }
         }
     } else {
-        log_msg("Bundled Twitch badge manifest has no entries array: %s",
-                manifest_path);
+        log_msg("Bundled %s badge manifest has no entries array: %s",
+                provider, manifest_path);
     }
 
     byte_buf_free(&json);
     if (added > 0) {
-        log_msg("Bundled Twitch badges loaded: %d, preloaded: %d",
-                added, preloaded);
+        log_msg("Bundled %s badges loaded: %d, preloaded: %d",
+                provider, added, preloaded);
         signal_render();
     } else {
-        log_msg("Bundled Twitch badge manifest loaded no badges: %s",
-                manifest_path);
+        log_msg("Bundled %s badge manifest loaded no badges: %s",
+                provider, manifest_path);
     }
-    cached_added = added;
+    return added;
+}
+
+static int twitch_badges_load_bundled_manifest(void)
+{
+    static int cached_added = -1;
+    if (cached_added < 0) {
+        cached_added = load_bundled_badge_manifest("Twitch",
+            g_twitch_badge_manifest_path, 18, make_twitch_global_badge_code, NULL);
+    }
     return cached_added;
 }
 
@@ -6912,14 +6852,7 @@ static bool kick_add_channel_badge(const char *id, const char *version,
         if (image_index >= 0) {
             (void)bttv_ensure_image(image_index);
         }
-    }
-    int version_number = 0;
-    char normalized_id[MAX_BADGE_ID] = {0};
-    normalize_badge_id(id, normalized_id, sizeof(normalized_id));
-    if (added
-        && ascii_equals_ci(normalized_id, "subscriber")
-        && parse_positive_int_string(version, &version_number)) {
-        kick_register_subscriber_badge_version(version_number);
+        kick_record_subscriber_badge(id, version);
     }
     return added;
 }
@@ -6927,92 +6860,10 @@ static bool kick_add_channel_badge(const char *id, const char *version,
 static int kick_badges_load_bundled_manifest(void)
 {
     static int cached_added = -1;
-    if (cached_added >= 0) return cached_added;
-    cached_added = 0;
-
-    if (!g_kick_badge_manifest_path[0]) return 0;
-
-    char manifest_path[IMAGE_PATH_MAX];
-    if (!full_path_from_utf8(g_kick_badge_manifest_path,
-                             manifest_path, sizeof(manifest_path))) {
-        return 0;
+    if (cached_added < 0) {
+        cached_added = load_bundled_badge_manifest("Kick",
+            g_kick_badge_manifest_path, 36, make_kick_badge_code, kick_record_subscriber_badge);
     }
-    normalize_path_separators(manifest_path);
-
-    char root_dir[IMAGE_PATH_MAX];
-    if (!directory_from_path(manifest_path, root_dir, sizeof(root_dir))) {
-        return 0;
-    }
-    normalize_path_separators(root_dir);
-
-    byte_buf_t json;
-    if (!file_read_bytes(manifest_path, HTTP_MAX_JSON, &json)) {
-        log_msg("Bundled Kick badge manifest unavailable: %s", manifest_path);
-        return 0;
-    }
-
-    const char *end = (const char *)json.data + json.size;
-    const char *root = json_document_root((const char *)json.data, end);
-    const char *entries = NULL;
-    const char *entries_end = NULL;
-    int added = 0;
-    int preloaded = 0;
-    if (json_get_array_direct(root, end, "entries", &entries, &entries_end)) {
-        const char *cursor = entries + 1;
-        while (cursor < entries_end) {
-            const char *entry = NULL;
-            const char *entry_end = NULL;
-            if (!json_next_array_value(&cursor, entries_end,
-                                       &entry, &entry_end)) {
-                break;
-            }
-            if (!entry || entry >= entry_end || *entry != '{') {
-                continue;
-            }
-
-            char id[MAX_BADGE_ID] = {0};
-            char version[MAX_BADGE_VERSION] = {0};
-            char image[IMAGE_PATH_MAX] = {0};
-            char image_path[IMAGE_PATH_MAX] = {0};
-            char code[BTTV_CODE_MAX] = {0};
-            if (json_get_string_direct(entry, entry_end, "id", id, sizeof(id))
-                && json_get_string_direct(entry, entry_end, "version",
-                                          version, sizeof(version))
-                && json_get_string_direct(entry, entry_end, "image",
-                                          image, sizeof(image))
-                && make_kick_badge_code(id, version, code, sizeof(code))
-                && build_manifest_image_path(root_dir, image,
-                                             image_path, sizeof(image_path))
-                && emote_catalog_add_file(code, image_path, 36, 36)) {
-                if (bttv_preload_image_by_code(code)) {
-                    preloaded++;
-                }
-
-                int version_number = 0;
-                char normalized_id[MAX_BADGE_ID] = {0};
-                normalize_badge_id(id, normalized_id, sizeof(normalized_id));
-                if (ascii_equals_ci(normalized_id, "subscriber")
-                    && parse_positive_int_string(version, &version_number)) {
-                    kick_register_subscriber_badge_version(version_number);
-                }
-                added++;
-            }
-        }
-    } else {
-        log_msg("Bundled Kick badge manifest has no entries array: %s",
-                manifest_path);
-    }
-
-    byte_buf_free(&json);
-    if (added > 0) {
-        log_msg("Bundled Kick badges loaded: %d, preloaded: %d",
-                added, preloaded);
-        signal_render();
-    } else {
-        log_msg("Bundled Kick badge manifest loaded no badges: %s",
-                manifest_path);
-    }
-    cached_added = added;
     return cached_added;
 }
 
@@ -7025,19 +6876,22 @@ static bool kick_builtin_badge_path(const char *file, char *out, int out_cap)
 {
     if (!file || !file[0] || !out || out_cap <= 0) return false;
 
-    char module_path[MAX_PATH];
-    DWORD n = GetModuleFileNameA(NULL, module_path, (DWORD)sizeof(module_path));
-    if (n == 0 || n >= sizeof(module_path)) return false;
+    wchar_t module[MAX_PATH];
+    DWORD length = GetModuleFileNameW(NULL, module, MAX_PATH);
+    char module_path[UTF8_PATH_CAPACITY];
+    if (!length || length >= MAX_PATH ||
+        !WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, module, -1,
+                             module_path, sizeof(module_path), NULL, NULL))
+        return false;
     normalize_path_separators(module_path);
 
-    char module_dir[MAX_PATH];
+    char module_dir[UTF8_PATH_CAPACITY];
     if (!directory_from_path(module_path, module_dir, sizeof(module_dir))) {
         return false;
     }
 
-    n = (DWORD)snprintf(out, (size_t)out_cap, "%skick-badges\\%s",
-                        module_dir, file);
-    if (n == 0 || n >= (DWORD)out_cap) return false;
+    int n = snprintf(out, (size_t)out_cap, "%skick-badges\\%s", module_dir, file);
+    if (n <= 0 || n >= out_cap) return false;
     normalize_path_separators(out);
     return true;
 }
@@ -10325,23 +10179,10 @@ typedef struct {
     bool   positioned;
 } pipe_writer_t;
 
-static bool position_state_file_exists(const char *path) {
-    if (!path || !path[0]) return false;
-    DWORD attrs = GetFileAttributesA(path);
-    return attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY) == 0;
-}
-
 static bool plugin_position_state_exists(void) {
-    if (position_state_file_exists(g_position_state_path)) return true;
-
-    const char *appdata = getenv("APPDATA");
-    if (!appdata || !appdata[0]) return false;
-
-    char path[MAX_PATH];
-    int n = snprintf(path, sizeof(path), "%s%s", appdata, PLUGIN_POSITION_FILE_REL);
-    if (n <= 0 || n >= (int)sizeof(path)) return false;
-
-    return position_state_file_exists(path);
+    if (utf8_file_exists(g_position_state_path)) return true;
+    char path[UTF8_PATH_CAPACITY];
+    return build_appdata_path(path, sizeof(path), PLUGIN_POSITION_FILE_REL) && utf8_file_exists(path);
 }
 
 static bool pipe_writer_open(pipe_writer_t *p) {
@@ -10812,7 +10653,7 @@ static void usage(void) {
         "  --max-messages N (default 18)\n"
         "  --font-size N (default 15, scales text/badges, clamped 8-36, normalized to a 1080p source)\n"
         "  --owner-process-id PID      exit when this process exits\n"
-        "  --vlc-process-id PID        (currently ignored)\n"
+        "  --vlc-process-id PID        optional PID for keyboard focus checks\n"
         "  --position-state-path PATH  plugin/controller state path\n"
         "  --chat-token-file PATH      Twitch OAuth token file for sending chat\n"
         "  --chat-username NAME        Twitch username for the token (optional)\n"
@@ -10894,13 +10735,12 @@ static bool parse_args(int argc, char **argv) {
             g_vlc_pid = (DWORD)strtoul(next, NULL, 10);
             i++;
         } else if (arg_matches(a, "--position-state-path", "-PositionStatePath")) {
-            if (!next) return false;
-            strncpy(g_position_state_path, next, sizeof(g_position_state_path) - 1);
+            if (!next || strlen(next) >= sizeof(g_position_state_path)) return false;
+            strcpy(g_position_state_path, next);
             i++;
         } else if (arg_matches(a, "--chat-token-file", "-ChatTokenFile")) {
-            if (!next) return false;
-            strncpy(g_twitch_chat_token_file, next,
-                    sizeof(g_twitch_chat_token_file) - 1);
+            if (!next || strlen(next) >= sizeof(g_twitch_chat_token_file)) return false;
+            strcpy(g_twitch_chat_token_file, next);
             i++;
         } else if (arg_matches(a, "--chat-username", "-ChatUsername")) {
             if (!next) return false;
@@ -10918,23 +10758,17 @@ static bool parse_args(int argc, char **argv) {
             trim_ascii_in_place(g_twitch_room_id);
             i++;
         } else if (arg_matches(a, "--twitch-badge-manifest", "-TwitchBadgeManifest")) {
-            if (!next) return false;
-            strncpy(g_twitch_badge_manifest_path, next,
-                    sizeof(g_twitch_badge_manifest_path) - 1);
+            if (!next || strlen(next) >= sizeof(g_twitch_badge_manifest_path)) return false;
+            strcpy(g_twitch_badge_manifest_path, next);
             i++;
         } else if (arg_matches(a, "--kick-badge-manifest", "-KickBadgeManifest")) {
-            if (!next) return false;
-            strncpy(g_kick_badge_manifest_path, next,
-                    sizeof(g_kick_badge_manifest_path) - 1);
+            if (!next || strlen(next) >= sizeof(g_kick_badge_manifest_path)) return false;
+            strcpy(g_kick_badge_manifest_path, next);
             i++;
         } else if (arg_matches(a, "--kick-chat-token-file", "-KickChatTokenFile")) {
-            if (!next) return false;
-            strncpy(g_kick_chat_token_file, next,
-                    sizeof(g_kick_chat_token_file) - 1);
+            if (!next || strlen(next) >= sizeof(g_kick_chat_token_file)) return false;
+            strcpy(g_kick_chat_token_file, next);
             i++;
-        } else if (arg_matches(a, "--help", "-h")) {
-            usage();
-            return false;
         } else {
             fprintf(stderr, "unknown arg: %s\n", a);
             return false;
@@ -11017,17 +10851,42 @@ static void finish_workers(const HANDLE *workers, DWORD count, DWORD timeout) {
     for (DWORD i = 0; i < active_count; i++) CloseHandle(active[i]);
 }
 
-int main(int argc, char **argv) {
-    for (int i = 1; i < argc; i++) {
-        if (arg_matches(argv[i], "--help", "-h")) {
-            usage();
-            return 0;
+static bool parse_process_args(bool *help)
+{
+    int argc;
+    wchar_t **wide_args = CommandLineToArgvW(GetCommandLineW(), &argc);
+    if (!wide_args) return false;
+    char **argv = calloc((size_t)argc, sizeof(*argv));
+    bool valid = false;
+    if (argv) {
+        int converted = 0;
+        for (; converted < argc; converted++) {
+            const wchar_t *argument = wide_args[converted];
+            int length = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, argument, -1, NULL, 0, NULL, NULL);
+            if (!length) break;
+            argv[converted] = malloc((size_t)length);
+            if (!argv[converted] ||
+                !WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, argument, -1,
+                                     argv[converted], length, NULL, NULL))
+                break;
         }
+        if (converted == argc) {
+            for (int i = 1; i < argc && !*help; i++)
+                *help = arg_matches(argv[i], "--help", "-h");
+            valid = *help || parse_args(argc, argv);
+        }
+        for (int i = 0; i < argc; i++) free(argv[i]);
+        free(argv);
     }
+    LocalFree(wide_args);
+    return valid;
+}
 
-    if (!parse_args(argc, argv)) {
+int main(void) {
+    bool help = false;
+    if (!parse_process_args(&help) || help) {
         usage();
-        return 2;
+        return help ? 0 : 2;
     }
     {
         const char *debug = getenv("VLC_CHAT_OVERLAY_DEBUG_EMOTES");

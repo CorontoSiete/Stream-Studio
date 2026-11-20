@@ -5,41 +5,49 @@ param(
     [string]$OutputDirectory = ''
 )
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'lib/vlc-compiler.ps1')
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $source = Join-Path $repositoryRoot 'native/chat-overlay'
 if (-not $OutputDirectory) {
     $OutputDirectory = Join-Path $repositoryRoot 'src/StreamlinkVlcStudio.Infrastructure/Vlc/BundledOverlay/build'
 }
-if ((& $Gcc -dumpmachine) -ne 'x86_64-w64-mingw32') {
-    throw 'Use an x64 MinGW-w64 GCC targeting MSVCRT for VLC 3.0.'
-}
+$Gcc = Resolve-VlcCompiler -Gcc $Gcc
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 $qualitySource = Join-Path $source 'quality-gdi'
 $objectsDirectory = Join-Path $repositoryRoot ('.tmp/chat-overlay-objects/' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path $objectsDirectory | Out-Null
 $gxx = Join-Path (Split-Path -Parent $Gcc) 'g++.exe'
 $objects = @()
-foreach ($name in @('wingdi.c', 'common.c', 'events.c', 'win32touch.c', 'sensors.cpp')) {
-    $objectPath = Join-Path $objectsDirectory ($name + '.o')
-    $compiler = if ($name.EndsWith('.cpp')) { $gxx } else { $Gcc }
-    # VLC 3's own output implementation uses its deprecated manage callback.
-    & $compiler -c -O2 -Wall -Wextra -Werror -Wno-deprecated-declarations -fno-strict-aliasing "-ffile-prefix-map=$repositoryRoot=." `
-        -D__PLUGIN__ -DPIC -DNDEBUG -DWIN32 -D_WIN32_WINNT=0x0601 -DMODULE_STRING='"myoverlay"' `
-        -include (Join-Path $qualitySource 'build-config.h') -I $VlcIncludeDirectory `
-        (Join-Path $qualitySource $name) -o $objectPath
-    if ($LASTEXITCODE -ne 0) { throw "GDI output build failed for $name ($LASTEXITCODE)." }
-    $objects += $objectPath
+try {
+    foreach ($name in @('wingdi.c', 'common.c', 'events.c', 'win32touch.c', 'sensors.cpp')) {
+        $objectPath = Join-Path $objectsDirectory ($name + '.o')
+        $objects += $objectPath
+        $compiler = if ($name.EndsWith('.cpp')) { $gxx } else { $Gcc }
+        # VLC 3's own output implementation uses its deprecated manage callback.
+        & $compiler -c -O2 -Wall -Wextra -Werror -Wno-deprecated-declarations -fno-strict-aliasing "-ffile-prefix-map=$repositoryRoot=." `
+            -D__PLUGIN__ -DPIC -DNDEBUG -DWIN32 -D_WIN32_WINNT=0x0601 -DMODULE_STRING='"myoverlay"' `
+            -include (Join-Path $qualitySource 'build-config.h') -I $VlcIncludeDirectory `
+            (Join-Path $qualitySource $name) -o $objectPath
+        if ($LASTEXITCODE -ne 0) { throw "GDI output build failed for $name ($LASTEXITCODE)." }
+    }
+    & $Gcc -shared -O2 -Wall -Wextra -Werror -fno-strict-aliasing -static -static-libgcc "-ffile-prefix-map=$repositoryRoot=." `
+        -D__PLUGIN__ -DPIC -DWIN32 -D_WIN32_WINNT=0x0601 `
+        -I $VlcIncludeDirectory -L $VlcLibraryDirectory `
+        (Join-Path $source 'myoverlay.c') `
+        @objects -o (Join-Path $OutputDirectory 'libmyoverlay_plugin.dll') -lvlccore `
+        -lgdi32 -lmsimg32 -ld3d9 -ldxva2 -ldxguid -luser32 -lole32 -luuid -lpropsys -lstdc++ -lwinpthread `
+        '-Wl,--no-insert-timestamp,--image-base,0x180000000'
+    if ($LASTEXITCODE -ne 0) { throw "Overlay plugin build failed ($LASTEXITCODE)." }
+} finally {
+    foreach ($objectPath in $objects) {
+        if (Test-Path -LiteralPath $objectPath -PathType Leaf) {
+            Remove-Item -LiteralPath $objectPath -ErrorAction Continue
+        }
+    }
+    if (-not (Get-ChildItem -LiteralPath $objectsDirectory -Force | Select-Object -First 1)) {
+        Remove-Item -LiteralPath $objectsDirectory -ErrorAction Continue
+    }
 }
-& $Gcc -shared -O2 -Wall -Wextra -Werror -fno-strict-aliasing -static -static-libgcc "-ffile-prefix-map=$repositoryRoot=." `
-    -D__PLUGIN__ -DPIC -DWIN32 -D_WIN32_WINNT=0x0601 `
-    -I $VlcIncludeDirectory -L $VlcLibraryDirectory `
-    (Join-Path $source 'myoverlay.c') `
-    @objects -o (Join-Path $OutputDirectory 'libmyoverlay_plugin.dll') -lvlccore `
-    -lgdi32 -lmsimg32 -ld3d9 -ldxva2 -ldxguid -luser32 -lole32 -luuid -lpropsys -lstdc++ -lwinpthread `
-    '-Wl,--no-insert-timestamp,--image-base,0x180000000'
-if ($LASTEXITCODE -ne 0) { throw "Overlay plugin build failed ($LASTEXITCODE)." }
-foreach ($objectPath in $objects) { Remove-Item -LiteralPath $objectPath }
-Remove-Item -LiteralPath $objectsDirectory
 # Thread-local TLS diagnostics use GCC's threading support; keep it inside the executable.
 & $Gcc -O2 -Wall -Wextra -Werror -static -static-libgcc "-ffile-prefix-map=$repositoryRoot=." `
     (Join-Path $source 'vlc_chat_overlay.c') (Join-Path $source 'tls.c') `
@@ -47,13 +55,8 @@ Remove-Item -LiteralPath $objectsDirectory
     -lws2_32 -lsecur32 -lcrypt32 -lgdi32 -luser32 -lwinhttp -lole32 -lgdiplus -ld2d1 -ldwrite -luuid -lshell32 `
     '-Wl,--no-insert-timestamp'
 if ($LASTEXITCODE -ne 0) { throw "Overlay controller build failed ($LASTEXITCODE)." }
-$objdump = Join-Path (Split-Path -Parent $Gcc) 'objdump.exe'
 foreach ($name in @('libmyoverlay_plugin.dll', 'vlc_chat_overlay.exe')) {
     $binary = Join-Path $OutputDirectory $name
-    $imports = (& $objdump -p $binary) -join "`n"
-    if ($LASTEXITCODE -ne 0 -or $imports -notmatch 'DLL Name:\s+msvcrt.dll' -or
-        $imports -match 'DLL Name:\s+(?:ucrtbase|api-ms-win-crt|libgcc|libstdc\+\+|libwinpthread)') {
-        throw "Unexpected compiler runtime dependency in $name."
-    }
+    Assert-VlcBinaryRuntime -Gcc $Gcc -Path $binary
     Get-FileHash -LiteralPath $binary -Algorithm SHA256
 }

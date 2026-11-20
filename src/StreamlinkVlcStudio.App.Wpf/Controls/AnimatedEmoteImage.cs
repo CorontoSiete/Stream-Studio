@@ -10,6 +10,7 @@ using SkiaSharp;
 using StreamlinkVlcStudio.Core.Security;
 using StreamlinkVlcStudio.Infrastructure.Http;
 using StreamlinkVlcStudio.Infrastructure.Limits;
+using StreamlinkVlcStudio.Workspace.ViewModels;
 
 namespace StreamlinkVlcStudio.App.Wpf.Controls;
 
@@ -1578,8 +1579,6 @@ public sealed class AnimatedEmoteImage : Image
 }
 
 internal readonly record struct AnimatedEmoteImageCacheKey(string Url, int MaxImageBytes, long CacheVersion, int DecodePixelWidth = 0);
-
-public sealed record AnimatedImageRequest(string Url, long CacheVersion);
 
 internal readonly record struct AnimatedEmoteImageCacheStats(
     int TotalEntries,

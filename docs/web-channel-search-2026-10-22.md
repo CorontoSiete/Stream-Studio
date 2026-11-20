@@ -15,7 +15,7 @@ The charcoal panel, purple focus/selection, provider accents, quiet keyboard foo
 ## Reproduce verification
 
 ```powershell
-node --check src/StreamlinkVlcStudio.Infrastructure/LocalWeb/Assets/app.js
+node --check src/StreamlinkVlcStudio.WebClient/Assets/app.js
 node scripts/tests/web-navigation.browser.cjs --search-only
 node scripts/tests/web-navigation.browser.cjs
 node scripts/tests/web-navigation.browser.cjs --category-viewers-only

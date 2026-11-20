@@ -6,8 +6,8 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
-using StreamlinkVlcStudio.App.Wpf.ViewModels;
 using StreamlinkVlcStudio.Core.Models;
+using StreamlinkVlcStudio.Workspace.ViewModels;
 
 namespace StreamlinkVlcStudio.App.Wpf.Controls;
 

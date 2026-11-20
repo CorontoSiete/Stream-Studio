@@ -1,14 +1,11 @@
 using System.IO;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
-using StreamlinkVlcStudio.Core.Models;
 using StreamlinkVlcStudio.Infrastructure.Replay;
 using StreamlinkVlcStudio.Infrastructure.Vlc;
+using StreamlinkVlcStudio.Workspace.ViewModels;
 
 namespace StreamlinkVlcStudio.App.Wpf.Controls;
-
-internal sealed record ReplaySeekPreviewSource(string ReplayId, string? VideoId, Uri? PlaylistUri,
-    PlatformKind Platform, DateTimeOffset? StartedAt, string VlcDirectory);
 
 internal sealed class LiveSeekPreviewImages
 {

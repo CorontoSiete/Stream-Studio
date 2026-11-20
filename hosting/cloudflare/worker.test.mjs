@@ -72,6 +72,17 @@ test('rate limiting uses the Cloudflare connection IP and fails closed', async (
   };
   assert.equal((await handle(request(), configuration)).status, 429);
 });
+test('the deadline bounds a stalled rate limiter', { timeout: 1000 }, async () => {
+  const configuration = env();
+  configuration.TOKEN_RATE_LIMITER.limit = () => new Promise(() => {});
+  let upstreamCalls = 0;
+  const response = await handle(request(), configuration, async () => {
+    upstreamCalls++;
+    return token();
+  }, 20);
+  assert.equal(response.status, 502);
+  assert.equal(upstreamCalls, 0);
+});
 test('provider errors never echo secret material', async () => {
   const response = await handle(request(), env(), async () => new Response('server-only-secret private-refresh', { status: 400 }));
   assert.equal(response.status, 400);
@@ -105,6 +116,15 @@ test('the deadline aborts an upstream response that never arrives', async () => 
 test('the deadline bounds a stalled upstream response body', async () => {
   const response = await handle(request(), env(), async () => new Response(new ReadableStream({ start() {} })), 20);
   assert.equal(response.status, 502);
+});
+test('provider responses finish when discarding their body takes longer', { timeout: 1_000 }, async () => {
+  for (const [upstreamStatus, status] of [[400, 400], [200, 502]]) {
+    let canceled = false;
+    const body = new ReadableStream({ cancel() { canceled = true; return new Promise(() => {}); } });
+    const response = await handle(request(), env(), async () => new Response(body, { status: upstreamStatus }), 20);
+    assert.equal(response.status, status);
+    assert.equal(canceled, true);
+  }
 });
 test('the deadline bounds a stalled request body', async () => {
   const incoming = request(new ReadableStream({ start() {} }), { duplex: 'half' });

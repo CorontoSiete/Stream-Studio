@@ -18,8 +18,7 @@ internal static class ValidatedReplayHttpClient
     {
         using var response = await SendGetAsync(httpClient, validator, uri, platform,
             static address => new HttpRequestMessage(HttpMethod.Get, address), cancellationToken).ConfigureAwait(false);
-        response.EnsureSuccessStatusCode();
-        var content = await BoundedHttpContentReader.ReadPlaylistAsync(response.Content, cancellationToken).ConfigureAwait(false);
+        var content = await BoundedHttpContentReader.ReadPlaylistAsync(response, cancellationToken).ConfigureAwait(false);
         return (content, response.RequestMessage!.RequestUri!);
     }
 

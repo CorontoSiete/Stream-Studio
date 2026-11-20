@@ -8,7 +8,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 
-const assets = path.resolve(__dirname, '../../src/StreamlinkVlcStudio.Infrastructure/LocalWeb/Assets');
+const assets = path.resolve(__dirname, '../../src/StreamlinkVlcStudio.WebClient/Assets');
 const source = fs.readFileSync(path.join(assets, 'app.js'), 'utf8');
 const css = fs.readFileSync(path.join(assets, 'app.css'), 'utf8');
 const bounded = source.match(/^  const bounded = .*;$/m)?.[0];

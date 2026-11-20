@@ -10,10 +10,11 @@ using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Shell;
 using System.Windows.Threading;
+using StreamlinkVlcStudio.App.Wpf.Chat;
 using StreamlinkVlcStudio.App.Wpf.Controls;
-using StreamlinkVlcStudio.App.Wpf.ViewModels;
 using StreamlinkVlcStudio.Core.Models;
 using StreamlinkVlcStudio.Core.Settings;
+using StreamlinkVlcStudio.Workspace.ViewModels;
 using static StreamlinkVlcStudio.App.Wpf.PictureInPictureWindowResize;
 using static StreamlinkVlcStudio.App.Wpf.WindowInteropHelpers;
 
@@ -146,10 +147,10 @@ public partial class DetachedVideoWindow : Window, INotifyPropertyChanged
             Keyboard.Modifiers == ModifierKeys.Control &&
             Keyboard.FocusedElement is not TextBoxBase &&
             activeTab is { } tab &&
-            tab.NativeOverlay.HasNativeReplayOverlayTextSelection)
+            tab.NativeOverlay is NativeChatOverlayController { HasNativeReplayOverlayTextSelection: true } overlay)
         {
             e.Handled = true;
-            _ = tab.NativeOverlay.CopyNativeReplayOverlayTextSelectionAsync();
+            _ = overlay.CopyNativeReplayOverlayTextSelectionAsync();
             return;
         }
 
@@ -304,7 +305,7 @@ public partial class DetachedVideoWindow : Window, INotifyPropertyChanged
 
     internal bool RemoveTabForTransfer(StreamTabViewModel tab)
     {
-        tab.VideoSurfacePresenterOwner?.DetachSurfaceForTransfer();
+        VideoSurfacePresenter.GetOwner(tab)?.DetachSurfaceForTransfer();
         return RemoveTab(tab, clearVideoHandle: false);
     }
 

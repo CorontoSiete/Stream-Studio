@@ -42,6 +42,7 @@ int poll( struct pollfd *fds, unsigned nfds, int timeout );
 #include <stdio.h>
 
 #include "protocol.h"
+#include "windows-files.h"
 
 /*****************************************************************************
  * Tunables
@@ -75,10 +76,10 @@ int poll( struct pollfd *fds, unsigned nfds, int timeout );
 #define POSITION_FILE_REL   "\\vlc-overlay\\position.txt"
 #define POSITION_DIR_REL    "\\StreamlinkVlcStudio\\vlc-overlays\\"
 #define PIPE_NAME_ENV       "MYOVERLAY_PIPE_NAME"
-#define POSITION_STATE_ENV  "MYOVERLAY_POSITION_STATE_PATH"
+#define POSITION_STATE_ENV  L"MYOVERLAY_POSITION_STATE_PATH"
 #define CFG_PREFIX          "myoverlay-"
 #define MOUSE_TRACE_ENV     "MYOVERLAY_MOUSE_TRACE"
-#define MOUSE_TRACE_PATH_ENV "MYOVERLAY_MOUSE_TRACE_PATH"
+#define MOUSE_TRACE_PATH_ENV L"MYOVERLAY_MOUSE_TRACE_PATH"
 #define MOUSE_TRACE_INTERVAL_ENV "MYOVERLAY_MOUSE_TRACE_INTERVAL_MS"
 #define MOUSE_TRACE_FILE_REL "\\vlc-overlay\\mouse-trace.log"
 #define MOUSE_TRACE_INTERVAL_DEFAULT_MS 40u
@@ -167,7 +168,7 @@ struct filter_sys_t
     size_t       receive_capacity;
     char         pipe_name[MAX_PATH];
     char         event_pipe_name[MAX_PATH];
-    char         position_state_path[MAX_PATH];
+    char         position_state_path[UTF8_PATH_CAPACITY];
 
     CRITICAL_SECTION lock;
     int32_t      x, y;          /* overlay top-left, drag-owned */
@@ -211,7 +212,7 @@ struct filter_sys_t
     uint32_t     resize_pending_h;
     bool         resize_frame_pending;
     bool         mouse_trace_enabled;
-    char         mouse_trace_path[MAX_PATH];
+    char         mouse_trace_path[UTF8_PATH_CAPACITY];
     uint32_t     mouse_trace_interval_ms;
     ULONGLONG    mouse_trace_next_tick_ms;
     uint32_t     sent_video_w;
@@ -383,20 +384,11 @@ static bool FrameBufferMatches( const overlay_frame_buffer_t *frame,
 /*****************************************************************************
  * Persistent drag position — tiny "x y\n" text file in %APPDATA%.
  *****************************************************************************/
-static bool BuildDefaultStatePath( char *out, size_t out_size, const char *rel )
-{
-    const char *appdata = getenv( "APPDATA" );
-    if( appdata == NULL )
-        return false;
-    int n = snprintf( out, out_size, "%s%s", appdata, rel );
-    return n > 0 && (size_t)n < out_size;
-}
-
 static bool BuildPipeStatePath( char *out, size_t out_size,
                                 const char *pipe_name )
 {
-    const char *appdata = getenv( "APPDATA" );
-    if( appdata == NULL )
+    char appdata[UTF8_PATH_CAPACITY];
+    if( !read_path_environment( L"APPDATA", appdata, sizeof(appdata) ) )
         return false;
 
     const char *suffix = strrchr( pipe_name, '\\' );
@@ -413,24 +405,19 @@ static void InitPositionStatePath( filter_t *p_filter, filter_sys_t *sys )
 {
     char *configured = var_InheritString( p_filter,
                                           CFG_PREFIX "position-state-path" );
-    if( configured != NULL && configured[0] != '\0' )
+    if( configured != NULL )
     {
         int n = snprintf( sys->position_state_path,
                           sizeof(sys->position_state_path), "%s", configured );
+        free( configured );
         if( n > 0 && (size_t)n < sizeof(sys->position_state_path) )
             return;
         sys->position_state_path[0] = '\0';
     }
 
-    const char *path = getenv( POSITION_STATE_ENV );
-    if( path != NULL && path[0] != '\0' )
-    {
-        int n = snprintf( sys->position_state_path,
-                          sizeof(sys->position_state_path), "%s", path );
-        if( n > 0 && (size_t)n < sizeof(sys->position_state_path) )
-            return;
-        sys->position_state_path[0] = '\0';
-    }
+    if( read_path_environment( POSITION_STATE_ENV, sys->position_state_path,
+                               sizeof(sys->position_state_path) ) )
+        return;
 
     if( BuildPipeStatePath( sys->position_state_path,
                             sizeof(sys->position_state_path),
@@ -439,35 +426,7 @@ static void InitPositionStatePath( filter_t *p_filter, filter_sys_t *sys )
         return;
     }
 
-    if( !BuildDefaultStatePath( sys->position_state_path,
-                                sizeof(sys->position_state_path),
-                                POSITION_FILE_REL ) )
-    {
-        sys->position_state_path[0] = '\0';
-    }
-}
-
-static bool EnsureParentDirectory( const char *path )
-{
-    char dir[MAX_PATH];
-    int n = snprintf( dir, sizeof(dir), "%s", path );
-    if( n <= 0 || (size_t)n >= sizeof(dir) )
-        return false;
-
-    char *slash = strrchr( dir, '\\' );
-    char *fslash = strrchr( dir, '/' );
-    if( slash == NULL || ( fslash != NULL && fslash > slash ) )
-        slash = fslash;
-    if( slash == NULL )
-        return true;
-
-    *slash = '\0';
-    if( dir[0] == '\0' )
-        return true;
-
-    if( CreateDirectoryA( dir, NULL ) )
-        return true;
-    return GetLastError() == ERROR_ALREADY_EXISTS;
+    build_appdata_path( sys->position_state_path, sizeof(sys->position_state_path), POSITION_FILE_REL );
 }
 
 static void LoadSavedState( filter_sys_t *sys, int32_t *io_x, int32_t *io_y,
@@ -475,7 +434,7 @@ static void LoadSavedState( filter_sys_t *sys, int32_t *io_x, int32_t *io_y,
 {
     if( sys->position_state_path[0] == '\0' )
         return;
-    FILE *f = fopen( sys->position_state_path, "r" );
+    FILE *f = open_utf8_file( sys->position_state_path, L"r" );
     if( f == NULL )
         return;
     int x, y, hidden;
@@ -494,8 +453,8 @@ static void SaveOverlayState( filter_sys_t *sys, int32_t x, int32_t y,
                               bool hidden )
 {
     if( sys->position_state_path[0] == '\0' ) return;
-    if( !EnsureParentDirectory( sys->position_state_path ) ) return;
-    FILE *f = fopen( sys->position_state_path, "w" );
+    if( !ensure_parent_directory( sys->position_state_path ) ) return;
+    FILE *f = open_utf8_file( sys->position_state_path, L"w" );
     if( f == NULL )
         return;
     fprintf( f, "%d %d %d\n", x, y, hidden ? 1 : 0 );
@@ -523,14 +482,10 @@ static bool IsEnvironmentFlagEnabled( const char *value )
 
 static bool BuildMouseTracePath( char *out, size_t out_size )
 {
-    const char *path = getenv( MOUSE_TRACE_PATH_ENV );
-    if( path != NULL && path[0] != '\0' )
-    {
-        int n = snprintf( out, out_size, "%s", path );
-        return n > 0 && (size_t)n < out_size;
-    }
+    if( read_path_environment( MOUSE_TRACE_PATH_ENV, out, (int)out_size ) )
+        return true;
 
-    return BuildDefaultStatePath( out, out_size, MOUSE_TRACE_FILE_REL );
+    return build_appdata_path( out, (int)out_size, MOUSE_TRACE_FILE_REL );
 }
 
 static uint32_t ReadMouseTraceIntervalMilliseconds( void )
@@ -577,10 +532,10 @@ static void MouseTraceLog( filter_sys_t *sys, const char *fmt, ... )
     }
     sys->mouse_trace_next_tick_ms = now + sys->mouse_trace_interval_ms;
 
-    if( !EnsureParentDirectory( sys->mouse_trace_path ) )
+    if( !ensure_parent_directory( sys->mouse_trace_path ) )
         return;
 
-    FILE *f = fopen( sys->mouse_trace_path, "a" );
+    FILE *f = open_utf8_file( sys->mouse_trace_path, L"a" );
     if( f == NULL )
         return;
 

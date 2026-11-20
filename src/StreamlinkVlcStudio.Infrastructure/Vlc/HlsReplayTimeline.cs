@@ -20,6 +20,7 @@ internal static class HlsReplayTimeline
     // Below half of the 33-bit / 90 kHz timestamp period (13h 15m 21.859s).
     internal static readonly TimeSpan RebaseThreshold = TimeSpan.FromHours(12);
     private static readonly HttpClient Client = HttpClientFactory.Create(TimeSpan.FromSeconds(15), allowAutoRedirect: false);
+    private static readonly Encoding StrictUtf8 = new UTF8Encoding(false, true);
 
     internal static bool IsPlaylist(Uri uri) => uri.AbsolutePath.EndsWith(".m3u8", StringComparison.OrdinalIgnoreCase);
 
@@ -27,30 +28,8 @@ internal static class HlsReplayTimeline
         Uri uri, PlatformKind platform, CancellationToken cancellationToken)
     {
         if (!IsPlaylist(uri)) return null;
-        string content;
-        if (uri.IsFile)
-        {
-            var bytes = await BoundedByteReader.ReadFileAsync(uri.LocalPath, PayloadLimits.PlaylistBytes, cancellationToken)
-                .ConfigureAwait(false);
-            if (bytes is null) return null;
-            content = new UTF8Encoding(false, true).GetString(bytes);
-        }
-        else if (uri.IsLoopback)
-        {
-            using var request = new HttpRequestMessage(HttpMethod.Get, uri);
-            using var response = await BoundedHttpResponseSender.SendAsync(Client, request, cancellationToken)
-                .ConfigureAwait(false);
-            response.EnsureSuccessStatusCode();
-            content = await BoundedHttpContentReader.ReadPlaylistAsync(response.Content, cancellationToken)
-                .ConfigureAwait(false);
-        }
-        else
-        {
-            (content, _) = await ValidatedReplayHttpClient.ReadPlaylistAsync(
-                Client, ReplayUrlSecurityValidator.Shared, uri, platform, cancellationToken).ConfigureAwait(false);
-        }
-
-        return ParsePublishedDuration(content);
+        var (content, _) = await ReadPlaylistAsync(uri, Client, platform, cancellationToken).ConfigureAwait(false);
+        return content is null ? null : ParsePublishedDuration(content);
     }
 
     internal static TimeSpan? ParsePublishedDuration(string content) =>
@@ -61,30 +40,9 @@ internal static class HlsReplayTimeline
         HttpClient? httpClient = null)
     {
         if (position < RebaseThreshold || !IsPlaylist(source.PlaybackUri)) return source;
-        var uri = source.PlaybackUri;
-        string content;
-        if (uri.IsFile)
-        {
-            var bytes = await BoundedByteReader.ReadFileAsync(uri.LocalPath, PayloadLimits.PlaylistBytes, cancellationToken)
-                .ConfigureAwait(false) ?? throw new InvalidDataException("The replay playlist is missing or too large.");
-            content = new UTF8Encoding(false, true).GetString(bytes);
-        }
-        else if (uri.IsLoopback)
-        {
-            // An already owned media source (the muted-segment proxy or a local transport).
-            using var request = new HttpRequestMessage(HttpMethod.Get, uri);
-            using var response = await BoundedHttpResponseSender.SendAsync(httpClient ?? Client, request, cancellationToken).ConfigureAwait(false);
-            response.EnsureSuccessStatusCode();
-            content = await BoundedHttpContentReader.ReadPlaylistAsync(response.Content, cancellationToken).ConfigureAwait(false);
-        }
-        else
-        {
-            var platform = ReplayUrlSecurityValidator.TryValidateProviderUri(uri, PlatformKind.Twitch)
-                ? PlatformKind.Twitch : PlatformKind.Kick;
-            (content, uri) = await ValidatedReplayHttpClient.ReadPlaylistAsync(httpClient ?? Client,
-                ReplayUrlSecurityValidator.Shared, uri, platform, cancellationToken).ConfigureAwait(false);
-        }
-
+        var (content, uri) = await ReadPlaylistAsync(source.PlaybackUri, httpClient ?? Client,
+            platform: null, cancellationToken).ConfigureAwait(false);
+        if (content is null) throw new InvalidDataException("The replay playlist is missing or too large.");
         var timeline = Rebase(content, uri, position);
         if (timeline is null) return source;
         var path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -102,6 +60,31 @@ internal static class HlsReplayTimeline
             AtomicFile.TryDeleteTemporaryFile(path);
             throw;
         }
+    }
+
+    private static async Task<(string? Content, Uri Uri)> ReadPlaylistAsync(
+        Uri uri, HttpClient client, PlatformKind? platform, CancellationToken cancellationToken)
+    {
+        if (uri.IsFile)
+        {
+            var bytes = await BoundedByteReader.ReadFileAsync(uri.LocalPath, PayloadLimits.PlaylistBytes, cancellationToken)
+                .ConfigureAwait(false);
+            return (bytes is null ? null : StrictUtf8.GetString(bytes), uri);
+        }
+
+        if (uri.IsLoopback)
+        {
+            // Loopback media belongs to the muted-segment proxy or a local transport.
+            using var request = new HttpRequestMessage(HttpMethod.Get, uri);
+            using var response = await BoundedHttpResponseSender.SendAsync(client, request, cancellationToken)
+                .ConfigureAwait(false);
+            return (await BoundedHttpContentReader.ReadPlaylistAsync(response, cancellationToken).ConfigureAwait(false), uri);
+        }
+
+        var provider = platform ?? (ReplayUrlSecurityValidator.TryValidateProviderUri(uri, PlatformKind.Twitch)
+            ? PlatformKind.Twitch : PlatformKind.Kick);
+        return await ValidatedReplayHttpClient.ReadPlaylistAsync(
+            client, ReplayUrlSecurityValidator.Shared, uri, provider, cancellationToken).ConfigureAwait(false);
     }
 
     internal static (string Playlist, TimeSpan Offset)? Rebase(string content, Uri uri, TimeSpan position)

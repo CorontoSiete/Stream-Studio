@@ -318,16 +318,19 @@ internal static class NativeOverlayChatFrameRenderer
         for (var index = candidateEnd; index >= candidateStart; index--)
         {
             var measured = MeasureBlock(index);
-            var requiredHeight = measured.Height +
-                (selectedNewestFirst.Count > 0 ? layout.Presentation.MessageGap : 0);
-            if (usedHeight + requiredHeight > availableHeight)
+            var gap = selectedNewestFirst.Count > 0 ? layout.Presentation.MessageGap : 0;
+            var remaining = availableHeight - usedHeight - gap;
+            if (remaining <= 0 || (selectedNewestFirst.Count > 0 && measured.Height > remaining))
             {
                 break;
             }
 
-            measured.Block.Height = measured.Height;
+            // Show the start of an oversized newest message rather than an empty chat panel.
+            var height = Math.Min(measured.Height, remaining);
+            measured.Block.Height = height;
+            measured.Block.ClipToBounds = height < measured.Height;
             selectedNewestFirst.Add((index, measured.Block));
-            usedHeight += requiredHeight;
+            usedHeight += height + gap;
         }
 
         var newestMessageIndex = selectedNewestFirst.Count > 0

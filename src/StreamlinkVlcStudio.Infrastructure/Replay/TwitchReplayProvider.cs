@@ -398,9 +398,9 @@ internal sealed partial class TwitchReplayProvider
                     return request;
                 },
                 cancellationToken).ConfigureAwait(false);
-            var responseBody = await BoundedHttpContentReader.ReadPlaylistAsync(response.Content, cancellationToken).ConfigureAwait(false);
-            if (!response.IsSuccessStatusCode ||
-                !IsValidTwitchDvrPlaylist(responseBody))
+            if (!response.IsSuccessStatusCode) return null;
+            var responseBody = await BoundedHttpContentReader.ReadPlaylistAsync(response, cancellationToken).ConfigureAwait(false);
+            if (!IsValidTwitchDvrPlaylist(responseBody))
             {
                 return null;
             }

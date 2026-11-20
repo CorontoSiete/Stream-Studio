@@ -34,7 +34,8 @@ internal static partial class LocalWebTestCatalog
         Assert.Equal("true", await core.ExecuteScriptAsync("document.querySelector('.card[data-key=mountain] .provider-logo')?.alt==='Twitch' && document.querySelector('.card[data-key=music] .provider-logo')?.alt==='Kick' && !document.querySelector('#followed-channels .provider-logo') && [...document.querySelectorAll('.provider-label')].every(label=>label.textContent==='')"));
         Assert.Equal("true", await core.ExecuteScriptAsync("document.querySelector('#featured')===null"));
         Assert.Equal("true", await core.ExecuteScriptAsync(noOverflow));
-        Assert.Contains("4 live", await core.ExecuteScriptAsync("document.querySelector('#result-count').textContent"));
+        Assert.Equal("6 channels", JsonSerializer.Deserialize<string>(await core.ExecuteScriptAsync("document.querySelector('#result-count').textContent")));
+        Assert.Equal("true", await core.ExecuteScriptAsync("!document.querySelector('#live-heading').hidden && document.querySelectorAll('#cards > .card.is-live').length===4"));
         Assert.Contains("Northstar", await core.ExecuteScriptAsync("document.querySelector('.card h3').textContent"));
         Assert.Contains("24,580 viewers", await core.ExecuteScriptAsync("document.querySelector('.card .media-meta').textContent"));
         Assert.Equal("true", await core.ExecuteScriptAsync("document.querySelector('.card[data-key=mountain] .card-category').textContent==='Category: Outdoors' && document.querySelector('.card[data-key=music] .card-category').textContent==='Category: Music' && document.querySelector('.card[data-key=code] .card-category').textContent==='Category unavailable' && !document.querySelector('.card.is-offline .card-category')"));
@@ -92,7 +93,9 @@ internal static partial class LocalWebTestCatalog
 
         await core.ExecuteScriptAsync("document.querySelector('[data-page=vods]').click()");
         await WaitBrowser(core, "!document.querySelector('#empty-state').hidden");
-        Assert.Contains("back catalog", await core.ExecuteScriptAsync("document.querySelector('#empty-state').textContent"));
+        Assert.Contains("Find videos by channel", await core.ExecuteScriptAsync("document.querySelector('#empty-state').textContent"));
+        await core.ExecuteScriptAsync("document.querySelector('#empty-state button').click()");
+        Assert.Equal("true", await core.ExecuteScriptAsync("document.activeElement.id==='query'"));
         await core.ExecuteScriptAsync("document.querySelector('#query').value='northstar';document.querySelector('#search-form').requestSubmit()");
         await WaitBrowser(core, "!!document.querySelector('.search-option')");
         await core.ExecuteScriptAsync("document.querySelector('.search-option').click()");

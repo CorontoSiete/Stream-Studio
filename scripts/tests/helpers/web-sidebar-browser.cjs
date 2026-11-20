@@ -16,7 +16,7 @@ module.exports = async ({ cdp, evaluate, wait, capture, viewport, address }) => 
       overflow: document.documentElement.scrollWidth > innerWidth
     };
   })()`);
-  const verifyLibraryNav = async () => {
+  const verifyHeaderLibraryNav = async () => {
     assert.deepEqual(await evaluate(`(() => {
       const header = document.querySelector('.topbar');
       const brandRight = header.querySelector('#brand').getBoundingClientRect().right;
@@ -42,18 +42,50 @@ module.exports = async ({ cdp, evaluate, wait, capture, viewport, address }) => 
     expanded: 'true', channelsVisible: false, overflow: false
   });
   assert.equal(await evaluate("document.querySelector('#sidebar-toggle').getAttribute('aria-controls')"), 'studio-sidebar');
-  await verifyLibraryNav();
+  await verifyHeaderLibraryNav();
+  assert.equal(await evaluate("document.querySelector('#studio-sidebar .library-nav') === null"), true);
   await capture('sidebar-expanded');
+  await cdp('Emulation.setDeviceMetricsOverride', { width: 1440, height: 600, deviceScaleFactor: 1, mobile: false });
+  await evaluate("window.__sidebarResizeMarker = true");
+  await cdp('Page.reload');
+  await wait("document.readyState === 'complete' && !window.__sidebarResizeMarker");
+  await wait("document.querySelectorAll('#followed-channels .followed-channel').length === 6");
+  await capture('sidebar-scrollbar');
+  const followedList = await evaluate(`(() => {
+    const list = document.querySelector('#followed-channels');
+    const heading = document.querySelector('#followed-heading').getBoundingClientRect();
+    const rect = list.getBoundingClientRect();
+    return {
+      top: rect.top,
+      headingTop: heading.top,
+      headingBottom: heading.bottom,
+      firstRowTop: list.firstElementChild.getBoundingClientRect().top,
+      overflow: list.scrollHeight - list.clientHeight,
+      gutter: list.offsetWidth - list.clientWidth,
+      x: rect.left + rect.width / 2,
+      y: rect.top + rect.height / 2
+    };
+  })()`);
+  assert.ok(followedList.overflow > 0 && followedList.gutter > 0, 'the channel rows have their own scrollbar');
+  assert.ok(followedList.top >= followedList.headingBottom && followedList.top === followedList.firstRowTop,
+    'the scrollable list starts at the first row below the heading');
+  await cdp('Input.dispatchMouseEvent', { type: 'mouseMoved', x: followedList.x, y: followedList.y });
+  await cdp('Input.dispatchMouseEvent', { type: 'mouseWheel', x: followedList.x, y: followedList.y, deltaX: 0, deltaY: followedList.overflow });
+  await wait("document.querySelector('#followed-channels').scrollTop > 0");
+  assert.equal(await evaluate("document.querySelector('#followed-heading').getBoundingClientRect().top"), followedList.headingTop,
+    'scrolling to later channels keeps the heading in place');
+  await viewport(1440);
   await clickToggle();
   await wait("document.querySelector('#studio').classList.contains('sidebar-collapsed')");
   assert.deepEqual(await layout(), {
     sidebarWidth: 68, workspaceLeft: 68, toggleLabel: 'Expand sidebar',
     expanded: 'false', channelsVisible: true, overflow: false
   });
-  assert.ok(await evaluate("[...document.querySelectorAll('.sidebar nav button')].every(b => b.getClientRects().length && b.title && getComputedStyle(b.querySelector('span:nth-child(2)')).display === 'none')"), 'compact navigation keeps visible, named icon buttons');
+  assert.ok(await evaluate("[...document.querySelectorAll('.sidebar nav button[data-page]')].every(b => b.getClientRects().length && b.title && getComputedStyle(b.querySelector('span:nth-child(2)')).display === 'none')"), 'compact browsing navigation keeps visible, named icon buttons');
   assert.equal(await evaluate("getComputedStyle(document.querySelector('#studio-sidebar .followed-section')).display"), 'none');
   assert.equal(await evaluate("getComputedStyle(document.querySelector('#open-player-count')).display"), 'none', 'no empty stream badge is shown');
   assert.equal(await evaluate("localStorage.getItem('streamstudio.sidebarCollapsed')"), 'true');
+  await verifyHeaderLibraryNav();
   await capture('sidebar-collapsed');
 
   await evaluate("document.querySelector('.sidebar [data-page=discover]').click()");
@@ -101,12 +133,14 @@ module.exports = async ({ cdp, evaluate, wait, capture, viewport, address }) => 
   await evaluate("document.querySelector('.topbar [data-page=recent]').click()");
   await wait("document.querySelector('#studio').dataset.page==='recent' && document.querySelector('#cards').getAttribute('aria-busy')==='false'");
   assert.equal(await evaluate("document.querySelector('.library-nav [aria-current=page]').dataset.page"), 'recent');
-  await verifyLibraryNav();
+  await verifyHeaderLibraryNav();
   await viewport(1440);
   await clickToggle();
   await wait("!document.querySelector('#studio').classList.contains('sidebar-collapsed')");
   assert.equal((await layout()).sidebarWidth, 240);
+  assert.equal(await evaluate("document.querySelector('.topbar .library-nav [aria-current=page]').dataset.page"), 'recent');
   assert.equal(await evaluate("localStorage.getItem('streamstudio.sidebarCollapsed')"), 'false');
+  await verifyHeaderLibraryNav();
   assert.deepEqual(await evaluate('window.visualErrors'), []);
-  console.log('PASS sidebar collapse: real button input; compact navigation; stream access; page changes; reload persistence; watch/theater; tablet/phone layouts; expansion; zero JavaScript errors.');
+  console.log('PASS sidebar: channel row scrollbar; real button input; compact navigation; stream access; page changes; reload persistence; watch/theater; tablet/phone layouts; expansion; zero JavaScript errors.');
 };

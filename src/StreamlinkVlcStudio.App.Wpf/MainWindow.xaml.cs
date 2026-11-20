@@ -19,7 +19,6 @@ using Microsoft.Win32;
 using StreamlinkVlcStudio.App.Wpf.Chat;
 using StreamlinkVlcStudio.App.Wpf.Controls;
 using StreamlinkVlcStudio.App.Wpf.Notifications;
-using StreamlinkVlcStudio.App.Wpf.ViewModels;
 using StreamlinkVlcStudio.Core.Logging;
 using StreamlinkVlcStudio.Core.Models;
 using StreamlinkVlcStudio.Core.Services;
@@ -37,6 +36,8 @@ using StreamlinkVlcStudio.Infrastructure.Viewers;
 using StreamlinkVlcStudio.Infrastructure.Vod;
 using StreamlinkVlcStudio.App.Wpf.Themes;
 using StreamlinkVlcStudio.App.Wpf.Twitch;
+using StreamlinkVlcStudio.Workspace.Notifications;
+using StreamlinkVlcStudio.Workspace.ViewModels;
 using static StreamlinkVlcStudio.App.Wpf.WindowInteropHelpers;
 
 namespace StreamlinkVlcStudio.App.Wpf;
@@ -349,10 +350,10 @@ public partial class MainWindow : Window
             Keyboard.Modifiers == ModifierKeys.Control &&
             Keyboard.FocusedElement is not TextBoxBase &&
             viewModel?.SelectedTab is { } selectedTab &&
-            selectedTab.NativeOverlay.HasNativeReplayOverlayTextSelection)
+            selectedTab.NativeOverlay is NativeChatOverlayController { HasNativeReplayOverlayTextSelection: true } overlay)
         {
             e.Handled = true;
-            _ = selectedTab.NativeOverlay.CopyNativeReplayOverlayTextSelectionAsync();
+            _ = overlay.CopyNativeReplayOverlayTextSelectionAsync();
             return;
         }
 
@@ -1062,6 +1063,11 @@ public partial class MainWindow : Window
             ChatFactory = chatFactory,
             Logger = logger,
             Dispatch = DispatchToUi,
+            CreateNativeChatOverlay = context => new NativeChatOverlayController(context),
+            CreateParkingVideoSurface = () => new ParkingVideoSurface(),
+            ConfigureChatPresentation = DockedChatBadgeCatalog.ConfigureShared,
+            ApplyTheme = ThemeManager.ApplyTheme,
+            KeepHomeOnOpen = () => (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control,
             ViewerCountService = viewerCountService,
             FollowedStreamsService = followedStreamsService,
             KickFollowedChannelsImporter = new Kick.KickFollowedChannelsImporter(this),

@@ -1,4 +1,3 @@
-using System.Net.Http.Json;
 using System.Windows.Threading;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Web.WebView2.Core;

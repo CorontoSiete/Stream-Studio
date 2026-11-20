@@ -11,6 +11,22 @@ const headers = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers });
 const error = (name, status) => json({ error: name }, status);
 
+async function checkRateLimit(limiter, key, signal) {
+  signal.throwIfAborted();
+  let onAbort;
+  const canceled = new Promise((_, reject) => {
+    onAbort = () => reject(signal.reason);
+  });
+  signal.addEventListener('abort', onAbort, { once: true });
+  try {
+    // Bound the wait even if the rate limiter does not observe cancellation.
+    const check = async () => limiter.limit({ key });
+    return await Promise.race([check(), canceled]);
+  } finally {
+    signal.removeEventListener('abort', onAbort);
+  }
+}
+
 async function boundedText(body, limit, signal) {
   if (!body) return '';
   const reader = body.getReader();
@@ -31,7 +47,7 @@ async function boundedText(body, limit, signal) {
     }
     return text + decoder.decode();
   } catch (e) {
-    await reader.cancel().catch(() => {});
+    abort();
     throw e;
   } finally {
     signal.removeEventListener('abort', abort);
@@ -87,7 +103,8 @@ export async function handle(request, env, upstream = fetch, timeoutMs = 20_000)
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     if (request.signal.aborted) controller.abort();
-    const limit = await env.TOKEN_RATE_LIMITER.limit({ key: `kick:${request.headers.get('CF-Connecting-IP') ?? 'unknown'}` });
+    const key = `kick:${request.headers.get('CF-Connecting-IP') ?? 'unknown'}`;
+    const limit = await checkRateLimit(env.TOKEN_RATE_LIMITER, key, controller.signal);
     if (!limit.success) return error('rate_limited', 429);
     if (request.headers.get('Content-Type')?.split(';')[0].trim().toLowerCase() !== 'application/x-www-form-urlencoded')
       return error('invalid_request', 415);
@@ -103,7 +120,7 @@ export async function handle(request, env, upstream = fetch, timeoutMs = 20_000)
       body: form.toString(), redirect: 'manual', signal: controller.signal,
     });
     if (!response.ok) {
-      await response.body?.cancel().catch(() => {});
+      void response.body?.cancel().catch(() => {});
       return error('authorization_failed', [400, 401].includes(response.status) ? 400 : 502);
     }
     const result = readToken(JSON.parse(await boundedText(response.body, 65_536, controller.signal)));

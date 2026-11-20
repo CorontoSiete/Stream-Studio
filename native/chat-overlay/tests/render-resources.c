@@ -122,6 +122,33 @@ static void cleanup(void)
     CoUninitialize();
 }
 
+#ifndef RESOURCE_BASELINE
+static void test_unicode_size_state(void)
+{
+    wchar_t temp[MAX_PATH], root[MAX_PATH], directory[MAX_PATH], path[MAX_PATH];
+    DWORD length = GetTempPathW(MAX_PATH, temp);
+    CHECK(length > 0 && length < MAX_PATH);
+    CHECK(GetTempFileNameW(temp, L"svs", 0, root));
+    CHECK(DeleteFileW(root));
+    CHECK(CreateDirectoryW(root, NULL));
+    CHECK(swprintf(directory, MAX_PATH, L"%ls\\\u6d4b\u8bd5", root) > 0);
+    CHECK(swprintf(path, MAX_PATH, L"%ls\\chat.size", directory) > 0);
+    CHECK(WideCharToMultiByte(CP_UTF8, 0, path, -1, g_size_state_path, sizeof(g_size_state_path), NULL, NULL));
+
+    save_chat_size(444, 333);
+    g_width = g_height = 0;
+    g_size_state_loaded = false;
+    load_saved_chat_size();
+    CHECK(g_size_state_loaded && g_size_state_reference);
+    CHECK(g_width == 444 && g_height == 333);
+    CHECK(DeleteFileW(path));
+    CHECK(RemoveDirectoryW(directory));
+    CHECK(RemoveDirectoryW(root));
+    g_size_state_path[0] = '\0';
+    puts("PASS chat size state round-trips through a Unicode Windows path");
+}
+#endif
+
 static void push_message(int sequence, bool animated)
 {
     char user[64], text[512];
@@ -852,6 +879,7 @@ int main(int argc, char **argv)
         test_resize_scale_and_cleanup();
 #ifndef RESOURCE_BASELINE
         test_obsolete_image_loads();
+        test_unicode_size_state();
 #endif
         test_catalog_index();
     }

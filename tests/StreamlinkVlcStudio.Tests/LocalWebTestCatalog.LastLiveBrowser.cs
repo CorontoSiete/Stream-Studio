@@ -15,7 +15,7 @@ internal static partial class LocalWebTestCatalog
         Assert.Equal("Last live unavailable", JsonSerializer.Deserialize<string>(await core.ExecuteScriptAsync("document.querySelector('#cards [data-key=kick] .last-live').textContent")));
         await core.ExecuteScriptAsync("window.pinButton=document.querySelector('#cards [data-key=kick] .card-pin');pinButton.focus();pinButton.click();");
         await WaitBrowser(core, "pinButton.getAttribute('aria-pressed')==='true' && pinButton.getAttribute('aria-disabled')==='false'");
-        Assert.Equal("true", await core.ExecuteScriptAsync("document.querySelector('#cards').children[1].dataset.key==='kick' && document.activeElement===pinButton"));
+        Assert.Equal("true", await core.ExecuteScriptAsync("document.querySelector('#cards > .card.is-offline').dataset.key==='kick' && document.activeElement===pinButton"));
         Assert.Equal("true", await core.ExecuteScriptAsync("document.querySelector('#cards [data-key=twitch] .card-pin').getAttribute('aria-pressed')==='false'"));
         Assert.Equal("0", await core.ExecuteScriptAsync("document.querySelectorAll('#cards [data-key=live] .card-pin').length"));
         Assert.SequenceEqual(new[] { "Kick:creator" }, workspace.PinSettings.PinnedOfflineChannelKeys);
@@ -44,7 +44,7 @@ internal static partial class LocalWebTestCatalog
         Assert.Equal("Last live 2 minutes ago", JsonSerializer.Deserialize<string>(await core.ExecuteScriptAsync("document.querySelector('#cards [data-key=recent] .last-live').textContent")));
         Assert.Equal("true", await core.ExecuteScriptAsync("document.activeElement===historyButton"));
         Assert.Equal(1, workspace.HistoryCalls);
-        await WaitBrowser(core, "document.querySelector('#cards').children[1].dataset.key==='unknown'");
+        await WaitBrowser(core, "document.querySelector('#cards > .card.is-offline').dataset.key==='unknown'");
         Assert.Equal("true", await core.ExecuteScriptAsync("document.activeElement===historyButton && pinButton.getAttribute('aria-pressed')==='false'"));
         Assert.Equal(1, workspace.HistoryCalls);
         await core.ExecuteScriptAsync("document.querySelector('#cards [data-key=unknown] .card-pin').click();");

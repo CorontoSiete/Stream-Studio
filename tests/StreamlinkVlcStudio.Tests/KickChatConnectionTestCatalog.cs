@@ -1,8 +1,3 @@
-using System.Net;
-using System.Text.Json;
-using StreamlinkVlcStudio.App.Wpf.ViewModels;
-using StreamlinkVlcStudio.Infrastructure.Chat;
-
 internal static class KickChatConnectionTestCatalog
 {
     internal static readonly (string Name, Func<Task> Run)[] All =

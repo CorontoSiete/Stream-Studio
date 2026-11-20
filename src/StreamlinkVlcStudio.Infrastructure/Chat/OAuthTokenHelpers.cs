@@ -180,23 +180,13 @@ public static class OAuthTokenHelpers
     /// Converts an OAuth "expires_in" value (a number or numeric string, in seconds) into an absolute
     /// UTC expiry, or null when the value is invalid, non-positive, or outside the DateTimeOffset range.
     /// </summary>
-    public static DateTimeOffset? TryGetExpiresAt(JsonElement expiresInElement)
-    {
-        return expiresInElement.ValueKind switch
-        {
-            JsonValueKind.Number when expiresInElement.TryGetInt64(out var numericValue) => TryGetExpiresAt(numericValue),
-            JsonValueKind.String => TryGetExpiresAt(expiresInElement.GetString()),
-            _ => null
-        };
-    }
+    public static DateTimeOffset? TryGetExpiresAt(JsonElement expiresInElement) =>
+        TryGetInt64(expiresInElement) is { } seconds ? TryGetExpiresAt(seconds) : null;
 
-    public static DateTimeOffset? TryGetExpiresAt(JsonElement root, string propertyName)
-    {
-        return root.ValueKind == JsonValueKind.Object &&
-            root.TryGetProperty(propertyName, out var expiresInElement)
+    public static DateTimeOffset? TryGetExpiresAt(JsonElement root, string propertyName) =>
+        root.ValueKind == JsonValueKind.Object && root.TryGetProperty(propertyName, out var expiresInElement)
             ? TryGetExpiresAt(expiresInElement)
             : null;
-    }
 
     public static DateTimeOffset? TryGetExpiresAt(string? expiresIn)
     {

@@ -9,6 +9,7 @@ internal static class HlsReplayTimelineTestCatalog
         ("long VOD timeline rejects malformed segments and unsafe media URLs", () => Run(Invalid)),
         ("long VOD timeline owns and releases its temporary playlist and upstream lease", LeaseAsync),
         ("long VOD timeline bounds stalled local playlist reads", LocalPlaylistTimeoutAsync),
+        ("long VOD timeline rejects partial playlist responses", PartialPlaylistAsync),
         ("growing replay published duration requires a complete zero-based media playlist", () => Run(PublishedDuration))
     ];
     private const string Header = "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:12\n#EXT-X-MEDIA-SEQUENCE:10\n";
@@ -95,6 +96,17 @@ internal static class HlsReplayTimelineTestCatalog
             Assert.Equal(false, cleanup.IsCancellationRequested);
         }
         finally { cleanup.Cancel(); }
+    }
+
+    private static async Task PartialPlaylistAsync()
+    {
+        using var client = new HttpClient(new FakeHttpMessageHandler(_ => new(HttpStatusCode.PartialContent)
+        {
+            Content = new StringContent(Header + Body)
+        }));
+        using var source = PlaybackMediaSource.Direct(new Uri("http://127.0.0.1:54321/replay.m3u8"));
+        await Assert.ThrowsAsync<InvalidDataException>(() => HlsReplayTimeline.PrepareAsync(
+            source, TimeSpan.FromHours(14), CancellationToken.None, client));
     }
 
     private sealed class TrackingLease : IDisposable

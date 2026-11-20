@@ -3,6 +3,106 @@ const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const { fixture } = require('./helpers/web-player-fixture.cjs');
 
+test('live playback retries recording watch history after a temporary failure', async () => {
+  let attempts = 0;
+  let time = Date.now();
+  const f = fixture({ now: () => time, onRequest: url => {
+    if (url !== '/api/started' || ++attempts > 1) return;
+    return { ok: false, status: 503, json: async () => ({ error: 'Could not save history.' }) };
+  } });
+  try {
+    const player = await f.open();
+    player.video.dispatchEvent(new Event('playing'));
+    player.video.dispatchEvent(new Event('playing'));
+    await f.flush();
+    assert.equal(attempts, 1);
+    await f.tick(2000);
+    assert.equal(attempts, 1, 'wait before retrying a failed write');
+
+    time += 6000;
+    await f.tick(2000);
+    assert.equal(attempts, 2, 'retry while the original stream keeps playing');
+    time += 6000;
+    player.video.dispatchEvent(new Event('playing'));
+    await f.tick(2000);
+    assert.equal(attempts, 2, 'a successful write ends retries for this player');
+  } finally { f.disconnect(); }
+});
+
+test('Play restarts a stopped player using a fresh media session', async () => {
+  const f = fixture();
+  try {
+    const stopped = await f.open();
+    await f.playerAction(stopped, 'stop');
+    assert.deepEqual(f.closeCalls, [stopped.id]);
+
+    await f.playerAction(stopped, 'play');
+    assert.equal(f.state.players.length, 1);
+    const restarted = f.state.players[0];
+    assert.notEqual(restarted.id, stopped.id);
+    assert.equal(restarted.video.paused, false);
+    assert.equal(f.state.selected, restarted.id);
+  } finally { f.disconnect(); }
+});
+
+test('stopping or closing a player cancels its pending channel details request', { timeout: 5000 }, async () => {
+  for (const action of ['stop', 'close']) {
+    const started = Promise.withResolvers();
+    const response = Promise.withResolvers();
+    let profileSignal;
+    const f = fixture({ onRequest: async (url, input, options) => {
+      if (url !== '/api/channel/profile') return;
+      profileSignal = options.signal;
+      profileSignal?.addEventListener('abort', () => response.reject(profileSignal.reason), { once: true });
+      started.resolve();
+      await response.promise;
+    } });
+    try {
+      const player = await f.open();
+      await started.promise;
+      const ending = f.playerAction(player, action);
+      assert.equal(profileSignal?.aborted, true, action);
+      await ending;
+      assert.deepEqual(f.closeCalls, [player.id]);
+      assert.equal(player.element.querySelector('.channel-profile-status').childElementCount, 0);
+    } finally {
+      response.resolve();
+      f.disconnect();
+      await f.flush();
+    }
+  }
+});
+
+test('switching from fullscreen skips a player closed during the transition', async () => {
+  const f = fixture();
+  const exit = Promise.withResolvers();
+  try {
+    const first = await f.open();
+    f.target({ channel: 'other' });
+    const next = await f.open();
+    f.selectPlayer(first.id);
+    f.document.fullscreenElement = first.element;
+    f.document.exitFullscreen = async () => {
+      await exit.promise;
+      f.document.fullscreenElement = null;
+    };
+    let fullscreenRequests = 0;
+    next.element.requestFullscreen = () => { fullscreenRequests++; };
+    const switching = f.cyclePlayer(1);
+
+    await f.closePlayer(next);
+    exit.resolve();
+    await switching;
+    assert.equal(f.state.selected, first.id);
+    assert.equal(first.element.hidden, false);
+    assert.equal(fullscreenRequests, 0);
+  } finally {
+    exit.resolve();
+    f.disconnect();
+    await f.flush();
+  }
+});
+
 test('sign-out releases the session and its players even when saving state fails', async () => {
   for (const failure of ['volume', 'progress']) {
     const f = fixture();
@@ -93,6 +193,35 @@ test('a pending bookmark from a disconnected session does not block a new sessio
     await oldTick;
     assert.equal(f.document.querySelector('#notice').hidden, true, 'old cancellation must not notify the new account');
   } finally { pending.resolve(); if (oldTick) await oldTick; f.disconnect(); }
+});
+
+test('a pending stop does not close a player under a new session', { timeout: 5000 }, async () => {
+  const started = Promise.withResolvers(), pending = Promise.withResolvers();
+  const f = fixture({ onRequest: async url => {
+    if (url === '/api/progress') { started.resolve(); await pending.promise; }
+  } });
+  let stopping;
+  try {
+    f.target({ isVod: true });
+    const old = await f.open();
+    stopping = f.playerAction(old, 'stop').catch(error => {
+      assert.equal(error.name, 'AbortError');
+    });
+    await started.promise;
+    f.disconnect();
+    f.state.authenticated = true;
+    f.state.csrf = 'new-session';
+    const current = await f.open();
+    pending.resolve();
+    await stopping;
+    assert.deepEqual(f.closeCalls, []);
+    assert.equal(f.state.selected, current.id);
+    assert.equal(current.video.paused, false);
+  } finally {
+    pending.resolve();
+    if (stopping) await stopping;
+    f.disconnect();
+  }
 });
 
 test('periodic progress saving attempts every due VOD after one save fails', async () => {
@@ -446,6 +575,43 @@ test('a failed pre-reload save keeps the original video usable and allows retry'
   f.disconnect();
 });
 
+test('a failed quality reload keeps the video playing and restores its quality selector', async () => {
+  let fail = false;
+  const f = fixture({ onRequest: url => {
+    if (url === '/api/open' && fail) throw new Error('Could not resolve the stream.');
+  } });
+  try {
+    const first = await f.open();
+    first.element.querySelector('.quality').value = '720p';
+    const hls = first.hls;
+    fail = true;
+    await assert.rejects(f.openPlayer({ ...first.source, quality: '720p' }, first), /Could not resolve/);
+    assert.equal(f.state.players[0], first);
+    assert.equal(first.hls, hls);
+    assert.equal(first.video.paused, false);
+    assert.equal(first.element.querySelector('.quality').value, first.quality);
+    assert.equal(first.element.querySelector('.quality').disabled, false);
+  } finally { f.disconnect(); }
+});
+
+test('quality cannot be changed while the player is being replaced', async () => {
+  const started = Promise.withResolvers(), response = Promise.withResolvers();
+  const f = fixture({ onRequest: async (url, input) => {
+    if (url === '/api/open' && input.replacePlayer) { started.resolve(); await response.promise; }
+  } });
+  let reloading;
+  try {
+    const first = await f.open();
+    reloading = f.openPlayer({ ...first.source, quality: '720p' }, first);
+    await started.promise;
+    assert.equal(first.element.querySelector('.quality').disabled, true);
+    response.resolve();
+    const replacement = await reloading;
+    assert.equal(replacement.element.querySelector('.quality').value, '720p');
+    assert.equal(Boolean(replacement.element.querySelector('.quality').disabled), false);
+  } finally { response.resolve(); await reloading?.catch(() => {}); f.disconnect(); }
+});
+
 test('repeated opens share one pending player and select the existing player afterward', async () => {
   for (const source of [{ key: 'channel-key' }, { downloadId: 'download-id' }, { input: 'twitch.tv/streamer' }]) {
     const f = fixture();
@@ -501,6 +667,21 @@ test('quality replacement preserves manual pause and playback speed', async () =
   assert.equal(replacement.video.playbackRate, 1.5);
   assert.equal(replacement.element.querySelector('.speed').value, '1.5');
   f.disconnect();
+});
+
+test('reloading a player keeps its position in the channel list and grid', async () => {
+  const f = fixture();
+  try {
+    f.target({ isVod: true });
+    const first = await f.open({ key: 'first' }), second = await f.open({ key: 'second' });
+    const replacement = await f.openPlayer(first.source, first);
+    assert.deepEqual(Array.from(f.state.players, p => p.id), [replacement.id, second.id]);
+    assert.deepEqual(f.document.querySelector('#players').children, [replacement.element, second.element]);
+    assert.equal(f.state.selected, second.id);
+    assert.equal(replacement.video.paused, true);
+    f.selectPlayer(replacement.id);
+    assert.equal(replacement.video.paused, false);
+  } finally { f.disconnect(); }
 });
 
 test('stopping during a pre-reload save prevents the replacement request', { timeout: 5000 }, async () => {

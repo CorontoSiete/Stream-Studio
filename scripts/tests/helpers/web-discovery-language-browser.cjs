@@ -19,7 +19,7 @@ module.exports = async ({ cdp, evaluate, wait, capture, viewport, requests }) =>
   await choose('#discover-language', 'fr');
   await wait(settled + " && !document.querySelector('#empty-state').hidden");
   assert.equal(requests.at(-1).cursor, ''); assert.equal(requests.at(-1).language, 'fr');
-  assert.ok(await evaluate("document.querySelector('#empty-state').textContent.includes('No streams in this language.')"));
+  assert.equal(await evaluate("document.querySelector('#empty-state h2').textContent"), 'No streams in this language');
   await click('#empty-state button');
   await wait(settled + " && document.querySelectorAll('#cards .card').length===1");
   assert.equal(requests.at(-1).language, '');

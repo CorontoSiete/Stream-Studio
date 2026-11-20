@@ -57,9 +57,10 @@ internal static class TwitchVodStartupTestCatalog
         foreach (var (quality, path) in new[] { ("best", "chunked"), ("worst", "480p30"), ("1080p60", "chunked"),
             ("720p60", "720p60"), ("480p", "480p30"), ("audio_only", "audio_only") })
             Assert.Equal($"/vod/{path}/index.m3u8", TwitchVodVariantPlaylist.Select(Master, new Uri("https://usher.ttvnw.net/master.m3u8"), quality).AbsolutePath);
-        // "Audio Only" is the current Usher V2 name; Streamlink names it "audio".
-        Assert.Equal("/vod/audio_only/index.m3u8", TwitchVodVariantPlaylist.Select(Master.Replace("\"audio_only\"", "\"Audio Only\""),
-            new Uri("https://usher.ttvnw.net/master.m3u8"), "audio").AbsolutePath);
+        var namedAudio = Master.Replace("\"audio_only\"", "\"Audio Only\"");
+        foreach (var requested in new[] { "audio", "audio_only" })
+            Assert.Equal("/vod/audio_only/index.m3u8", TwitchVodVariantPlaylist.Select(namedAudio,
+                new Uri("https://usher.ttvnw.net/master.m3u8"), requested).AbsolutePath);
         return Task.CompletedTask;
     }
 

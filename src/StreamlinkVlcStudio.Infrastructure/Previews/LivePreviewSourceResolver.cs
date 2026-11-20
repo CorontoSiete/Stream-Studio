@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Net;
 using System.Text.Json;
 using StreamlinkVlcStudio.Core.Models;
@@ -36,7 +35,7 @@ internal sealed class LivePreviewSourceResolver
         if (!canResolve(request)) return null;
         var platform = request.Target.Platform;
         var masterUri = platform == PlatformKind.Twitch
-            ? await ResolveTwitchAsync(request.Target.Channel, token).ConfigureAwait(false)
+            ? await new TwitchGraphQlTransport(httpClient).GetPlaybackMasterUriAsync(request.Target, token).ConfigureAwait(false)
             : await ResolveKickAsync(request.Target.Channel, token).ConfigureAwait(false);
         var master = await ValidatedReplayHttpClient.ReadPlaylistAsync(httpClient, validator, masterUri, platform, token).ConfigureAwait(false);
         var selected = TwitchVodVariantPlaylist.Select(master.Content, master.Uri, request.Quality.Split(','),
@@ -62,32 +61,6 @@ internal sealed class LivePreviewSourceResolver
             firstPlaylist = false;
             return rewritten;
         }
-    }
-
-    private async Task<Uri> ResolveTwitchAsync(string channel, CancellationToken token)
-    {
-        // Same token operation and codec request as Streamlink's Twitch plugin.
-        var payload = JsonSerializer.Serialize(new
-        {
-            operationName = "PlaybackAccessToken",
-            variables = new { isLive = true, login = channel, isVod = false, vodID = "", playerType = "embed", platform = "site" },
-            extensions = new { persistedQuery = new { version = 1, sha256Hash = "ed230aa1e33e07eebb8928504583da78a5173989fadfb1ac94be06a04f3cdbe9" } }
-        });
-        // Keep Streamlink's anonymous playback identity. A fresh web device changes
-        // Twitch's token and can return a preroll that forces an unnecessary restart.
-        using var document = await new TwitchGraphQlTransport(httpClient).SendAsync(payload,
-            TwitchGraphQlTransport.PublicClientId, deviceId: null, token).ConfigureAwait(false);
-        var root = document.RootElement;
-        if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Object ||
-            !data.TryGetProperty("streamPlaybackAccessToken", out var access) || access.ValueKind != JsonValueKind.Object ||
-            !access.TryGetProperty("signature", out var signature) || signature.ValueKind != JsonValueKind.String ||
-            !access.TryGetProperty("value", out var value) || value.ValueKind != JsonValueKind.String ||
-            string.IsNullOrWhiteSpace(signature.GetString()) || string.IsNullOrWhiteSpace(value.GetString()))
-            throw new InvalidDataException("Twitch did not return a live playback token.");
-        return new Uri($"https://usher.ttvnw.net/api/v2/channel/hls/{Uri.EscapeDataString(channel)}.m3u8?platform=web" +
-            $"&p={Random.Shared.Next(999999).ToString(CultureInfo.InvariantCulture)}&allow_source=true&allow_audio_only=true" +
-            "&playlist_include_framerate=true&supported_codecs=h264&fast_bread=true" +
-            $"&sig={Uri.EscapeDataString(signature.GetString()!)}&token={Uri.EscapeDataString(value.GetString()!)}");
     }
 
     private async Task<Uri> ResolveKickAsync(string channel, CancellationToken token)

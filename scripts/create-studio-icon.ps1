@@ -14,7 +14,7 @@ if ([Threading.Thread]::CurrentThread.GetApartmentState() -ne 'STA') {
 Add-Type -AssemblyName PresentationCore, WindowsBase
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $assetDirectory = Join-Path $repoRoot 'src\StreamlinkVlcStudio.App.Wpf\Assets'
-[xml]$source = Get-Content -LiteralPath (Join-Path $assetDirectory 'Studio.svg') -Raw
+[xml]$source = Get-Content -LiteralPath (Join-Path $repoRoot 'shared\Studio.svg') -Raw
 $iconFrames = [Collections.Generic.List[byte[]]]::new()
 $iconSizes = @(16, 20, 24, 32, 40, 48, 64, 96, 128, 256)
 

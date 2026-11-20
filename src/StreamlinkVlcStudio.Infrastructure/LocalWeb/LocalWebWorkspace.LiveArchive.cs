@@ -15,17 +15,12 @@ public sealed partial class LocalWebWorkspace
         if (player.Target.IsExplicitVod) throw new ArgumentException("Select a live stream.");
         // Like follow/status, lookup belongs to the player and never holds the session's
         // command gate while the provider or Streamlink is working.
-        if (player.ArchiveLookup is null || player.ArchiveLookup.IsCompleted && DateTimeOffset.UtcNow >= player.ArchiveRetryAt)
-        {
-            player.ArchiveRetryAt = DateTimeOffset.MaxValue;
-            player.ArchiveLookup = Task.Run(() => ResolveLiveArchiveAsync(player, settings));
-        }
-        return player.ArchiveLookup.IsCompletedSuccessfully ? player.ArchiveLookup.Result : new(Pending: true);
+        return player.GetArchiveState(() => ResolveLiveArchiveAsync(player, settings));
     }
 
     private async Task<LiveArchiveState> ResolveLiveArchiveAsync(Player player, AppSettings settings)
     {
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(player.Lifetime.Token);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(player.Token);
         timeout.CancelAfter(TimeSpan.FromSeconds(75));
         var token = timeout.Token;
         LocalWebMedia? media = null;
@@ -43,17 +38,9 @@ public sealed partial class LocalWebWorkspace
             }
             var replay = await services.Replay.ResolveCurrentReplayAsync(player.Target, player.Quality, settings, token).ConfigureAwait(false);
             if (!replay.IsAvailable) return new(Message: replay.UnavailableReason);
-            if (replay.Platform != player.Target.Platform || !replay.Channel.Equals(player.Target.Channel, StringComparison.OrdinalIgnoreCase))
+            if (!MatchesBroadcast(player.Target, replay))
                 return new(Message: "The archive does not match this broadcast.");
-            var target = player.Target with
-            {
-                Kind = replay.Platform == PlatformKind.Twitch ? StreamTargetKind.TwitchVod : StreamTargetKind.KickVod,
-                Url = replay.ReplayUrl,
-                MediaId = replay.ReplayId,
-                MediaStartedAtUtc = replay.StreamStartedAtUtc,
-                ChatRoomId = replay.ChatRoomId,
-                DisplayTitle = player.Target.Channel + " replay"
-            };
+            var target = ReplayTarget(player.Target, replay);
             var resolved = await ResolveAsync(target, replay.GetStreamlinkQuality(player.Quality), false, settings, token, liveArchive: true).ConfigureAwait(false);
             media = resolved.TrustedLocal
                 ? await LocalWebMedia.FromTrustedPlaylistAsync(player.Media.PlaybackId, resolved.Uri, token).ConfigureAwait(false)
@@ -63,8 +50,7 @@ public sealed partial class LocalWebWorkspace
             // history backed by a complete playlist starting at the broadcast's first segment.
             var duration = await media.ReadArchiveDurationAsync(player.Quality, token, selectVariant: true).ConfigureAwait(false);
             token.ThrowIfCancellationRequested();
-            var key = Register(target with { MediaDuration = TimeSpan.FromSeconds(duration) });
-            lock (playerGate) liveArchiveKeys.Add(key);
+            var key = Register(target with { MediaDuration = TimeSpan.FromSeconds(duration) }, liveArchive: true);
             var state = new LiveArchiveState(true, Key: key, Duration: duration, Url: media.PathFor(media.Root));
             var previous = player.ArchivePreview;
             player.ArchivePreview = new(media, key);
@@ -72,7 +58,7 @@ public sealed partial class LocalWebWorkspace
             previous?.Media.Dispose();
             return state;
         }
-        catch (OperationCanceledException) when (player.Lifetime.IsCancellationRequested) { return new(); }
+        catch (OperationCanceledException) when (player.Token.IsCancellationRequested) { return new(); }
         catch { return new(Message: "Full broadcast history is unavailable. Retrying automatically."); }
         finally
         {
@@ -80,4 +66,18 @@ public sealed partial class LocalWebWorkspace
             player.ArchiveRetryAt = DateTimeOffset.UtcNow.AddSeconds(30);
         }
     }
+
+    private static bool MatchesBroadcast(StreamTarget channel, ReplaySessionInfo replay) =>
+        channel.Platform == replay.Platform && string.Equals(channel.Channel, replay.Channel, StringComparison.OrdinalIgnoreCase);
+
+    private static StreamTarget ReplayTarget(StreamTarget channel, ReplaySessionInfo replay) => channel with
+    {
+        Kind = replay.Platform == PlatformKind.Twitch ? StreamTargetKind.TwitchVod : StreamTargetKind.KickVod,
+        Url = replay.ReplayUrl,
+        MediaId = replay.ReplayId,
+        MediaDuration = replay.Duration,
+        MediaStartedAtUtc = replay.StreamStartedAtUtc,
+        ChatRoomId = replay.ChatRoomId,
+        DisplayTitle = channel.Channel + " replay"
+    };
 }

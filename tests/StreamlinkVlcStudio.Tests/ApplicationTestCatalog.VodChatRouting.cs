@@ -20,17 +20,8 @@ internal static partial class ApplicationTestCatalog
             [new VodChatMessage(TimeSpan.FromSeconds(10), new ChatMessage(platform, target.Channel,
                 "past-viewer", "archived overlay message", DateTimeOffset.UtcNow.AddDays(-4), MessageId: "archive-overlay"))],
             target.MediaDuration));
-        await using var tab = new StreamTabViewModel(new StreamTabViewModelDependencies
-        {
-            Target = target,
-            Quality = "best",
-            StreamlinkService = new FakeStreamlinkService(),
-            PlaybackFactory = factory,
-            ChatFactory = chat,
-            VodChatProvider = provider,
-            Logger = new MemoryLogger(),
-            Dispatch = action => action()
-        });
+        await using var tab = TestViewModels.CreateTab(target, "best", new FakeStreamlinkService(), factory,
+            chat, new MemoryLogger(), action => action(), vodChatProvider: provider);
         var settings = VodResumeTestCatalog.Settings();
         settings.Chat.ConnectAutomatically = true;
         settings.Chat.Layout = ChatLayout.Overlay;

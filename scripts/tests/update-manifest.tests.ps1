@@ -32,9 +32,22 @@ try {
     $zip = Join-Path $testRoot 'StreamlinkVlcStudio-release.zip'
     [IO.File]::WriteAllText($setup, 'fixture installer')
     [IO.File]::WriteAllText($zip, 'fixture ZIP')
-    & (Join-Path $repoRoot 'scripts\new-update-manifest.ps1') -Version '1.8.3' -Tag 'v1.8.3' `
-        -Commit ('a' * 40) -SetupPath $setup -ZipPath $zip -PrivateKeyPath $privatePath `
-        -ContractPath $contractPath -PublicKeyPath $publicPath -OutputDirectory $testRoot | Out-Null
+    $generator = Join-Path $repoRoot 'scripts\new-update-manifest.ps1'
+    $generation = @{
+        Version = '1.8.3'; Tag = 'v1.8.3'; Commit = ('a' * 40); SetupPath = $setup; ZipPath = $zip
+        PrivateKeyPath = $privatePath; ContractPath = $contractPath; PublicKeyPath = $publicPath; OutputDirectory = $testRoot
+    }
+    Push-Location -LiteralPath $testRoot
+    try {
+        $generation.ContractPath = 'release-contract.json'
+        $generation.OutputDirectory = '.'
+        $generation.Remove('PublicKeyPath')
+        & $generator @generation | Out-Null
+    } finally {
+        Pop-Location
+        $generation.ContractPath = $contractPath
+        $generation.OutputDirectory = $testRoot
+    }
     $manifestPath = Join-Path $testRoot 'UPDATE-MANIFEST.json'
     $signaturePath = Join-Path $testRoot 'UPDATE-MANIFEST.sig'
     $original = [IO.File]::ReadAllText($manifestPath)
@@ -49,8 +62,43 @@ try {
         DependencyManifestPath = Join-Path $repoRoot 'dependencies\windows-installers.json'
     }
     $verifier = Join-Path $repoRoot 'scripts\verify-update-manifest.ps1'
-    & $verifier @verification
+    Push-Location -LiteralPath $testRoot
+    try {
+        $verification.ContractPath = 'release-contract.json'
+        $verification.PublicKeyPath = 'fixture-public.pem'
+        & $verifier @verification
+    } finally {
+        Pop-Location
+        $verification.ContractPath = $contractPath
+        $verification.PublicKeyPath = $publicPath
+    }
+    Write-Host 'PASS update signing: relative paths follow the current PowerShell directory'
     Write-Host 'PASS update signing: generated signature authenticates all three runtime minima and exact package bytes'
+    $verification.PublicKeyPath = Join-Path $testRoot 'untrusted-public.pem'
+    $untrustedKey = [Security.Cryptography.RSA]::Create(3072)
+    try {
+        [IO.File]::WriteAllText($verification.PublicKeyPath, $untrustedKey.ExportSubjectPublicKeyInfoPem())
+        Assert-SigningFailure { & $verifier @verification } 'verification key does not match the update trust root'
+    } finally {
+        $untrustedKey.Dispose()
+        $verification.PublicKeyPath = $publicPath
+    }
+    Write-Host 'PASS update signing: a verification key override must match the contract fingerprint'
+    $generation.OutputDirectory = ''
+    Assert-SigningFailure { & $generator @generation } 'A release path is required'
+    $generation.OutputDirectory = $testRoot
+    $generation.Commit = 'b' * 40
+    $generation.PrivateKeyPath = Join-Path $testRoot 'wrong-private.pem'
+    $wrongKey = [Security.Cryptography.RSA]::Create(2048)
+    try { [IO.File]::WriteAllText($generation.PrivateKeyPath, $wrongKey.ExportPkcs8PrivateKeyPem()) } finally { $wrongKey.Dispose() }
+    Assert-SigningFailure { & $generator @generation } 'signing key must be exactly'
+    $generation.PrivateKeyPath = $privatePath
+    [IO.File]::WriteAllText($zip, '')
+    Assert-SigningFailure { & $generator @generation } 'non-empty'
+    [IO.File]::WriteAllText($zip, 'fixture ZIP')
+    if ([IO.File]::ReadAllText($manifestPath) -cne $original) { throw 'Failed signing replaced the previous manifest.' }
+    & $verifier @verification
+    Write-Host 'PASS update signing: signing and package failures preserve the previous verified manifest and signature'
     foreach ($mutation in @(
             { param($data) $data.dependencyMinimums.PSObject.Properties.Remove('webview2') },
             { param($data) $data.dependencyMinimums.webview2 = '140.0.0.0' },

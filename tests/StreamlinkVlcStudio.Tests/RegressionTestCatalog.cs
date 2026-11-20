@@ -13,6 +13,7 @@ internal static class RegressionTestCatalog
         ("Native overlay write loop isolates callbacks and logger failures", NativeOverlayWriteLoopIsolatesCallbacksAsync),
         ("Stale native overlay resize callback cannot replace a newer session", NativeOverlayResizeRejectsStaleCallbackAsync),
         ("Native overlay probe single-flights transient failures and keys definitive results by identity", NativeOverlayProbeCachingAsync),
+        ("stream input: rejects malformed URLs and uses the same Twitch VOD ID rules as downloads", ConsistentStreamInputValidation),
         ("Stream input channel try parser rejects invalid input without throwing", StreamInputTryFromChannel),
         ("VLC audio requests publish atomic immutable snapshots", VlcAudioRequestsPublishAtomicSnapshots),
         ("Hotkey gestures accept arbitrary keys and require exact modifiers", HotkeyGesturesAcceptArbitraryKeys),
@@ -766,8 +767,8 @@ internal static class RegressionTestCatalog
             host.ResumeResizePersistence();
             host.QueueResizeFlushForTest(900, 600);
             await TestWait.UntilAsync(
-                () => File.Exists(targetPath) &&
-                    string.Equals(File.ReadAllText(targetPath), "reference 900 600", StringComparison.Ordinal),
+                () => NativeOverlaySizing.TryReadSizeFile(targetPath, out var width, out var height, out var reference) &&
+                    reference && width == 900 && height == 600,
                 TimeSpan.FromSeconds(1));
 
             releaseFirst.Set();
@@ -927,6 +928,16 @@ internal static class RegressionTestCatalog
         eventCommand.CanExecuteChanged -= throwing;
         await eventCommand.ExecuteAsync();
         Assert.Equal(1, eventExecutions);
+
+        var concurrentChecks = 0;
+        var concurrentExecutions = 0;
+        var concurrentCommand = new AsyncRelayCommand(
+            () => { concurrentExecutions++; return Task.CompletedTask; },
+            () => ++concurrentChecks == 1,
+            allowConcurrentExecution: true);
+        await concurrentCommand.ExecuteAsync();
+        Assert.Equal(1, concurrentChecks);
+        Assert.Equal(1, concurrentExecutions);
     }
 
     private static async Task ClipboardRetriesAreBoundedAsync()
@@ -963,6 +974,25 @@ internal static class RegressionTestCatalog
         Assert.Equal(false, result.Succeeded);
         Assert.Equal(3, attempts);
         Assert.NotNull(result.Error);
+    }
+
+    private static Task ConsistentStreamInputValidation()
+    {
+        var vodUrl = $"https://twitch.tv/videos/{new string('9', 32)}";
+        Assert.Equal(VodDownloadUrlParser.Parse(vodUrl), StreamInputParser.Parse(vodUrl, PlatformKind.Kick));
+        foreach (var invalid in new[] { vodUrl + "9", "https://user@twitch.tv/xqc", "https://kick.com:9000/streamer" })
+        {
+            Assert.True(!StreamInputParser.TryParsePlatformUrl(invalid, out _), invalid);
+            Assert.Throws<ArgumentException>(() => StreamInputParser.ParseCandidates(invalid));
+        }
+
+        foreach (var invalid in new[] { "@ xqc", "xqc\n/" })
+        {
+            Assert.True(!StreamInputParser.TryNormalizeChannelSlug(PlatformKind.Twitch, invalid, out _), invalid);
+            Assert.True(!StreamInputParser.TryFromChannel(PlatformKind.Twitch, invalid, out _), invalid);
+            Assert.Throws<ArgumentException>(() => StreamInputParser.ParseCandidates(invalid));
+        }
+        return Task.CompletedTask;
     }
 
     private static Task StreamInputTryFromChannel()

@@ -1875,22 +1875,20 @@ internal static partial class ApplicationTestCatalog
             }
         });
     }),
-    ("native replay overlay renderer wraps whole tokens and excludes a clipped oldest message", () =>
+    ("native replay overlay shows oversized newest messages and excludes clipped older rows", () =>
     {
         return TestSta.RunAsync(() =>
         {
             var presentation = NativeOverlayChatPresentation.Create(15, 1080);
-            var oversizedTokenBlock = NativeOverlayChatFrameRenderer.CreateMessageBlock(
-                new ChatMessage(
-                    PlatformKind.Twitch,
-                    "streamer",
-                    "u",
-                    new string('W', 80),
-                    DateTimeOffset.UtcNow),
-                presentation);
+            var oversizedMessage = new ChatMessage(
+                PlatformKind.Twitch,
+                "streamer",
+                "u",
+                new string('W', 80),
+                DateTimeOffset.UtcNow);
+            var oversizedTokenBlock = NativeOverlayChatFrameRenderer.CreateMessageBlock(oversizedMessage, presentation);
             oversizedTokenBlock.Measure(new System.Windows.Size(90, double.PositiveInfinity));
             Assert.Equal(90d, oversizedTokenBlock.Document.ColumnWidth);
-            Assert.Equal(44d, oversizedTokenBlock.DesiredSize.Height);
 
             var layout = NativeOverlayChatFrameRenderer.ResolveReplayOverlayLayout(
                 new ChatSettings { DockWidth = 220 },
@@ -1905,20 +1903,33 @@ internal static partial class ApplicationTestCatalog
                 .Select(index => new ChatMessage(
                     PlatformKind.Twitch,
                     "streamer",
-                    $"viewer{index}",
+                    "viewer",
                     "short",
                     DateTimeOffset.UtcNow,
                     MessageId: index.ToString(CultureInfo.InvariantCulture)))
                 .ToArray();
-            var selection = NativeOverlayChatFrameRenderer.MeasureVisibleMessages(messages, layout);
+            var narrowLayout = layout with { FrameWidth = 102 };
+            var oversized = NativeOverlayChatFrameRenderer.MeasureVisibleMessages([oversizedMessage], narrowLayout);
+            Assert.Equal(oversized.AvailableHeight, oversized.UsedHeight);
+            Assert.Equal(oversizedMessage, oversized.MessageBlocks.Single().Message);
+            Assert.True(oversized.MessageBlocks.Single().ClipToBounds);
 
-            Assert.Equal(18, selection.CandidateLimit);
+            // Measure the row with the active WPF font metrics, then leave exactly enough room for two.
+            var row = NativeOverlayChatFrameRenderer.CreateMessageBlock(messages[^1], presentation);
+            var contentWidth = layout.FrameWidth - narrowLayout.FrameWidth + oversized.AvailableWidth;
+            row.Measure(new System.Windows.Size(contentWidth, double.PositiveInfinity));
+            var twoRowHeight = 2 * (int)Math.Ceiling(row.DesiredSize.Height) + presentation.MessageGap;
+            var frameHeight = layout.FrameHeight - oversized.AvailableHeight + twoRowHeight;
+            var selection = NativeOverlayChatFrameRenderer.MeasureVisibleMessages(
+                messages, layout with { FrameHeight = frameHeight, ReferenceHeight = frameHeight });
+
             Assert.Equal(2, selection.MessageBlocks.Count);
             Assert.SequenceEqual(
                 new[] { "28", "29" },
                 selection.MessageBlocks.Select(block => block.Message!.MessageId));
-            Assert.Equal(46, selection.UsedHeight);
-            Assert.Equal(68, selection.AvailableHeight);
+            Assert.Equal(twoRowHeight, selection.UsedHeight);
+            Assert.Equal(twoRowHeight, selection.AvailableHeight);
+            Assert.True(selection.MessageBlocks.All(block => !block.ClipToBounds));
         });
     }),
     ("native replay overlay renderer caps newest-first measurement at 256 messages", () =>
@@ -3466,8 +3477,8 @@ internal static partial class ApplicationTestCatalog
                 Assert.Equal(0, ReadNativeOverlayScrollbarMessageOffset(initialFrame.Followup));
                 Assert.Equal(replayMessages.Length, ReadNativeOverlayScrollbarTotalMessageCount(initialFrame.Followup));
                 await TestWait.UntilAsync(
-                    () => tab.IsNativeReplayOverlayEventHostRunning &&
-                        tab.NativeReplayOverlayMaximumMessageOffset > 0,
+                    () => TestViewModels.GetNativeOverlay(tab).IsNativeReplayOverlayEventHostRunning &&
+                        TestViewModels.GetNativeOverlay(tab).NativeReplayOverlayMaximumMessageOffset > 0,
                     TimeSpan.FromSeconds(2));
 
                 var scrollFrameTask = ReadNativeOverlayPipeMatchingMessageAsync(
@@ -3479,7 +3490,7 @@ internal static partial class ApplicationTestCatalog
                     BuildNativeOverlayEventMessage(1, 1),
                     TimeSpan.FromSeconds(2));
                 await TestWait.UntilAsync(
-                    () => tab.NativeReplayOverlayMessageOffset == 3,
+                    () => TestViewModels.GetNativeOverlay(tab).NativeReplayOverlayMessageOffset == 3,
                     TimeSpan.FromSeconds(2));
                 AssertNativeOverlayChatFrame(await scrollFrameTask);
 
@@ -3503,7 +3514,7 @@ internal static partial class ApplicationTestCatalog
                 Assert.NotNull(invalidateFrame);
                 invalidateFrame!.Invoke(tab, []);
                 await TestWait.UntilAsync(
-                    () => tab.NativeReplayOverlayMessageOffset == 5,
+                    () => TestViewModels.GetNativeOverlay(tab).NativeReplayOverlayMessageOffset == 5,
                     TimeSpan.FromSeconds(2));
 
                 await WriteNativeOverlayEventPipeMessageAsync(
@@ -3511,14 +3522,14 @@ internal static partial class ApplicationTestCatalog
                     BuildNativeOverlayEventMessage(1, -1),
                     TimeSpan.FromSeconds(2));
                 await TestWait.UntilAsync(
-                    () => tab.NativeReplayOverlayMessageOffset == 2,
+                    () => TestViewModels.GetNativeOverlay(tab).NativeReplayOverlayMessageOffset == 2,
                     TimeSpan.FromSeconds(2));
                 await WriteNativeOverlayEventPipeMessageAsync(
                     $"{pipeName}_events",
                     BuildNativeOverlayEventMessage(1, -1),
                     TimeSpan.FromSeconds(2));
                 await TestWait.UntilAsync(
-                    () => tab.NativeReplayOverlayMessageOffset == 0,
+                    () => TestViewModels.GetNativeOverlay(tab).NativeReplayOverlayMessageOffset == 0,
                     TimeSpan.FromSeconds(2));
 
                 // The native client receives the updated scrollbar range with its frame.
@@ -3532,14 +3543,14 @@ internal static partial class ApplicationTestCatalog
                     TimeSpan.FromSeconds(4));
                 invalidateFrame.Invoke(tab, []);
                 await updatedRangeTask;
-                var maximumMessageOffset = tab.NativeReplayOverlayMaximumMessageOffset;
+                var maximumMessageOffset = TestViewModels.GetNativeOverlay(tab).NativeReplayOverlayMaximumMessageOffset;
                 await WriteNativeOverlayEventPipeMessageAsync(
                     $"{pipeName}_events",
                     BuildNativeOverlayEventMessage(2, maximumMessageOffset),
                     TimeSpan.FromSeconds(2));
                 await TestWait.UntilAsync(
-                    () => tab.NativeReplayOverlayMaximumMessageOffset > 0 &&
-                        tab.NativeReplayOverlayMessageOffset == tab.NativeReplayOverlayMaximumMessageOffset,
+                    () => TestViewModels.GetNativeOverlay(tab).NativeReplayOverlayMaximumMessageOffset > 0 &&
+                        TestViewModels.GetNativeOverlay(tab).NativeReplayOverlayMessageOffset == TestViewModels.GetNativeOverlay(tab).NativeReplayOverlayMaximumMessageOffset,
                     TimeSpan.FromSeconds(2));
 
                 await WriteNativeOverlayEventPipeMessageAsync(
@@ -3547,7 +3558,7 @@ internal static partial class ApplicationTestCatalog
                     BuildNativeOverlayEventMessage(2, 0),
                     TimeSpan.FromSeconds(2));
                 await TestWait.UntilAsync(
-                    () => tab.NativeReplayOverlayMessageOffset == 0,
+                    () => TestViewModels.GetNativeOverlay(tab).NativeReplayOverlayMessageOffset == 0,
                     TimeSpan.FromSeconds(2));
 
                 await WriteNativeOverlayEventPipeMessageAsync(
@@ -3555,24 +3566,24 @@ internal static partial class ApplicationTestCatalog
                     BuildNativeOverlayEventMessage(1, 1),
                     TimeSpan.FromSeconds(2));
                 await TestWait.UntilAsync(
-                    () => tab.NativeReplayOverlayMessageOffset == 3,
+                    () => TestViewModels.GetNativeOverlay(tab).NativeReplayOverlayMessageOffset == 3,
                     TimeSpan.FromSeconds(2));
                 await tab.SeekReplayAsync(TimeSpan.FromMinutes(10).Add(TimeSpan.FromSeconds(5)));
-                Assert.Equal(0, tab.NativeReplayOverlayMessageOffset);
+                Assert.Equal(0, TestViewModels.GetNativeOverlay(tab).NativeReplayOverlayMessageOffset);
                 await TestWait.UntilAsync(
-                    () => tab.NativeReplayOverlayMaximumMessageOffset > 0,
+                    () => TestViewModels.GetNativeOverlay(tab).NativeReplayOverlayMaximumMessageOffset > 0,
                     TimeSpan.FromSeconds(2));
                 await WriteNativeOverlayEventPipeMessageAsync(
                     $"{pipeName}_events",
                     BuildNativeOverlayEventMessage(1, 1),
                     TimeSpan.FromSeconds(2));
                 await TestWait.UntilAsync(
-                    () => tab.NativeReplayOverlayMessageOffset == 3,
+                    () => TestViewModels.GetNativeOverlay(tab).NativeReplayOverlayMessageOffset == 3,
                     TimeSpan.FromSeconds(2));
 
                 await tab.ReturnToLiveAsync();
-                Assert.Equal(0, tab.NativeReplayOverlayMessageOffset);
-                Assert.Equal(false, tab.IsNativeReplayOverlayEventHostRunning);
+                Assert.Equal(0, TestViewModels.GetNativeOverlay(tab).NativeReplayOverlayMessageOffset);
+                Assert.Equal(false, TestViewModels.GetNativeOverlay(tab).IsNativeReplayOverlayEventHostRunning);
             }
             finally
             {
@@ -3665,8 +3676,8 @@ internal static partial class ApplicationTestCatalog
                 Assert.Equal(0, ReadNativeOverlayScrollbarMessageOffset(initialFrame.Followup));
                 Assert.Equal(replayMessages.Length, ReadNativeOverlayScrollbarTotalMessageCount(initialFrame.Followup));
                 await TestWait.UntilAsync(
-                    () => tab.IsNativeReplayOverlayEventHostRunning &&
-                        tab.NativeReplayOverlayMaximumMessageOffset > 0,
+                    () => TestViewModels.GetNativeOverlay(tab).IsNativeReplayOverlayEventHostRunning &&
+                        TestViewModels.GetNativeOverlay(tab).NativeReplayOverlayMaximumMessageOffset > 0,
                     TimeSpan.FromSeconds(2));
 
                 await WriteNativeOverlayEventPipeMessageAsync(
@@ -3674,11 +3685,11 @@ internal static partial class ApplicationTestCatalog
                     BuildNativeOverlayEventMessage(1, 1),
                     TimeSpan.FromSeconds(2));
                 await TestWait.UntilAsync(
-                    () => tab.NativeReplayOverlayMessageOffset == 3,
+                    () => TestViewModels.GetNativeOverlay(tab).NativeReplayOverlayMessageOffset == 3,
                     TimeSpan.FromSeconds(2));
 
                 await tab.SeekReplayAsync(TimeSpan.FromMinutes(1));
-                Assert.Equal(0, tab.NativeReplayOverlayMessageOffset);
+                Assert.Equal(0, TestViewModels.GetNativeOverlay(tab).NativeReplayOverlayMessageOffset);
             }
             finally
             {
@@ -4038,8 +4049,8 @@ internal static partial class ApplicationTestCatalog
                 var initialBounds = GetNativeOverlayAlphaBounds(initialFrame);
                 Assert.True(initialBounds.Height > 0);
                 await TestWait.UntilAsync(
-                    () => tab.IsNativeReplayOverlayEventHostRunning &&
-                        string.Equals(tab.NativeReplayOverlayEventHostPipeName, pipeName, StringComparison.Ordinal),
+                    () => TestViewModels.GetNativeOverlay(tab).IsNativeReplayOverlayEventHostRunning &&
+                        string.Equals(TestViewModels.GetNativeOverlay(tab).NativeReplayOverlayEventHostPipeName, pipeName, StringComparison.Ordinal),
                     TimeSpan.FromSeconds(2));
 
                 var resizedFrameTask = ReadNativeOverlayPipeMatchingMessageAsync(
@@ -4146,8 +4157,8 @@ internal static partial class ApplicationTestCatalog
                 tab.SetVideoHandle(new IntPtr(42));
                 await tab.StartAsync(settings);
                 await TestWait.UntilAsync(
-                    () => tab.IsNativeReplayOverlayEventHostRunning &&
-                        string.Equals(tab.NativeReplayOverlayEventHostPipeName, pipeName, StringComparison.Ordinal),
+                    () => TestViewModels.GetNativeOverlay(tab).IsNativeReplayOverlayEventHostRunning &&
+                        string.Equals(TestViewModels.GetNativeOverlay(tab).NativeReplayOverlayEventHostPipeName, pipeName, StringComparison.Ordinal),
                     TimeSpan.FromSeconds(2));
 
                 await WriteNativeOverlayEventPipeMessageAsync(

@@ -3,13 +3,13 @@ using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Windows.Threading;
 using Microsoft.Web.WebView2.Core;
-using StreamlinkVlcStudio.App.Wpf.ViewModels;
 using StreamlinkVlcStudio.Core.Commands;
 using StreamlinkVlcStudio.Core.Logging;
 using StreamlinkVlcStudio.Core.Models;
 using StreamlinkVlcStudio.Core.Services;
 using StreamlinkVlcStudio.Core.Settings;
 using StreamlinkVlcStudio.Infrastructure.Threading;
+using StreamlinkVlcStudio.Workspace.ViewModels;
 
 namespace StreamlinkVlcStudio.App.Wpf.Twitch;
 

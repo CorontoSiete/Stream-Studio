@@ -16,30 +16,31 @@ namespace StreamlinkVlcStudio.Infrastructure.LocalWeb;
 /// <summary>Only server-resolved resources receive opaque IDs. There is no URL/path proxy endpoint.</summary>
 internal sealed partial class LocalWebMedia : IDisposable
 {
+    private const int MaximumPlaylistBytes = 16 * 1024 * 1024;
+    private static readonly Encoding StrictUtf8 = new UTF8Encoding(false, true);
     private static readonly Uri TrustedPlaylistUri = new("https://trusted-playlist.invalid/index.m3u8");
     private readonly ConcurrentDictionary<string, Uri> resources = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> ids = new(StringComparer.Ordinal);
     private readonly HashSet<string> localFiles = new(StringComparer.OrdinalIgnoreCase);
     private readonly object gate = new();
     private readonly HttpClient http;
-    private readonly string playbackId;
     private string? trustedPlaylist;
     internal string Root { get; }
-    internal string PlaybackId => playbackId;
+    internal string PlaybackId { get; }
     internal bool ContainsResource(string id) => resources.ContainsKey(id);
     internal bool GrowingArchive { get; set; }
     internal bool RewriteTwitchArchive { get; set; }
 
     internal LocalWebMedia(string playbackId, Uri root, HttpClient? http = null)
     {
-        this.playbackId = playbackId;
+        PlaybackId = playbackId;
         Root = RegisterRemote(root, ".m3u8");
         this.http = http ?? CreateHttpClient();
     }
 
     internal LocalWebMedia(string playbackId, string root, IEnumerable<string> files)
     {
-        this.playbackId = playbackId;
+        PlaybackId = playbackId;
         foreach (var path in files.Append(root)) localFiles.Add(Path.GetFullPath(path));
         Root = RegisterLocal(root);
         http = CreateHttpClient();
@@ -52,12 +53,12 @@ internal sealed partial class LocalWebMedia : IDisposable
             throw new InvalidDataException("Invalid trusted playlist.");
         OfflineVodPackage.RequireRegularPath(Path.GetDirectoryName(playlist.LocalPath)!);
         OfflineVodPackage.RequireRegularPath(playlist.LocalPath);
-        var bytes = await BoundedByteReader.ReadFileAsync(playlist.LocalPath, 16 * 1024 * 1024, token).ConfigureAwait(false)
+        var bytes = await BoundedByteReader.ReadFileAsync(playlist.LocalPath, MaximumPlaylistBytes, token).ConfigureAwait(false)
             ?? throw new InvalidDataException("The trusted playlist is empty or too large.");
         var media = new LocalWebMedia(playbackId, TrustedPlaylistUri);
         try
         {
-            media.trustedPlaylist = new UTF8Encoding(false, true).GetString(bytes);
+            media.trustedPlaylist = StrictUtf8.GetString(bytes);
             media.RewritePlaylist(media.trustedPlaylist, TrustedPlaylistUri);
         }
         catch { media.Dispose(); throw; }
@@ -69,9 +70,7 @@ internal sealed partial class LocalWebMedia : IDisposable
         !uri.OriginalString.Any(char.IsControl) &&
         (!IPAddress.TryParse(uri.IdnHost, out var address) || ReplayUrlSecurityValidator.IsPublicAddress(address));
 
-    internal string RegisterRemote(Uri uri) => RegisterRemote(uri, null);
-
-    private string RegisterRemote(Uri uri, string? extension)
+    internal string RegisterRemote(Uri uri, string? extension = null)
     {
         if (!IsSafeUri(uri)) throw new InvalidDataException("Media must use a public HTTPS endpoint.");
         return Register(uri, extension);
@@ -103,23 +102,28 @@ internal sealed partial class LocalWebMedia : IDisposable
         }
     }
 
-    internal string PathFor(string id) => $"/media/{playbackId}/{id}";
+    internal string PathFor(string id) => $"/media/{PlaybackId}/{id}";
 
     internal string RewritePlaylist(string playlist, Uri source)
     {
-        if (playlist.Length > 16 * 1024 * 1024 || !playlist.TrimStart('\uFEFF').StartsWith("#EXTM3U", StringComparison.Ordinal))
+        if (playlist.Length > MaximumPlaylistBytes) throw new InvalidDataException("Invalid HLS playlist.");
+        playlist = playlist.TrimStart('\uFEFF');
+        var end = playlist.IndexOf('\n');
+        if (!playlist.AsSpan(0, end < 0 ? playlist.Length : end).TrimEnd('\r').SequenceEqual("#EXTM3U"))
             throw new InvalidDataException("Invalid HLS playlist.");
         if (RewriteTwitchArchive)
             playlist = TwitchSubOnlyVodPlaylist.RewriteMediaPlaylist(playlist, source);
         if (GrowingArchive && playlist.Contains("#EXTINF:", StringComparison.Ordinal))
             playlist = GrowingArchivePlaylist(playlist);
         var result = new StringBuilder();
-        foreach (var raw in playlist.TrimStart('\uFEFF').Split('\n'))
+        var variantUriPending = false;
+        foreach (var raw in playlist.Split('\n'))
         {
             var line = raw.TrimEnd('\r');
             if (line.Length > 16384) throw new InvalidDataException("HLS line exceeds the limit.");
             if (line.StartsWith('#'))
             {
+                if (line.StartsWith(HlsPlaylistPolicy.VariantTag, StringComparison.Ordinal)) variantUriPending = true;
                 // Unsupported variable substitution/content steering can introduce unproxied URLs.
                 if (line.StartsWith("#EXT-X-DEFINE:", StringComparison.Ordinal) || line.StartsWith("#EXT-X-CONTENT-STEERING:", StringComparison.Ordinal))
                     throw new InvalidDataException("This HLS extension is not supported.");
@@ -136,7 +140,9 @@ internal sealed partial class LocalWebMedia : IDisposable
                     if (attributes.TryGetValue("URI", out var uri))
                     {
                         if (!uri.IsQuoted) throw new InvalidDataException("HLS URI attributes must be quoted.");
-                        attributes["URI"] = new(Map(uri.Value), true);
+                        var isPlaylist = line.AsSpan(0, colon) is "#EXT-X-MEDIA" or "#EXT-X-I-FRAME-STREAM-INF" or
+                            "#EXT-X-IMAGE-STREAM-INF" or "#EXT-X-RENDITION-REPORT";
+                        attributes["URI"] = new(Map(uri.Value, isPlaylist), true);
                     }
                     if (line.StartsWith("#EXT-X-DATERANGE:", StringComparison.Ordinal))
                         attributes.Remove("X-TV-TWITCH-TRIGGER-URL");
@@ -146,12 +152,16 @@ internal sealed partial class LocalWebMedia : IDisposable
                 if (line.Contains("://", StringComparison.Ordinal))
                     throw new InvalidDataException("Unsupported absolute URL in HLS metadata.");
             }
-            else if (!string.IsNullOrWhiteSpace(line)) line = Map(line.Trim());
+            else if (!string.IsNullOrWhiteSpace(line))
+            {
+                line = Map(line.Trim(), variantUriPending);
+                variantUriPending = false;
+            }
             result.Append(line).Append('\n');
         }
         return result.ToString();
 
-        string Map(string value)
+        string Map(string value, bool isPlaylist = false)
         {
             if (value.Length == 0 || value.Contains("{$", StringComparison.Ordinal) || value.Any(char.IsControl))
                 throw new InvalidDataException("Invalid media reference.");
@@ -163,7 +173,7 @@ internal sealed partial class LocalWebMedia : IDisposable
             }
             if (source.IdnHost == TrustedPlaylistUri.IdnHost && !Uri.TryCreate(value, UriKind.Absolute, out _))
                 throw new InvalidDataException("Trusted playlists must contain absolute remote media references.");
-            return PathFor(RegisterRemote(new Uri(source, value)));
+            return PathFor(RegisterRemote(new Uri(source, value), isPlaylist ? ".m3u8" : null));
         }
     }
 
@@ -185,7 +195,7 @@ internal sealed partial class LocalWebMedia : IDisposable
             OfflineVodPackage.RequireRegularPath(uri.LocalPath);
             if (uri.LocalPath.EndsWith(".m3u8", StringComparison.OrdinalIgnoreCase))
             {
-                var bytes = await BoundedByteReader.ReadFileAsync(uri.LocalPath, 16 * 1024 * 1024, timeout.Token).ConfigureAwait(false)
+                var bytes = await BoundedByteReader.ReadFileAsync(uri.LocalPath, MaximumPlaylistBytes, timeout.Token).ConfigureAwait(false)
                     ?? throw new InvalidDataException("Offline playlist is empty or too large.");
                 await WritePlaylistAsync(context, Encoding.UTF8.GetString(bytes), uri).ConfigureAwait(false);
             }
@@ -196,7 +206,7 @@ internal sealed partial class LocalWebMedia : IDisposable
         if (context.Request.Query.Count > 0)
             uri = new Uri(QueryHelpers.AddQueryString(uri.AbsoluteUri, context.Request.Query.Select(p => new KeyValuePair<string, string?>(p.Key, p.Value.ToString()))));
         var requestedRange = context.Request.Headers.Range.ToString();
-        var knownPlaylist = resourceId == Root || uri.AbsolutePath.EndsWith(".m3u8", StringComparison.OrdinalIgnoreCase);
+        var knownPlaylist = resourceId.EndsWith(".m3u8", StringComparison.OrdinalIgnoreCase);
         var response = await FetchAsync(uri, knownPlaylist ? "" : requestedRange, timeout.Token).ConfigureAwait(false);
         try
         {
@@ -219,9 +229,8 @@ internal sealed partial class LocalWebMedia : IDisposable
             }
             if (isPlaylist)
             {
-                if (response.StatusCode == HttpStatusCode.PartialContent) throw new InvalidDataException("The media playlist is incomplete.");
-                var bytes = await BoundedByteReader.ReadOrThrowAsync(response.Content, 16 * 1024 * 1024, timeout.Token).ConfigureAwait(false);
-                await WritePlaylistAsync(context, new UTF8Encoding(false, true).GetString(bytes), final).ConfigureAwait(false);
+                var playlist = await ReadRemotePlaylistAsync(response, timeout.Token).ConfigureAwait(false);
+                await WritePlaylistAsync(context, playlist, final).ConfigureAwait(false);
                 return;
             }
             const long maxBytes = 128L * 1024 * 1024;
@@ -244,6 +253,14 @@ internal sealed partial class LocalWebMedia : IDisposable
             }
         }
         finally { response.Dispose(); }
+    }
+
+    private static async Task<string> ReadRemotePlaylistAsync(HttpResponseMessage response, CancellationToken token)
+    {
+        response.EnsureSuccessStatusCode();
+        if (response.StatusCode == HttpStatusCode.PartialContent) throw new InvalidDataException("The media playlist is incomplete.");
+        var bytes = await BoundedByteReader.ReadOrThrowAsync(response.Content, MaximumPlaylistBytes, token).ConfigureAwait(false);
+        return StrictUtf8.GetString(bytes);
     }
 
     private async Task WritePlaylistAsync(HttpContext context, string playlist, Uri source)

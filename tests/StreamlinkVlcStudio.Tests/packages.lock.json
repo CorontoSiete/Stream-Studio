@@ -78,7 +78,20 @@
       "streamlinkvlcstudio.infrastructure": {
         "type": "Project",
         "dependencies": {
-          "StreamlinkVlcStudio.Core": "[1.8.11, )"
+          "StreamlinkVlcStudio.Core": "[1.8.14, )"
+        }
+      },
+      "streamlinkvlcstudio.webclient": {
+        "type": "Project",
+        "dependencies": {
+          "StreamlinkVlcStudio.Infrastructure": "[1.8.14, )"
+        }
+      },
+      "streamlinkvlcstudio.workspace": {
+        "type": "Project",
+        "dependencies": {
+          "StreamlinkVlcStudio.Core": "[1.8.14, )",
+          "StreamlinkVlcStudio.Infrastructure": "[1.8.14, )"
         }
       },
       "StreamStudio": {
@@ -89,8 +102,10 @@
           "SkiaSharp": "[3.119.4, )",
           "SkiaSharp.HarfBuzz": "[3.119.4, )",
           "SkiaSharp.NativeAssets.Win32": "[3.119.4, )",
-          "StreamlinkVlcStudio.Core": "[1.8.11, )",
-          "StreamlinkVlcStudio.Infrastructure": "[1.8.11, )"
+          "StreamlinkVlcStudio.Core": "[1.8.14, )",
+          "StreamlinkVlcStudio.Infrastructure": "[1.8.14, )",
+          "StreamlinkVlcStudio.WebClient": "[1.8.14, )",
+          "StreamlinkVlcStudio.Workspace": "[1.8.14, )"
         }
       },
       "StreamStudio.Bootstrapper": {

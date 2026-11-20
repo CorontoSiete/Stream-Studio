@@ -1,4 +1,3 @@
-using System.Net.Http;
 using StreamlinkVlcStudio.App.Wpf.Follows;
 
 internal static partial class ChannelFollowTestCatalog

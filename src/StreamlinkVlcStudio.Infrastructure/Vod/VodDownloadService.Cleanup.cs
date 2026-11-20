@@ -1,7 +1,6 @@
 using StreamlinkVlcStudio.Core.Logging;
 using StreamlinkVlcStudio.Core.Models;
 using StreamlinkVlcStudio.Core.Services;
-using StreamlinkVlcStudio.Infrastructure.Logging;
 using StreamlinkVlcStudio.Infrastructure.Threading;
 
 namespace StreamlinkVlcStudio.Infrastructure.Vod;

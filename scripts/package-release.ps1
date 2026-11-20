@@ -50,25 +50,11 @@ if ($Repository -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') {
 }
 $authenticode = Get-AuthenticodeSigningConfiguration
 
-$overlaySourcePath = if ([string]::IsNullOrWhiteSpace($OverlaySource)) {
-    Join-Path $repoRoot "src\StreamlinkVlcStudio.Infrastructure\Vlc\BundledOverlay"
-} else {
-    $OverlaySource
-}
-$overlaySourcePath = [System.IO.Path]::GetFullPath($overlaySourcePath)
-$outputRootPath = if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
-    Join-Path $repoRoot "release"
-} else {
-    $OutputRoot
-}
-$outputRootPath = [System.IO.Path]::GetFullPath($outputRootPath)
+$overlaySourcePath = Resolve-ReleasePath $OverlaySource (Join-Path $repoRoot "src\StreamlinkVlcStudio.Infrastructure\Vlc\BundledOverlay")
+$outputRootPath = Resolve-ReleasePath $OutputRoot (Join-Path $repoRoot "release")
 $stageDir = Join-Path $outputRootPath "StreamStudio"
 $zipPath = Join-Path $outputRootPath "StreamlinkVlcStudio-release.zip"
-$publishDir = if ([string]::IsNullOrWhiteSpace($PublishedAppDirectory)) {
-    Join-Path $repoRoot "artifacts\publish\StreamStudio"
-} else {
-    [System.IO.Path]::GetFullPath($PublishedAppDirectory)
-}
+$publishDir = Resolve-ReleasePath $PublishedAppDirectory (Join-Path $repoRoot "artifacts\publish\StreamStudio")
 
 Assert-NoReparsePointInExistingPath -Path $outputRootPath
 

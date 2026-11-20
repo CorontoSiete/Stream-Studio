@@ -6,6 +6,37 @@ const response = value => ({ ok: true, text: async () => JSON.stringify(value) }
 const settle = async f => { await f.flush(); await new Promise(resolve => setImmediate(resolve)); await f.flush(); };
 const refresh = p => p.video.dispatchEvent(new Event('progress'));
 
+test('growing replay chat retries the published tail and finished VOD chat stops', async () => {
+  for (const isLiveArchive of [true, false]) {
+    let page = { outcome: 'Completed', messages: [], through: 60 };
+    const f = fixture({ onRequest: url => url === '/api/chat' ? response(page) : null });
+    try {
+      f.target({ isVod: true, isLiveArchive });
+      const p = await f.open();
+      await settle(f);
+      const offsets = () => f.requests.filter(r => r.url === '/api/chat').map(r => r.input.from);
+      assert.deepEqual(offsets(), [0]);
+      if (isLiveArchive) {
+        assert.equal(p.chatDone, false);
+        assert.ok(p.chatRetryAt > Date.now());
+        assert.equal(p.frontier, 0, 'an empty last page cannot prove future coverage');
+      } else assert.equal(p.chatDone, true);
+      page = { outcome: 'Completed', messages: [{ offset: 2, message: { messageId: 'late', message: 'Hello' } }], through: 3 };
+      p.video.currentTime = 40;
+      p.nextChatPoll = 0;
+      await f.tick(250); await settle(f);
+      assert.deepEqual(offsets(), [0]);
+      p.chatRetryAt = Date.now() - 1;
+      await f.tick(250); await settle(f);
+      assert.deepEqual(offsets(), isLiveArchive ? [0, 0] : [0]);
+      if (isLiveArchive) {
+        assert.equal(p.frontier, 3);
+        assert.ok(p.chatRows.has('late'));
+      }
+    } finally { f.disconnect(); }
+  }
+});
+
 for (const platform of ['Twitch', 'Kick']) for (const media of ['hls', 'native']) {
   test(`${platform} ${media}: full broadcast history predates opening and starts at the requested position`, async () => {
     const f = fixture({ media, onRequest: url => url === '/api/live/archive' ? response({ available: true, key: 'full-archive', duration: 7200 }) : null });
@@ -101,6 +132,15 @@ for (const media of ['hls', 'native']) test(`${media}: Live uses the live window
     assert.equal(p.video.paused, true, 'preserve the playback state');
     slider.dispatchEvent(new Event('blur')); await settle(f);
     assert.equal(f.requests.filter(r => r.url === '/api/open').length, 1, 'leaving the slider cannot reopen the canceled replay');
+
+    p.video.currentTime = 1010;
+    slider.value = 7200;
+    slider.dispatchEvent(new Event('input'));
+    slider.dispatchEvent(new Event('change'));
+    await settle(f);
+    assert.ok(p.video.currentTime > 1025 && p.video.currentTime < 1030, 'committing the end of the slider also seeks to live');
+    assert.equal(p.video.paused, true);
+    assert.equal(f.requests.filter(r => r.url === '/api/open').length, 1);
   } finally { f.disconnect(); }
 });
 
@@ -131,6 +171,41 @@ test('closing while archive lookup is pending ignores its late result', async ()
     assert.equal(f.state.players.length, 0);
     assert.equal(f.requests.filter(r => r.url === '/api/open').length, 1);
   } finally { pending.resolve(response({})); f.disconnect(); }
+});
+
+test('archive refresh keeps pending history and drops a withdrawn timeline and preview', async () => {
+  let archive = { available: true, key: 'archive', url: '/media/live/archive', duration: 900 };
+  const f = fixture({ onRequest: url => url === '/api/live/archive' ? response(archive) : null });
+  try {
+    const p = await f.open(); await settle(f);
+    p.hls.latestLevelDetails = { live: true, fragmentStart: 30, edge: 60 };
+    const slider = p.element.querySelector('.video-seek');
+    archive = { pending: true }; p.archiveRetryAt = 0;
+    await f.tick(250); await settle(f);
+    assert.equal(Number(slider.max), 900);
+    slider.dispatchEvent(Object.assign(new Event('pointerdown'), { button: 0, pointerId: 1 }));
+    slider.value = 10; slider.dispatchEvent(new Event('input'));
+    archive = { available: false }; p.archiveRetryAt = 0;
+    await f.tick(250); await settle(f);
+    assert.equal(Number(slider.min), 30);
+    assert.equal(Number(slider.max), 60);
+    assert.equal(p.seekPreview.element.hidden, true);
+    slider.dispatchEvent(new Event('blur')); await settle(f);
+    assert.equal(f.requests.filter(r => r.url === '/api/open').length, 1);
+  } finally { f.disconnect(); }
+});
+
+test('reloading a stopped broadcast archive resumes where it stopped', async () => {
+  const f = fixture();
+  try {
+    f.target({ isVod: true, isLiveArchive: true });
+    const p = await f.open({ key: 'archive', liveArchive: true, startPosition: 10 });
+    p.video.currentTime = 75;
+    await f.playerAction(p, 'stop');
+    p.video.currentTime = 0; // Removing the source resets the browser media clock.
+    await f.playerAction(p, 'reload');
+    assert.equal(f.state.players[0].resume, 75);
+  } finally { f.disconnect(); }
 });
 
 test('cancelling a drag leaves the live player at live', async () => {

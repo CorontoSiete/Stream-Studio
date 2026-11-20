@@ -1,4 +1,3 @@
-using System.Windows.Controls;
 using System.Windows.Interop;
 using Microsoft.Web.WebView2.Core;
 using StreamlinkVlcStudio.App.Wpf.Kick;

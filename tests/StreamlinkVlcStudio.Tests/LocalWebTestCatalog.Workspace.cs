@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Features;
 using StreamlinkVlcStudio.Infrastructure.LocalWeb;
 
 internal static partial class LocalWebTestCatalog
@@ -15,6 +16,72 @@ internal static partial class LocalWebTestCatalog
     private static Task CategoryArtworkLiveAsync() => WithWorkspaceAsync(f => VerifyCategoryArtworkLiveAsync(f.Dependencies));
     private static Task TwitchBadgeRecoveryAsync() => WithWorkspaceAsync(f => VerifyTwitchBadgeRecoveryAsync(f.Dependencies, f.Chats));
     private static Task FollowingLastLiveAsync() => WithWorkspaceAsync(f => VerifyFollowingLastLiveAsync(f.Dependencies));
+
+    private static Task PlayerReplacementAsync() => WithWorkspaceAsync(async fixture =>
+    {
+        var dependencies = fixture.Dependencies;
+        await using var workspace = new LocalWebWorkspace(dependencies);
+        // Use up the global budget so a replacement must reuse the original player's slot.
+        for (var index = 1; index < 32; index++) await dependencies.PlaybackSlots.WaitAsync();
+        var opened = await Call(workspace, "open", new { input = "https://twitch.tv/streamer" });
+        var oldId = opened.GetProperty("id").GetString();
+        Assert.Equal(0, dependencies.PlaybackSlots.CurrentCount);
+
+        var streamlink = (FakeStreamlinkService)dependencies.Streamlink;
+        streamlink.ResolveStreamUrlOverride = (_, _) => Task.FromException<StreamlinkResolvedUrl>(new IOException("Stream unavailable."));
+        var request = new
+        {
+            key = opened.GetProperty("key").GetString(),
+            quality = "720p",
+            replacePlayer = oldId
+        };
+        await Assert.ThrowsAsync<IOException>(() => Call(workspace, "open", request));
+        await Call(workspace, "chat", new { player = oldId, after = 0 });
+        Assert.Equal(0, fixture.Chats.Single().Client.DisposeCount);
+        Assert.Equal(0, dependencies.PlaybackSlots.CurrentCount);
+
+        streamlink.ResolveStreamUrlOverride = null;
+        var replaced = await Call(workspace, "open", request);
+        Assert.Equal("720p", replaced.GetProperty("quality").GetString());
+        Assert.Equal(1, fixture.Chats[0].Client.DisposeCount);
+        await Assert.ThrowsAsync<ArgumentException>(() => Call(workspace, "chat", new { player = oldId, after = 0 }));
+        Assert.Equal(0, dependencies.PlaybackSlots.CurrentCount);
+
+        await Call(workspace, "close", new { player = replaced.GetProperty("id").GetString() });
+        Assert.Equal(1, dependencies.PlaybackSlots.CurrentCount);
+    });
+
+    private static Task MediaDuringPlayerClosureAsync() => WithWorkspaceAsync(async fixture =>
+    {
+        await using var workspace = new LocalWebWorkspace(fixture.Dependencies);
+        var opened = await Call(workspace, "open", new { input = "https://twitch.tv/streamer" });
+        var id = opened.GetProperty("id").GetString()!;
+        var context = new DefaultHttpContext();
+        context.Features.Set<IHttpRequestLifetimeFeature>(new ClosingRequestLifetime(() =>
+            Task.Run(() => Call(workspace, "close", new { player = id })).GetAwaiter().GetResult()));
+
+        await workspace.ServeMediaAsync(context, id, "profile");
+        Assert.Equal(404, context.Response.StatusCode);
+        Assert.Equal(32, fixture.Dependencies.PlaybackSlots.CurrentCount);
+    });
+
+    private sealed class ClosingRequestLifetime(Action closePlayer) : IHttpRequestLifetimeFeature
+    {
+        private Action? onRead = closePlayer;
+        private CancellationToken requestAborted;
+
+        public CancellationToken RequestAborted
+        {
+            get
+            {
+                Interlocked.Exchange(ref onRead, null)?.Invoke();
+                return requestAborted;
+            }
+            set => requestAborted = value;
+        }
+
+        public void Abort() { }
+    }
 
     private static async Task WithWorkspaceAsync(Func<WorkspaceFixture, Task>? verification = null)
     {
@@ -134,7 +201,7 @@ internal static partial class LocalWebTestCatalog
             await Assert.ThrowsAsync<ArgumentException>(() => Call(first, "open", new { input = "http://127.0.0.1/private" }));
             await Assert.ThrowsAsync<ArgumentException>(() => Call(first, "open", new { input = "https://twitch.tv/streamer", quality = "--exec=command" }));
             Assert.Equal(31, dependencies.PlaybackSlots.CurrentCount); // one open player owns one of 32 slots
-            var live = await Call(first, "open", new { input = "https://twitch.tv/streamer" });
+            var live = await Call(first, "open", new { input = "https://twitch.tv/streamer?ref=/videos/12345" });
             var liveId = live.GetProperty("id").GetString();
             await Assert.ThrowsAsync<ArgumentException>(() => Call(first, "chat", new { player = liveId, after = "1" }));
             chats.Single().Client.Receive(new ChatMessage(PlatformKind.Twitch, "streamer", "live", "Wave", DateTimeOffset.UnixEpoch, MessageId: "live-message"));
@@ -144,8 +211,28 @@ internal static partial class LocalWebTestCatalog
             Assert.Equal(0, noDuplicate.GetProperty("messages").GetArrayLength());
             await Assert.ThrowsAsync<ArgumentException>(() => Call(second, "chat/presentation", new { player = liveId, version = 0 }));
             Assert.Equal(0, settings.RecentStreams.Count);
+            settings.RecentStreams =
+            [
+                new()
+                {
+                    Platform = PlatformKind.Twitch,
+                    Channel = "Streamer",
+                    DisplayName = "Streamer Display Name",
+                    CategoryName = "Music",
+                    ThumbnailUrl = "https://static-cdn.jtvnw.net/thumbnail.jpg",
+                    ProfileImageUrl = "https://static-cdn.jtvnw.net/avatar.png",
+                    LastWatchedAtUtc = DateTimeOffset.UnixEpoch
+                }
+            ];
             await Call(first, "started", new { player = liveId });
-            Assert.Equal("streamer", settings.RecentStreams.Single().Channel);
+            var recent = settings.RecentStreams.Single();
+            Assert.Equal("streamer", recent.Channel);
+            Assert.Equal("Streamer Display Name", recent.DisplayName);
+            Assert.Equal("Music", recent.CategoryName);
+            Assert.Equal("https://static-cdn.jtvnw.net/thumbnail.jpg", recent.ThumbnailUrl);
+            Assert.Equal("https://static-cdn.jtvnw.net/avatar.png", recent.ProfileImageUrl);
+            Assert.Equal("720p", recent.LastQuality);
+            Assert.True(recent.LastWatchedAtUtc > DateTimeOffset.UnixEpoch);
             await Call(first, "chat/send", new { player = liveId, message = "hello" });
             Assert.SequenceEqual(new[] { "hello" }, chats.Single().Client.SentMessages);
             var followed = await Call(first, "follow", new { player = liveId }); Assert.True(followed.GetProperty("following").GetBoolean());

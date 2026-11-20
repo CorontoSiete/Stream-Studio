@@ -169,6 +169,20 @@ try {
         -ZipPath (Join-Path $releaseRoot 'StreamlinkVlcStudio-release.zip') -OutputDirectory $releaseRoot | Out-Null
     Write-FixtureChecksums
 
+    $stager = Join-Path $repoRoot 'scripts\stage-release-set.ps1'
+    $stagedRoot = Join-Path $fixtureRoot 'staged'
+    foreach ($entry in $contract.releaseSet | Where-Object checksummed) {
+        $path = Get-ReleaseContractOutputPath -Contract $contract -RepositoryRoot $fixtureRoot -Key $entry.output
+        [IO.Directory]::CreateDirectory((Split-Path -Parent $path)) | Out-Null
+        Copy-Item -LiteralPath (Join-Path $releaseRoot $entry.name) -Destination $path
+    }
+    & $stager -RepositoryRoot $fixtureRoot -Destination $stagedRoot
+    $stageSignature = Get-ReleaseContractOutputPath -Contract $contract -RepositoryRoot $fixtureRoot -Key 'updateSignature'
+    [IO.File]::WriteAllBytes($stageSignature, [byte[]]::new(384))
+    Assert-PublicationFailure { & $stager -RepositoryRoot $fixtureRoot -Destination $stagedRoot } 'signature is invalid'
+    & $stager -RepositoryRoot $fixtureRoot -Check -CheckRoot $stagedRoot
+    Write-Host 'PASS publication: an invalid staged signature preserves the previous verified release set'
+
     $publicationScenario = New-PublicationScenario
     & $publisher -Preflight -Tag $tag -Commit $commit -Repository $repository -ContractPath $contractPath
     Assert-Publication (@($publicationScenario.Calls | Where-Object { $_[0] -ne 'api' }).Count -eq 0) 'Preflight mutated GitHub.'

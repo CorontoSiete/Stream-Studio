@@ -1,10 +1,10 @@
 using System.Globalization;
 using System.IO;
 using System.IO.Pipes;
-using StreamlinkVlcStudio.App.Wpf.ViewModels;
 using StreamlinkVlcStudio.Core.Logging;
 using StreamlinkVlcStudio.Core.Services;
 using StreamlinkVlcStudio.Infrastructure.Threading;
+using StreamlinkVlcStudio.Workspace.ViewModels;
 
 namespace StreamlinkVlcStudio.App.Wpf.Chat;
 

@@ -111,13 +111,18 @@ internal static class StartupHook
         var locations = new SortedDictionary<string, string>(StringComparer.Ordinal);
         var resources = new SortedDictionary<string, string>(StringComparer.Ordinal);
         var app = Assembly.Load("StreamStudio");
-        foreach (var assembly in new[] { app, Assembly.Load("StreamlinkVlcStudio.Core"), Assembly.Load("StreamlinkVlcStudio.Infrastructure") })
+        var productAssemblies = app.GetReferencedAssemblies()
+            .Where(reference => reference.Name?.StartsWith("StreamlinkVlcStudio.", StringComparison.Ordinal) == true)
+            .Select(Assembly.Load)
+            .Prepend(app);
+        foreach (var assembly in productAssemblies)
         {
-            locations.Add(assembly.GetName().Name!, assembly.Location);
+            var assemblyName = assembly.GetName().Name!;
+            locations.Add(assemblyName, assembly.Location);
             foreach (var name in assembly.GetManifestResourceNames())
             {
                 using var stream = assembly.GetManifestResourceStream(name)!;
-                resources.Add(assembly.GetName().Name + "/" + name, Convert.ToHexString(SHA256.HashData(stream)));
+                resources.Add(assemblyName + "/" + name, Convert.ToHexString(SHA256.HashData(stream)));
             }
         }
 
@@ -125,16 +130,26 @@ internal static class StartupHook
             ?? throw new InvalidDataException("The packaged WPF resources are missing.");
         using var reader = new ResourceReader(markup);
         var keys = reader.Cast<System.Collections.DictionaryEntry>().Select(entry => (string)entry.Key).ToArray();
-        if (!keys.Contains("mainwindow.baml", StringComparer.Ordinal) ||
-            !keys.Contains("assets/studio.ico", StringComparer.Ordinal) ||
-            !resources.Keys.Any(name => name.EndsWith(".LocalWeb.Assets.app.js", StringComparison.Ordinal)) ||
-            !resources.Keys.Any(name => name.StartsWith("StreamStudio/StreamStudio.ReleaseNotes.", StringComparison.Ordinal)))
-            throw new InvalidDataException("The package is missing application resources.");
+        if (!keys.Contains("mainwindow.baml", StringComparer.Ordinal) || !keys.Contains("assets/studio.ico", StringComparer.Ordinal))
+            throw new InvalidDataException("The package is missing the main window or application icon.");
+
+        // Package footprint comparisons also use this probe against older releases.
+        var webAssets = locations.ContainsKey("StreamlinkVlcStudio.WebClient")
+            ? "StreamlinkVlcStudio.WebClient/StreamStudio.WebClient."
+            : "StreamlinkVlcStudio.Infrastructure/StreamlinkVlcStudio.Infrastructure.LocalWeb.Assets.";
+        if (!resources.ContainsKey(webAssets + "index.html") || !resources.ContainsKey(webAssets + "app.js"))
+            throw new InvalidDataException("The package is missing browser client resources.");
+
+        var notesAssembly = locations.ContainsKey("StreamlinkVlcStudio.Workspace") ? "StreamlinkVlcStudio.Workspace" : "StreamStudio";
+        if (!resources.Keys.Any(name => name.StartsWith(notesAssembly + "/StreamStudio.ReleaseNotes.", StringComparison.Ordinal)))
+            throw new InvalidDataException("The package is missing release notes.");
 
         return new
         {
-            ManagedAssemblyLocations = locations, ResourceDigests = resources,
-            WpfResourceCount = keys.Length, RenderedControls = PackageWpfProbe.Verify(app)
+            ManagedAssemblyLocations = locations,
+            ResourceDigests = resources,
+            WpfResourceCount = keys.Length,
+            RenderedControls = PackageWpfProbe.Verify(app)
         };
     }
 

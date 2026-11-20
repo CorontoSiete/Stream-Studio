@@ -12,6 +12,7 @@ using StreamlinkVlcStudio.App.Wpf.Services;
 using StreamlinkVlcStudio.Core.Models;
 using StreamlinkVlcStudio.Core.Parsing;
 using WpfImage = System.Windows.Controls.Image;
+using StreamlinkVlcStudio.Workspace.Chat;
 
 namespace StreamlinkVlcStudio.App.Wpf.Controls;
 
@@ -780,7 +781,7 @@ public sealed class DockedChatMessageTextBlock : RichTextBox
         var pendingSpace = false;
         if (emotes is not { Length: > 0 })
         {
-            AppendNativeOverlayTextSegment(
+            AppendTextTokens(
                 message,
                 body,
                 allowCatalogEmotes: allowEmotes,
@@ -799,7 +800,7 @@ public sealed class DockedChatMessageTextBlock : RichTextBox
 
             if (emote.StartIndex > cursor)
             {
-                AppendNativeOverlayTextSegment(
+                AppendTextTokens(
                     message,
                     body[cursor..emote.StartIndex],
                     allowCatalogEmotes: true,
@@ -819,7 +820,7 @@ public sealed class DockedChatMessageTextBlock : RichTextBox
 
         if (cursor < body.Length)
         {
-            AppendNativeOverlayTextSegment(
+            AppendTextTokens(
                 message,
                 body[cursor..],
                 allowCatalogEmotes: true,
@@ -828,7 +829,7 @@ public sealed class DockedChatMessageTextBlock : RichTextBox
         }
     }
 
-    private void AppendNativeOverlayTextSegment(
+    private void AppendTextTokens(
         ChatMessage message,
         string text,
         bool allowCatalogEmotes,
@@ -871,28 +872,9 @@ public sealed class DockedChatMessageTextBlock : RichTextBox
         bool allowCatalogEmotes,
         Brush bodyBrush)
     {
-        var index = 0;
-        while (index < text.Length)
-        {
-            if (char.IsWhiteSpace(text[index]))
-            {
-                while (index < text.Length && char.IsWhiteSpace(text[index]))
-                {
-                    index++;
-                }
-
-                AppendRun(" ", bodyBrush);
-                continue;
-            }
-
-            var tokenStart = index;
-            while (index < text.Length && !char.IsWhiteSpace(text[index]))
-            {
-                index++;
-            }
-
-            AppendCatalogEmoteOrText(message, text[tokenStart..index], allowCatalogEmotes, bodyBrush);
-        }
+        var pendingSpace = false;
+        AppendTextTokens(message, text, allowCatalogEmotes, bodyBrush, ref pendingSpace);
+        if (pendingSpace) AppendRun(" ", bodyBrush);
     }
 
     private void AppendEmoteOrText(ChatMessage message, ChatEmote emote, Brush bodyBrush)

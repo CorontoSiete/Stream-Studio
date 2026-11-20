@@ -27,9 +27,12 @@ internal static partial class LocalWebTestCatalog
             for (var i = 0; i < 5; i++) await Call(workspace, "live/archive", new { player = id });
             Assert.Equal(1, replay.CallCount);
             var key = archive.GetProperty("key").GetString()!;
+            var replayKey = (await Call(workspace, "replay", new { player = id })).GetProperty("key").GetString();
+            Assert.True(key != replayKey);
             var opened = await Call(workspace, "open", new { key, liveArchive = true, replacePlayer = id });
             Assert.True(opened.GetProperty("isLiveArchive").GetBoolean());
             Assert.True(opened.GetProperty("isVod").GetBoolean());
+            Assert.Equal(30d, opened.GetProperty("duration").GetDouble());
             var url = opened.GetProperty("url").GetString()!.Split('/');
             var context = new DefaultHttpContext();
             context.Request.Method = "GET"; context.Response.Body = new MemoryStream();
@@ -40,7 +43,7 @@ internal static partial class LocalWebTestCatalog
             Assert.Equal(false, playlist.Contains("#EXT-X-ENDLIST", StringComparison.Ordinal));
             Assert.Equal(false, playlist.Contains("private", StringComparison.Ordinal));
             // Opening the same VOD normally must retain finite VOD semantics.
-            var normal = await Call(workspace, "open", new { key });
+            var normal = await Call(workspace, "open", new { key = replayKey, liveArchive = true });
             Assert.Equal(false, normal.GetProperty("isLiveArchive").GetBoolean());
         }
     });
@@ -64,6 +67,12 @@ internal static partial class LocalWebTestCatalog
 
     private static async Task LiveArchivePlaylistsAsync()
     {
+        // A byte prefix can end cleanly after one complete segment and look like a valid archive.
+        using (var partial = ArchiveMedia("test", new("https://cdn.example/archive.m3u8"), _ => ArchiveFixture, HttpStatusCode.PartialContent))
+            await Assert.ThrowsAsync<InvalidDataException>(() => partial.ReadArchiveDurationAsync("best", default));
+        using (var incomplete = ArchiveMedia("test", new("https://cdn.example/master.m3u8"), uri => uri.AbsolutePath == "/master.m3u8"
+            ? "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=100\nvalid.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=200\n" : ArchiveFixture))
+            await Assert.ThrowsAsync<InvalidDataException>(() => incomplete.ReadArchiveDurationAsync("best", default, selectVariant: true));
         var maximumArchive = "#EXTM3U\n#EXT-X-TARGETDURATION:3600\n" +
             string.Concat(Enumerable.Repeat("#EXTINF:3600,\nhour.ts\n", 14 * 24));
         using (var media = ArchiveMedia("test", new("https://cdn.example/archive.m3u8"), _ => maximumArchive))
@@ -111,6 +120,21 @@ internal static partial class LocalWebTestCatalog
 
     private static async Task LiveArchivePinnedRenditionAsync()
     {
+        using (var variants = ArchiveMedia("test", new("https://cdn.example/master.m3u8"), uri => uri.AbsolutePath switch
+        {
+            "/master.m3u8" => "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=100,CODECS=\"mp4a.40.2\"\naudio.m3u8\n" +
+                "#EXT-X-STREAM-INF:BANDWIDTH=2000,RESOLUTION=1280x720,FRAME-RATE=59.94\nfast.m3u8\n" +
+                "#EXT-X-STREAM-INF:BANDWIDTH=3000,RESOLUTION=1280x720,FRAME-RATE=30\nslow.m3u8\n",
+            "/audio.m3u8" => ArchiveFixture.Replace("#EXTINF:10,", "#EXTINF:4,", StringComparison.Ordinal),
+            "/fast.m3u8" => ArchiveFixture,
+            _ => ArchiveFixture.Replace("#EXTINF:10,", "#EXTINF:20,", StringComparison.Ordinal)
+        }))
+        {
+            foreach (var audioQuality in new[] { "audio_only", "audio", "Audio Only" })
+                Assert.Equal(12d, await variants.ReadArchiveDurationAsync(audioQuality, default));
+            Assert.Equal(30d, await variants.ReadArchiveDurationAsync("worst", default));
+            Assert.Equal(30d, await variants.ReadArchiveDurationAsync("720p60", default));
+        }
         var refreshed = false;
         using var media = ArchiveMedia("test", new("https://cdn.example/master.m3u8"), uri => uri.AbsolutePath switch
         {
@@ -124,6 +148,42 @@ internal static partial class LocalWebTestCatalog
         Assert.Equal(30d, await media.ReadArchiveDurationAsync("720p", default, selectVariant: true));
         refreshed = true;
         Assert.Equal(36d, await media.ReadArchiveDurationAsync("720p", default));
+    }
+
+    private static async Task LiveArchiveRotatingRedirectAsync()
+    {
+        var entry = new Uri("https://cdn.example/moving-archive");
+        var revision = 1;
+        using var media = new LocalWebMedia("test", entry, new HttpClient(new AsyncHttpMessageHandler((request, _) =>
+        {
+            var response = new HttpResponseMessage { RequestMessage = request };
+            if (request.RequestUri == entry)
+            {
+                response.StatusCode = HttpStatusCode.Redirect;
+                response.Headers.Location = new Uri($"/revision-{revision}/archive.m3u8", UriKind.Relative);
+            }
+            else if (request.RequestUri?.AbsolutePath == $"/revision-{revision}/archive.m3u8")
+            {
+                response.Content = new StringContent(revision == 1 ? ArchiveFixture :
+                    ArchiveFixture.Replace("#EXTINF:10,", "#EXTINF:12,", StringComparison.Ordinal));
+            }
+            else
+            {
+                response.StatusCode = HttpStatusCode.NotFound;
+            }
+            return Task.FromResult(response);
+        })));
+
+        Assert.Equal(30d, await media.ReadArchiveDurationAsync("best", default, selectVariant: true));
+        revision = 2;
+        var context = new DefaultHttpContext();
+        context.Request.Method = "GET";
+        using var body = new MemoryStream();
+        context.Response.Body = body;
+        await media.ServeAsync(context, media.Root);
+        Assert.Equal(StatusCodes.Status200OK, context.Response.StatusCode);
+        Assert.True(System.Text.Encoding.UTF8.GetString(body.ToArray()).Contains("#EXTINF:12,", StringComparison.Ordinal));
+        Assert.Equal(36d, await media.ReadArchiveDurationAsync("best", default));
     }
 
     private static Task LiveArchiveFallbackAsync() => WithWorkspaceAsync(async fixture =>
@@ -183,8 +243,8 @@ internal static partial class LocalWebTestCatalog
         Assert.Equal(false, requests.Any(path => path.EndsWith("0-unmuted.ts", StringComparison.Ordinal)));
     });
 
-    private static LocalWebMedia ArchiveMedia(string id, Uri uri, Func<Uri, string> playlist) => new(id, uri,
-        new HttpClient(new AsyncHttpMessageHandler((request, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+    private static LocalWebMedia ArchiveMedia(string id, Uri uri, Func<Uri, string> playlist, HttpStatusCode status = HttpStatusCode.OK) => new(id, uri,
+        new HttpClient(new AsyncHttpMessageHandler((request, _) => Task.FromResult(new HttpResponseMessage(status)
         {
             RequestMessage = request,
             Content = new StringContent(playlist(request.RequestUri!))

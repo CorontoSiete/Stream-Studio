@@ -2205,8 +2205,9 @@ public sealed partial class LibVlcPlaybackEngine : IPlaybackEngine
 
     private static string BuildOverlaySubSourceOption(string pipeName, string positionStatePath)
     {
-        var optionPositionStatePath = positionStatePath.Replace('\\', '/');
-        return $"--sub-source=myoverlay{{pipe={pipeName},position-state-path={optionPositionStatePath},show-placeholder={NativeOverlayShowPlaceholder}}}";
+        // VLC treats commas, braces, and quotes as delimiters in module options.
+        var optionPositionStatePath = positionStatePath.Replace('\\', '/').Replace("\"", "\\\"", StringComparison.Ordinal);
+        return $"--sub-source=myoverlay{{pipe={pipeName},position-state-path=\"{optionPositionStatePath}\",show-placeholder={NativeOverlayShowPlaceholder}}}";
     }
 
     private void SetVlcEnvironmentVariable(string name, string value)

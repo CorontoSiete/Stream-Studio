@@ -181,17 +181,9 @@ internal static partial class ApplicationTestCatalog
         var handle = NativeWindowTest.CreateHiddenParentWindow();
         try
         {
-            await using var tab = new StreamTabViewModel(new StreamTabViewModelDependencies
-            {
-                Target = VodResumeTestCatalog.Target() with { MediaDuration = TimeSpan.FromSeconds(durationSeconds) },
-                Quality = "best",
-                StreamlinkService = streamlink,
-                PlaybackFactory = factory,
-                ChatFactory = new FakeChatClientFactory(),
-                Logger = logger,
-                Dispatch = action => action(),
-                VodPlaybackHistory = history
-            });
+            var target = VodResumeTestCatalog.Target() with { MediaDuration = TimeSpan.FromSeconds(durationSeconds) };
+            await using var tab = TestViewModels.CreateTab(target, "best", streamlink, factory,
+                new FakeChatClientFactory(), logger, action => action(), vodPlaybackHistory: history);
             tab.SetVideoHandle(handle);
             tab.IsMuted = true;
             await tab.StartAsync(settings);

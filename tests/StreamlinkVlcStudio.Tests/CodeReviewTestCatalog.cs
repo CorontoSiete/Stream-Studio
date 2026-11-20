@@ -18,12 +18,66 @@ internal static partial class CodeReviewTestCatalog
         ("review: optional JSON reads share bounds decoding and timeout handling", OptionalJsonReadsAsync),
         ("review: update checks leave the checking state after timeout or cancellation", UpdateCheckCancellationAsync),
         ("review: playback releases its parking surface when engine disposal fails", PlaybackCleanupAfterDisposeFailureAsync),
+        ("review: engine timeout retains its cause in playback diagnostics", PlaybackEngineTimeoutAsync),
+        ("review: stalled playback cancellation callbacks cannot block shutdown", PlaybackCancellationDeadlineAsync),
         ("review: playback cleanup drains when its error reporting fails", PlaybackCleanupReportingFailureAsync),
         ("review: direct VOD resolution honors the custom HTTP environment", DirectVodHttpEnvironmentAsync),
         ("review: chat links keep balanced delimiters while trimming long suffixes", ChatLinkDelimitersAsync),
         ("review: replay seek commits retain their requested offset during clock refresh", ReplaySeekCommitOffsetAsync),
         ("review: portable command line parsing matches Windows for whitespace and quotes", PortableTokenizerMatchesWindows)
     ];
+
+    private static async Task PlaybackEngineTimeoutAsync()
+    {
+        var logger = new MemoryLogger();
+        var error = new TimeoutException("The engine's media stop timed out.");
+        var engine = new FakePlaybackEngine { StopCompletion = Task.FromException(error) };
+        var cleanup = new PlaybackResourceCoordinator(logger, () => "timeout test");
+
+        await cleanup.StopAsync(engine, TimeSpan.FromSeconds(5), null, CancellationToken.None);
+
+        Assert.True(ReferenceEquals(error, logger.Entries.Single().Exception));
+    }
+
+    private static async Task PlaybackCancellationDeadlineAsync()
+    {
+        using var releaseCallback = new ManualResetEventSlim();
+        var callbackStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseStop = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var engine = new FakePlaybackEngine
+        {
+            StopOverride = async token =>
+            {
+                using var registration = token.Register(() =>
+                {
+                    callbackStarted.TrySetResult();
+                    releaseCallback.Wait(TimeSpan.FromSeconds(10));
+                });
+                await releaseStop.Task;
+            }
+        };
+        var surface = new DisposalProbe();
+        var cleanup = new PlaybackResourceCoordinator(new MemoryLogger(), () => "stalled callback");
+        Task? background = null;
+        var closing = cleanup.StopAsync(engine, TimeSpan.FromMilliseconds(100), surface,
+            CancellationToken.None, task => background = task);
+        try
+        {
+            await callbackStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await closing.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.NotNull(background);
+            Assert.Equal(false, background!.IsCompleted);
+            Assert.Equal(false, surface.Disposed);
+        }
+        finally
+        {
+            releaseCallback.Set();
+            releaseStop.TrySetResult();
+            await closing;
+            if (background is not null) await background.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        Assert.True(surface.Disposed);
+    }
 
     private static async Task AtomicWritesPreserveDestinationAsync()
     {

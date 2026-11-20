@@ -1,5 +1,3 @@
-using System.Globalization;
-using System.Text.Json;
 using StreamlinkVlcStudio.Core.Models;
 using StreamlinkVlcStudio.Core.Services;
 using StreamlinkVlcStudio.Core.Twitch;
@@ -38,27 +36,7 @@ internal sealed class TwitchVodUrlResolver
         if (string.IsNullOrEmpty(id) || !id.All(char.IsAsciiDigit))
             throw new InvalidDataException("A numeric Twitch video ID is required.");
 
-        // Same playback-token operation, player type, codecs and Usher parameters as
-        // Streamlink's Twitch plugin. Tokens and signed master URLs never enter logs.
-        var payload = JsonSerializer.Serialize(new
-        {
-            operationName = "PlaybackAccessToken",
-            variables = new { isLive = false, login = "", isVod = true, vodID = id, playerType = "embed", platform = "site" },
-            extensions = new { persistedQuery = new { version = 1, sha256Hash = "ed230aa1e33e07eebb8928504583da78a5173989fadfb1ac94be06a04f3cdbe9" } }
-        });
-        using var document = await new TwitchGraphQlTransport(httpClient).SendAsync(payload,
-            TwitchGraphQlTransport.PublicClientId, TwitchGraphQlTransport.CreateDeviceId(), cancellationToken).ConfigureAwait(false);
-        if (!document.RootElement.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Object ||
-            !data.TryGetProperty("videoPlaybackAccessToken", out var token) || token.ValueKind != JsonValueKind.Object ||
-            !token.TryGetProperty("signature", out var signature) || signature.ValueKind != JsonValueKind.String ||
-            !token.TryGetProperty("value", out var value) || value.ValueKind != JsonValueKind.String ||
-            string.IsNullOrWhiteSpace(signature.GetString()) || string.IsNullOrWhiteSpace(value.GetString()))
-            throw new InvalidDataException("Twitch did not return a video playback token.");
-
-        var masterUri = new Uri($"https://usher.ttvnw.net/vod/v2/{id}.m3u8?platform=web" +
-            $"&p={Random.Shared.Next(999999).ToString(CultureInfo.InvariantCulture)}&allow_source=true&allow_audio_only=true" +
-            "&playlist_include_framerate=true&supported_codecs=h264" +
-            $"&nauthsig={Uri.EscapeDataString(signature.GetString()!)}&nauth={Uri.EscapeDataString(value.GetString()!)}");
+        var masterUri = await new TwitchGraphQlTransport(httpClient).GetPlaybackMasterUriAsync(request.Target, cancellationToken).ConfigureAwait(false);
         var master = await ValidatedReplayHttpClient.ReadPlaylistAsync(httpClient, validator, masterUri,
             PlatformKind.Twitch, cancellationToken).ConfigureAwait(false);
         var selected = TwitchVodVariantPlaylist.Select(master.Content, master.Uri, request.Quality);

@@ -1,7 +1,7 @@
 using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Windows.Threading;
-using StreamlinkVlcStudio.App.Wpf.ViewModels;
+using StreamlinkVlcStudio.Workspace.ViewModels;
 
 namespace StreamlinkVlcStudio.App.Wpf;
 

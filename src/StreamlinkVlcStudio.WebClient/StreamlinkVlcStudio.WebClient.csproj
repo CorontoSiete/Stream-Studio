@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\StreamlinkVlcStudio.Infrastructure\StreamlinkVlcStudio.Infrastructure.csproj" />
+    <EmbeddedResource Include="Assets\*" LogicalName="StreamStudio.WebClient.%(Filename)%(Extension)" />
+    <EmbeddedResource Include="..\..\shared\Studio.svg" LogicalName="StreamStudio.WebClient.studio-logo.svg" />
+  </ItemGroup>
+</Project>

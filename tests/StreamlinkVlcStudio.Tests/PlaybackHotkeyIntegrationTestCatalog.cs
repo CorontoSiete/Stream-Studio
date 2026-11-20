@@ -13,9 +13,9 @@ internal static class PlaybackHotkeyIntegrationTestCatalog
         ("Back hotkey mouse gestures parse exact modifiers and stay distinct from keys", MouseGesturesAsync)
     ];
 
-    private static Task DefaultsAndRemappingAsync() => RunOnHeadlessStaAsync(() =>
+    private static Task DefaultsAndRemappingAsync() => TestSta.RunOffscreenAsync(async () =>
     {
-        using var fixture = new Fixture();
+        await using var fixture = new Fixture();
         Assert.True(fixture.Press(Key.M).Handled);
         Assert.True(fixture.ViewModel.IsMultiStreamEnabled);
         Assert.True(fixture.Press(Key.Up).Handled);
@@ -50,9 +50,9 @@ internal static class PlaybackHotkeyIntegrationTestCatalog
         Assert.Equal("85%", ((TextBlock)osd.FindName("Percent")).Text);
     });
 
-    private static Task ExistingTabBindingPrecedenceAsync() => RunOnHeadlessStaAsync(() =>
+    private static Task ExistingTabBindingPrecedenceAsync() => TestSta.RunOffscreenAsync(async () =>
     {
-        using var fixture = new Fixture();
+        await using var fixture = new Fixture();
         fixture.ViewModel.SelectedTab = fixture.Second;
         fixture.Settings.Hotkeys.PreviousTab = "Up";
 
@@ -76,9 +76,9 @@ internal static class PlaybackHotkeyIntegrationTestCatalog
         Assert.Equal(false, fixture.ViewModel.IsMultiStreamEnabled);
     });
 
-    private static Task RepeatBoundsAndWheelAsync() => RunOnHeadlessStaAsync(() =>
+    private static Task RepeatBoundsAndWheelAsync() => TestSta.RunOffscreenAsync(async () =>
     {
-        using var fixture = new Fixture();
+        await using var fixture = new Fixture();
         Assert.True(fixture.Window.TryExecutePlaybackHotkey(Key.M, ModifierKeys.None, null));
         Assert.True(fixture.ViewModel.IsMultiStreamEnabled);
         for (var repeat = 0; repeat < 3; repeat++)
@@ -122,9 +122,9 @@ internal static class PlaybackHotkeyIntegrationTestCatalog
         Assert.True(ReferenceEquals(fixture.First, fixture.ViewModel.SelectedTab));
     });
 
-    private static Task InputGuardsAsync() => RunOnHeadlessStaAsync(() =>
+    private static Task InputGuardsAsync() => TestSta.RunOffscreenAsync(async () =>
     {
-        using var fixture = new Fixture();
+        await using var fixture = new Fixture();
         foreach (var editor in new IInputElement[] { new TextBox(), new RichTextBox(), new PasswordBox() })
         {
             foreach (var key in new[] { Key.M, Key.Up, Key.Down })
@@ -160,9 +160,9 @@ internal static class PlaybackHotkeyIntegrationTestCatalog
         Assert.Equal(80, fixture.Second.Volume);
     });
 
-    private static Task RecorderBindingsAsync() => RunOnHeadlessStaAsync(() =>
+    private static Task RecorderBindingsAsync() => TestSta.RunOffscreenAsync(async () =>
     {
-        using var fixture = new Fixture();
+        await using var fixture = new Fixture();
         fixture.ViewModel.ToggleSettingsCommand.Execute(null);
         fixture.ViewModel.ShowHotkeysSettingsCommand.Execute(null);
         fixture.FlushBindings();
@@ -200,18 +200,19 @@ internal static class PlaybackHotkeyIntegrationTestCatalog
         AssertRecorderBinding(down, "Settings.Hotkeys.VolumeDown", "Down");
     });
 
-    private static Task ToolbarCommandsAsync() => RunOnHeadlessStaAsync(() =>
+    private static Task ToolbarCommandsAsync() => TestSta.RunOffscreenAsync(async () =>
     {
-        using var fixture = new Fixture();
+        await using var fixture = new Fixture();
         fixture.FlushBindings();
         var grid = (Button)fixture.Window.FindName("TopMultiStreamButton");
         Assert.Equal<object?>(null, fixture.Window.FindName("TopBackButton"));
         BindingOperations.GetBindingExpression(grid, Button.CommandProperty)!.UpdateTarget();
-        Assert.Equal("Toggle multi-stream grid", System.Windows.Automation.AutomationProperties.GetName(grid));
+        Assert.Equal("Show multi-stream grid", System.Windows.Automation.AutomationProperties.GetName(grid));
         Assert.True(ReferenceEquals(fixture.ViewModel.ToggleMultiStreamCommand, grid.Command));
         InvokePrivate(grid, "OnClick");
         fixture.FlushBindings();
         Assert.True(fixture.ViewModel.IsMultiStreamEnabled);
+        Assert.Equal("Show single stream", System.Windows.Automation.AutomationProperties.GetName(grid));
         InvokePrivate(grid, "OnClick");
         fixture.FlushBindings();
         Assert.Equal(false, fixture.ViewModel.IsMultiStreamEnabled);
@@ -231,9 +232,9 @@ internal static class PlaybackHotkeyIntegrationTestCatalog
         Assert.True(ReferenceEquals(fixture.First, fixture.ViewModel.SelectedTab));
     });
 
-    private static Task BackNavigationAsync() => RunOnHeadlessStaAsync(() =>
+    private static Task BackNavigationAsync() => TestSta.RunOffscreenAsync(async () =>
     {
-        using var fixture = new Fixture();
+        await using var fixture = new Fixture();
         var back = HotkeyGesture.FromMouseButton(MouseButton.XButton1, ModifierKeys.None);
         fixture.ViewModel.SelectHomeCommand.Execute(null);
         fixture.ViewModel.ShowRecentHomePageCommand.Execute(null);
@@ -274,9 +275,9 @@ internal static class PlaybackHotkeyIntegrationTestCatalog
         Assert.Equal(false, fixture.Window.TryExecuteNativeMouseAppCommand(IntPtr.Zero, new IntPtr(unchecked((int)0x80010000))));
     });
 
-    private static Task BackRecorderAsync() => RunOnHeadlessStaAsync(() =>
+    private static Task BackRecorderAsync() => TestSta.RunOffscreenAsync(async () =>
     {
-        using var fixture = new Fixture();
+        await using var fixture = new Fixture();
         fixture.ViewModel.ToggleSettingsCommand.Execute(null);
         fixture.ViewModel.ShowHotkeysSettingsCommand.Execute(null);
         fixture.FlushBindings();
@@ -319,7 +320,7 @@ internal static class PlaybackHotkeyIntegrationTestCatalog
         Assert.Equal("M", fixture.Settings.Hotkeys.ToggleMultiStream);
     });
 
-    private static Task MouseGesturesAsync() => RunOnHeadlessStaAsync(() =>
+    private static Task MouseGesturesAsync()
     {
         Assert.True(HotkeyGesture.TryParse("control+xbutton1", out var mouse));
         Assert.Equal("Ctrl+Mouse4", mouse.Serialize());
@@ -328,7 +329,8 @@ internal static class PlaybackHotkeyIntegrationTestCatalog
         Assert.Equal(false, HotkeyGesture.Matches("Ctrl+Mouse4", "Mouse4", Key.None, ModifierKeys.Control));
         Assert.Equal(false, HotkeyGesture.TryParse("Mouse3", out _));
         Assert.Equal(false, HotkeyGesture.TryParse("Ctrl+Ctrl+Mouse4", out _));
-    });
+        return Task.CompletedTask;
+    }
 
     private static void AssertRecorderBinding(HotkeyRecorderButton recorder, string path, string gesture)
     {
@@ -347,28 +349,7 @@ internal static class PlaybackHotkeyIntegrationTestCatalog
         method!.Invoke(target, arguments);
     }
 
-    private static Task RunOnHeadlessStaAsync(Action action)
-    {
-        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var thread = new Thread(() =>
-        {
-            try
-            {
-                action();
-                completion.TrySetResult();
-            }
-            catch (Exception ex)
-            {
-                completion.TrySetException(ex);
-            }
-        })
-        { IsBackground = true, Name = "PlaybackHotkeyIntegrationTests" };
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-        return completion.Task;
-    }
-
-    private sealed class Fixture : IDisposable
+    private sealed class Fixture : IAsyncDisposable
     {
         public Fixture()
         {
@@ -418,13 +399,13 @@ internal static class PlaybackHotkeyIntegrationTestCatalog
             return args;
         }
 
-        public void Dispose()
+        public async ValueTask DisposeAsync()
         {
             Window.DataContext = null;
             typeof(MainWindow).GetField("closeConfirmed", BindingFlags.Instance | BindingFlags.NonPublic)!
                 .SetValue(Window, true);
             Window.Close();
-            ViewModel.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            await ViewModel.DisposeAsync();
         }
     }
 

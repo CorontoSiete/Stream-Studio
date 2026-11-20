@@ -12,6 +12,7 @@ using StreamlinkVlcStudio.Core.Settings;
 using StreamlinkVlcStudio.Infrastructure.Chat;
 using StreamlinkVlcStudio.Infrastructure.LocalWeb;
 using StreamlinkVlcStudio.Infrastructure.Vod;
+using StreamlinkVlcStudio.WebClient;
 
 namespace StreamlinkVlcStudio.App.Wpf;
 
@@ -273,7 +274,7 @@ public partial class MainWindow
                 localWebCertificates = await Task.Run(() => LocalWebCertificate.GetOrCreate(network.Address), startup.Token);
                 startup.Token.ThrowIfCancellationRequested();
                 localWebServer = await LocalWebServer.StartAsync(network, localWebCertificates.Server, endpoint.Port,
-                    () => new LocalWebWorkspace(dependencies), users, startup.Token);
+                    () => new LocalWebWorkspace(dependencies), users, startup.Token, BundledWebClient.Assets);
                 if (automatic || startup.IsCancellationRequested) return;
 
                 settings.LocalWebServerEndpoint = endpoint;

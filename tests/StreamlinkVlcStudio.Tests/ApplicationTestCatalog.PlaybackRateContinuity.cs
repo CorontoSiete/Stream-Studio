@@ -1,5 +1,3 @@
-using System.Net.Http;
-
 internal static partial class ApplicationTestCatalog
 {
     private static Task NativePlaybackRateContinuityAsync(bool growing) => TestSta.RunOffscreenAsync(async () =>

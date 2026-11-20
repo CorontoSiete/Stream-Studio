@@ -34,21 +34,6 @@ if ($Repository -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') {
     throw "Repository must be an owner/name pair: $Repository"
 }
 
-function Get-ArtifactRecord([string]$Path, [string]$ExpectedName) {
-    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
-        throw "Release metadata input is missing: $Path"
-    }
-    $file = Get-Item -LiteralPath $Path
-    if ($file.Name -cne $ExpectedName -or $file.Length -le 0) {
-        throw "Release metadata input must be a non-empty $ExpectedName file: $Path"
-    }
-    [ordered]@{
-        name = $file.Name
-        length = $file.Length
-        sha256 = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-    }
-}
-
 $authenticode = Get-AuthenticodeSigningConfiguration
 $metadata = [ordered]@{
     schemaVersion = 2
@@ -91,7 +76,7 @@ $metadata = [ordered]@{
     createdUtc = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
 }
 
-$fullOutputPath = [IO.Path]::GetFullPath($OutputPath)
+$fullOutputPath = Resolve-ReleasePath $OutputPath
 $parent = Split-Path -Parent $fullOutputPath
 [IO.Directory]::CreateDirectory($parent) | Out-Null
 $temporary = "$fullOutputPath.$([Guid]::NewGuid().ToString('N')).tmp"

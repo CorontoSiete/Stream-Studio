@@ -237,21 +237,21 @@ internal static class ChatCatalogResourceTestCatalog
             StreamInputParser.FromChannel(PlatformKind.Twitch, "streamer") with { BroadcasterId = "123" },
             "best", new FakeStreamlinkService(), new FakePlaybackEngineFactory(), new FakeChatClientFactory(),
             new MemoryLogger(), pending.Enqueue);
-        var method = typeof(StreamTabViewModel).GetMethod("OnChatRenderCatalogChanged", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var overlay = TestViewModels.GetNativeOverlay(tab);
         var version = typeof(NativeChatOverlayController).GetField("nativeReplayOverlayRenderContentVersion", BindingFlags.Instance | BindingFlags.NonPublic)!;
-        var initial = (long)version.GetValue(tab.NativeOverlay)!;
+        var initial = (long)version.GetValue(overlay)!;
         pending.Clear();
-        void Notify(EventArgs changes) => method.Invoke(tab, [null, changes]);
+        void Notify(EventArgs changes) => overlay.OnChatRenderCatalogChanged(null, changes);
         Notify(new CatalogChangedEventArgs([CatalogChangeScope.ForChannel(PlatformKind.Kick, "streamer")]));
         Notify(new CatalogChangedEventArgs([CatalogChangeScope.ForChannel(PlatformKind.Twitch, "other")]));
         Notify(new CatalogChangedEventArgs([CatalogChangeScope.ForTwitchRoom("456")]));
-        Assert.Equal(initial, (long)version.GetValue(tab.NativeOverlay)!);
+        Assert.Equal(initial, (long)version.GetValue(overlay)!);
         Assert.Equal(0, pending.Count);
         Notify(new CatalogChangedEventArgs([CatalogChangeScope.ForChannel(PlatformKind.Twitch, " STREAMER ")]));
         Notify(new CatalogChangedEventArgs([CatalogChangeScope.ForTwitchRoom("123")]));
         Notify(new CatalogChangedEventArgs([CatalogChangeScope.ForChannel(PlatformKind.Twitch)]));
         Notify(EventArgs.Empty);
-        Assert.Equal(initial + 4, (long)version.GetValue(tab.NativeOverlay)!);
+        Assert.Equal(initial + 4, (long)version.GetValue(overlay)!);
         Assert.Equal(4, pending.Count);
         var roomChange = new CatalogChangedEventArgs([CatalogChangeScope.ForTwitchRoom("123")]);
         Assert.True(roomChange.MayAffect(tab.Target with { BroadcasterId = "" }), "Unresolved live targets must still refresh.");

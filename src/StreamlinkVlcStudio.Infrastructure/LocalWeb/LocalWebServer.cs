@@ -1,4 +1,4 @@
-using System.Net;
+using System.Collections.Frozen;
 using System.Security.Authentication;
 using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using StreamlinkVlcStudio.Core.Json;
 using StreamlinkVlcStudio.Infrastructure.Threading;
 
 namespace StreamlinkVlcStudio.Infrastructure.LocalWeb;
@@ -42,17 +43,19 @@ public sealed class LocalWebServer : IAsyncDisposable
     private Task? maintenance;
     private bool disposed;
     private Task? disposalTask;
-    private static readonly IReadOnlyDictionary<string, (byte[] Bytes, string Type)> Assets = LoadAssets();
+    private readonly FrozenDictionary<string, LocalWebStaticAsset> assets;
     public Uri Address { get; private set; } = null!;
     internal LocalWebUserStore Users => users;
 
     private LocalWebServer(LocalWebInterface network, X509Certificate2 certificate, int port,
-        Func<ILocalWebWorkspace> createWorkspace, LocalWebUserStore users, Func<bool> networkIsCurrent)
+        Func<ILocalWebWorkspace> createWorkspace, LocalWebUserStore users, Func<bool> networkIsCurrent,
+        IReadOnlyDictionary<string, LocalWebStaticAsset>? assets)
     {
         this.network = network;
         this.createWorkspace = createWorkspace;
         this.users = users;
         this.networkIsCurrent = networkIsCurrent;
+        this.assets = assets?.ToFrozenDictionary(StringComparer.Ordinal) ?? FrozenDictionary<string, LocalWebStaticAsset>.Empty;
         // Empty configuration prevents environment variables/appsettings from adding public listeners.
         var builder = WebApplication.CreateEmptyBuilder(new WebApplicationOptions { ApplicationName = typeof(LocalWebServer).Assembly.FullName });
         builder.Logging.ClearProviders(); // Never log passwords, cookies, signed URLs, or account data.
@@ -77,18 +80,20 @@ public sealed class LocalWebServer : IAsyncDisposable
     }
 
     public static Task<LocalWebServer> StartAsync(LocalWebInterface network, X509Certificate2 certificate,
-        int port, Func<ILocalWebWorkspace> createWorkspace, LocalWebUserStore users, CancellationToken cancellationToken = default)
+        int port, Func<ILocalWebWorkspace> createWorkspace, LocalWebUserStore users, CancellationToken cancellationToken = default,
+        IReadOnlyDictionary<string, LocalWebStaticAsset>? assets = null)
     {
         if (!network.IsCurrent()) throw new InvalidOperationException("Choose a currently connected private Ethernet or Wi-Fi interface.");
         if (port is < 1024 or > 65535) throw new ArgumentOutOfRangeException(nameof(port));
-        return StartCoreAsync(network, certificate, port, createWorkspace, users, network.IsCurrent, cancellationToken);
+        return StartCoreAsync(network, certificate, port, createWorkspace, users, network.IsCurrent, cancellationToken, assets);
     }
 
     internal static async Task<LocalWebServer> StartCoreAsync(LocalWebInterface network, X509Certificate2 certificate,
-        int port, Func<ILocalWebWorkspace> createWorkspace, LocalWebUserStore users, Func<bool> networkIsCurrent, CancellationToken cancellationToken = default)
+        int port, Func<ILocalWebWorkspace> createWorkspace, LocalWebUserStore users, Func<bool> networkIsCurrent,
+        CancellationToken cancellationToken = default, IReadOnlyDictionary<string, LocalWebStaticAsset>? assets = null)
     {
         if (users.ListUsers().Count == 0) throw new InvalidOperationException("Create a web account before starting the server.");
-        var server = new LocalWebServer(network, certificate, port, createWorkspace, users, networkIsCurrent);
+        var server = new LocalWebServer(network, certificate, port, createWorkspace, users, networkIsCurrent, assets);
         try
         {
             await server.app.StartAsync(cancellationToken).ConfigureAwait(false);
@@ -133,19 +138,24 @@ public sealed class LocalWebServer : IAsyncDisposable
         response.Headers.ContentSecurityPolicy = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' https:; connect-src 'self'; media-src 'self' blob:; worker-src blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
         var peer = context.Connection.RemoteIpAddress;
         if (peer?.IsIPv4MappedToIPv6 == true) peer = peer.MapToIPv4();
-        if (disposed || peer is null || !network.Allows(peer) || !networkIsCurrent() ||
-            !request.IsHttps || request.Host.Value != Address.Authority ||
+        if (Volatile.Read(ref disposed) || Address is not { } address ||
+            peer is null || !network.Allows(peer) || !networkIsCurrent() ||
+            !request.IsHttps || request.Host.Value != address.Authority ||
             request.QueryString.HasValue && (!request.Path.StartsWithSegments("/media") || !ValidMediaQuery(request.Query)))
         { response.StatusCode = 403; return; }
         var origin = request.Headers.Origin;
-        if (origin.Count > 1 || origin.Count == 1 && origin[0] != Address.GetLeftPart(UriPartial.Authority) ||
+        if (origin.Count > 1 || origin.Count == 1 && origin[0] != address.GetLeftPart(UriPartial.Authority) ||
             request.Headers["Sec-Fetch-Site"].ToString() is "cross-site")
         { response.StatusCode = 403; return; }
         var path = request.Path.Value ?? "";
-        if (request.Method == "GET" && Assets.TryGetValue(path, out var asset))
+        if (request.Method is "GET" or "HEAD" && assets.TryGetValue(path, out var asset) &&
+            !request.Path.StartsWithSegments("/api") && !request.Path.StartsWithSegments("/media") &&
+            !request.Path.StartsWithSegments("/category-artwork") && !request.Path.StartsWithSegments("/chat-assets"))
         {
-            response.ContentType = asset.Type;
-            await response.Body.WriteAsync(asset.Bytes, context.RequestAborted).ConfigureAwait(false);
+            response.ContentType = asset.ContentType;
+            response.ContentLength = asset.Content.Length;
+            if (request.Method == "GET")
+                await response.Body.WriteAsync(asset.Content, context.RequestAborted).ConfigureAwait(false);
             return;
         }
         if (request.Method == "POST" && (origin.Count != 1 || !request.HasJsonContentType() ||
@@ -158,8 +168,8 @@ public sealed class LocalWebServer : IAsyncDisposable
                 using var loginDeadline = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted, lifetime.Token);
                 loginDeadline.CancelAfter(TimeSpan.FromSeconds(10));
                 var body = await request.ReadFromJsonAsync<JsonElement>(loginDeadline.Token).ConfigureAwait(false);
-                var username = body.ValueKind == JsonValueKind.Object && body.TryGetProperty("username", out var name) && name.ValueKind == JsonValueKind.String ? name.GetString() ?? "" : "";
-                var password = body.ValueKind == JsonValueKind.Object && body.TryGetProperty("password", out var secret) && secret.ValueKind == JsonValueKind.String ? secret.GetString() ?? "" : "";
+                JsonElementReader.TryGetNonEmptyString(body, "username", out var username);
+                JsonElementReader.TryGetNonEmptyString(body, "password", out var password);
                 if (!auth.TryConsumeLoginAttempt(peer))
                 {
                     response.StatusCode = 429;
@@ -171,6 +181,8 @@ public sealed class LocalWebServer : IAsyncDisposable
                 LocalWebSession session;
                 lock (auth.Gate)
                 {
+                    loginDeadline.Token.ThrowIfCancellationRequested();
+                    if (Volatile.Read(ref disposed)) { response.StatusCode = 403; return; }
                     if (auth.Sessions.Count >= 32) { response.StatusCode = 429; return; }
                     if (!users.IsCurrent(user.Id, user.CredentialVersion)) { response.StatusCode = 401; return; }
                     session = new(peer, user.Id, user.Username, user.CredentialVersion,
@@ -302,22 +314,5 @@ public sealed class LocalWebServer : IAsyncDisposable
                 }
             }
         }
-    }
-
-    private static IReadOnlyDictionary<string, (byte[], string)> LoadAssets()
-    {
-        var assembly = typeof(LocalWebServer).Assembly;
-        var result = new Dictionary<string, (byte[], string)>();
-        foreach (var name in new[] { "index.html", "app.js", "app.css", "studio-logo.svg", "twitch-logo.svg", "kick-logo.svg", "hls.min.js", "hls.LICENSE.txt", "hls.APACHE-2.0.txt" })
-        {
-            using var stream = assembly.GetManifestResourceStream($"StreamlinkVlcStudio.Infrastructure.LocalWeb.Assets.{name}");
-            if (stream is null) continue;
-            using var buffer = new MemoryStream();
-            stream.CopyTo(buffer);
-            result[name == "index.html" ? "/" : "/" + name] = (buffer.ToArray(), name.EndsWith(".js", StringComparison.Ordinal) ? "text/javascript; charset=utf-8" :
-                name.EndsWith(".css", StringComparison.Ordinal) ? "text/css; charset=utf-8" : name.EndsWith(".svg", StringComparison.Ordinal) ? "image/svg+xml" : name.EndsWith(".txt", StringComparison.Ordinal)
-                    ? "text/plain; charset=utf-8" : "text/html; charset=utf-8");
-        }
-        return result;
     }
 }

@@ -37,9 +37,7 @@ if (-not [Environment]::Is64BitProcess) {
     throw 'Run this installer in 64-bit PowerShell so it can verify the x64 VLC runtime. From a 32-bit shell, use %WINDIR%\Sysnative\WindowsPowerShell\v1.0\powershell.exe.'
 }
 
-if ([Net.ServicePointManager]::SecurityProtocol -band [Net.SecurityProtocolType]::Tls12) {
-    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-} else {
+if (-not ([Net.ServicePointManager]::SecurityProtocol -band [Net.SecurityProtocolType]::Tls12)) {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 }
 

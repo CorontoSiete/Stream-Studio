@@ -23,7 +23,7 @@ const mobileControlsMode = process.argv.includes('--mobile-controls-only');
 const seekPreviewMode = process.argv.includes('--seek-preview-only');
 const controlsIdleMode = process.argv.includes('--controls-idle-only');
 const output = path.join(root, controlsIdleMode ? '.artifacts/web-controls-idle' : seekPreviewMode ? '.artifacts/web-seek-preview' : discoveryLanguageMode ? '.artifacts/web-discovery-language' : vodLibraryMode ? '.artifacts/web-vod-library' : mobileControlsMode ? '.artifacts/web-mobile-controls' : loginMode ? '.artifacts/web-login' : sidebarMode ? '.artifacts/web-sidebar' : multistreamMode ? '.artifacts/web-multistream' : hotkeyMode ? '.artifacts/web-hotkeys' : settingsMode ? '.artifacts/web-settings' : volumeWheelMode ? '.artifacts/web-volume-wheel' : deleteMode ? '.artifacts/web-download-delete' : searchMode ? '.artifacts/web-search' : '.artifacts/player-navigation');
-const assets = path.join(root, 'src/StreamlinkVlcStudio.Infrastructure/LocalWeb/Assets');
+const assets = path.join(root, 'src/StreamlinkVlcStudio.WebClient/Assets');
 const mediaFixture = path.join(root, 'tests/StreamlinkVlcStudio.Tests/Fixtures', multistreamMode ? 'hover-preview-fmp4' : 'replay-position-event');
 const browserPath = [process.env.SVS_WEB_TEST_BROWSER, 'C:/Program Files/Google/Chrome/Application/chrome.exe', 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe', 'C:/Program Files/BraveSoftware/Brave-Browser/Application/brave.exe'].find(file => file && fs.existsSync(file));
 if (!browserPath) throw new Error('Chromium is required. Set SVS_WEB_TEST_BROWSER to its executable path.');
@@ -68,7 +68,7 @@ let signedIn = false;
 const loginFixture = { requests: 0, holdNext: false, held: [] };
 const savedSettings = { quality: 'best', lowLatency: true, layout: 'docked', size: 16,
   opacity: 90, keepInactive: false, pauseInactiveVod: true, hotkeys: {}, volumes: {}, chatLayouts: {}, categoryLanguages: {} };
-const settingsFixture = { failSave: false, saves: 0, holdNext: false, held: [] };
+const settingsFixture = { failSave: false, saves: 0, holdNext: false, held: [], lastPatch: null };
 if (hotkeyMode) settingsFixture.desktopHotkeys = {
   bindings: { back: 'Escape', nextTab: 'OemCloseBrackets', previousTab: 'OemOpenBrackets', grid: 'G', dismiss: 'F8' },
   skipBackwardSeconds: 2, skipForwardSeconds: 4
@@ -151,6 +151,7 @@ const server = http.createServer(async (request, response) => {
     else if (action === 'hotkeys') result = settingsFixture.desktopHotkeys;
     else if (action === 'settings/save') {
       settingsFixture.saves++;
+      settingsFixture.lastPatch = input;
       if (settingsFixture.holdNext) {
         settingsFixture.holdNext = false;
         settingsFixture.held.push({ input, send: () => { Object.assign(savedSettings, input); response.end(JSON.stringify({ saved: true })); } });
@@ -266,7 +267,7 @@ const server = http.createServer(async (request, response) => {
   const name = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
   if (!['index.html', 'app.css', 'app.js', 'studio-logo.svg', 'twitch-logo.svg', 'kick-logo.svg', 'hls.min.js'].includes(name)) { response.statusCode = 404; response.end(); return; }
   response.setHeader('Content-Type', name.endsWith('.css') ? 'text/css' : name.endsWith('.js') ? 'text/javascript' : name.endsWith('.svg') ? 'image/svg+xml' : 'text/html');
-  const assetPath = name === 'studio-logo.svg' ? path.join(root, 'src/StreamlinkVlcStudio.App.Wpf/Assets/Studio.svg') : path.join(assets, name);
+  const assetPath = name === 'studio-logo.svg' ? path.join(root, 'shared/Studio.svg') : path.join(assets, name);
   response.end(fs.readFileSync(assetPath));
 });
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -327,6 +328,7 @@ async function main() {
     await viewport(1440);
     await cdp('Page.navigate', { url: address });
     await wait("document.readyState==='complete' && !!document.querySelector('#password')");
+    await cdp('Page.bringToFront');
     await capture('login-desktop');
     if (loginMode) {
       await require('./helpers/web-login-browser.cjs')({ cdp, evaluate, wait, capture, viewport, address, fixture: loginFixture });
@@ -334,6 +336,12 @@ async function main() {
     }
     await evaluate("document.querySelector('#username').value='webtester';document.querySelector('#password').value='Test web password 123!';document.querySelector('#login-form').requestSubmit()");
     const settled = "document.querySelector('#cards').getAttribute('aria-busy')==='false'";
+    const selectVodChannel = async (channel, provider = 'twitch') => {
+      await evaluate(`document.querySelector('#query').value=${JSON.stringify(channel)};document.querySelector('#search-form').requestSubmit()`);
+      const option = `document.querySelector('.search-option[data-provider=${provider}]')`;
+      await wait(`!!${option}`);
+      await evaluate(`${option}.click()`);
+    };
     await wait("!document.querySelector('#studio').hidden && document.querySelectorAll('.card').length===6");
     if (controlsIdleMode) {
       await require('./helpers/web-controls-idle-browser.cjs')({ cdp, evaluate, wait });
@@ -365,7 +373,7 @@ async function main() {
       return;
     }
     if (hotkeyMode) {
-      await require('./helpers/web-hotkeys-browser.cjs')({ cdp, evaluate, wait, capture, viewport, settingsFixture, desktopHotkeyMode, getSavedSettings: () => savedSettings });
+      await require('./helpers/web-hotkeys-browser.cjs')({ cdp, evaluate, wait, capture, viewport, selectVodChannel, settingsFixture, desktopHotkeyMode, getSavedSettings: () => savedSettings });
       return;
     }
     if (settingsMode) {
@@ -381,7 +389,7 @@ async function main() {
       return;
     }
     if (vodLibraryMode) {
-      await require('./helpers/web-vod-library-browser.cjs')({ evaluate, wait, capture, viewport });
+      await require('./helpers/web-vod-library-browser.cjs')({ evaluate, wait, capture, viewport, selectVodChannel });
       return;
     }
     if (searchMode) {
@@ -467,9 +475,7 @@ async function main() {
     }
     await evaluate("document.querySelector('[data-page=vods]').click()");
     await wait("document.querySelector('#studio').dataset.page==='vods' && document.querySelector('#cards').getAttribute('aria-busy')==='false'");
-    await evaluate("document.querySelector('#query').value='Northstar';document.querySelector('#search-form').requestSubmit()");
-    await wait("!!document.querySelector('.search-option')");
-    await evaluate("document.querySelector('.search-option').click()");
+    await selectVodChannel('Northstar');
     await wait("document.querySelectorAll('.card .avatar.has-image').length===1");
     await evaluate("document.querySelector('[data-page=following]').click()");
     await wait("document.querySelector('#studio').dataset.page==='following' && document.querySelector('#cards').getAttribute('aria-busy')==='false' && document.querySelectorAll('.card').length===6");

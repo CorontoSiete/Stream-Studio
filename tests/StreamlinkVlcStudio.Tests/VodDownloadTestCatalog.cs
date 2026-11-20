@@ -72,11 +72,14 @@ internal static partial class VodDownloadTestCatalog
         var twitch = VodDownloadUrlParser.Parse("twitch.tv/videos/12345?t=1h");
         Assert.True(twitch.IsExplicitTwitchVod);
         Assert.Equal("https://www.twitch.tv/videos/12345", twitch.Url);
+        Assert.Equal(twitch, VodDownloadUrlParser.Parse("//m.twitch.tv/videos/12345"));
+        Assert.Equal(twitch, VodDownloadUrlParser.Parse("m.twitch.tv/videos/12345?ref=https://twitch.tv"));
         foreach (var id in new[] { "ec263e99-7ad7-47f9-b2e6-50c2f3c744e1", "01K62MXDAY68GRSY43VZX5KVAZ" })
         {
             var kick = VodDownloadUrlParser.Parse($"https://kick.com/streamer/videos/{id}");
             Assert.True(kick.IsExplicitKickVod);
             Assert.Equal(id, kick.MediaId);
+            Assert.Equal(kick, VodDownloadUrlParser.Parse($"//m.kick.com/streamer/videos/{id}"));
         }
         foreach (var input in new[] { "https://twitch.tv/streamer", "https://kick.com/streamer", "https://clips.twitch.tv/Clip",
             "https://kick.com/streamer/clips/12345", "https://twitch.tv.evil.example/videos/12345",
@@ -410,6 +413,7 @@ internal static partial class VodDownloadTestCatalog
         var chat = new DeniedVodChat();
         await using var tab = new StreamTabViewModel(new StreamTabViewModelDependencies
         {
+            CreateNativeChatOverlay = context => new NativeChatOverlayController(context),
             Target = target,
             Quality = item.Quality,
             StreamlinkService = fixture.Resolver,

@@ -1,7 +1,7 @@
 'use strict';
 const assert = require('node:assert/strict');
 
-module.exports = async ({ cdp, evaluate, wait, capture, viewport, settingsFixture, desktopHotkeyMode, getSavedSettings }) => {
+module.exports = async ({ cdp, evaluate, wait, capture, viewport, selectVodChannel, settingsFixture, desktopHotkeyMode, getSavedSettings }) => {
   const key = async (key, modifiers = 0, code = '', repeat = false) => {
     const windowsVirtualKeyCode = ({ Escape: 27, Tab: 9, Enter: 13, Shift: 16, ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, '[': 219, ']': 221, '/': 191 })[key] ||
       (/^F\d+$/.test(key) ? 111 + Number(key.slice(1)) : key.toUpperCase().charCodeAt(0));
@@ -209,10 +209,13 @@ module.exports = async ({ cdp, evaluate, wait, capture, viewport, settingsFixtur
   await key('Escape'); await ready('following');
   assert.ok(await evaluate("document.querySelector('[data-filter=twitch]').getAttribute('aria-pressed')==='true' && document.querySelector('#live-filter').checked && document.querySelector('#channel-sort').value==='name'"), 'Back restores library filters');
   await page('vods');
-  await evaluate("document.querySelector('#query').value='Northstar';document.querySelector('#search-form').requestSubmit()");
+  await selectVodChannel('Northstar');
   await wait("document.querySelector('#cards').getAttribute('aria-busy')==='false' && document.querySelectorAll('.card').length===1");
   await page('downloads'); await key('Escape'); await ready('vods');
   assert.equal(await evaluate("document.querySelector('#query').value"), 'Northstar', 'Back restores the previous video channel');
+  assert.ok(await evaluate("!!document.querySelector('#cards .card[data-key=vod1]')"));
+  await key('Escape'); await ready('vods');
+  await wait("document.querySelectorAll('#cards .card').length===0 && !document.querySelector('#empty-state').hidden");
   await key('Escape'); await ready('following');
   console.log('PASS previous-page history, repeated Back, same-page clicks, category context and library filters.');
 
@@ -347,6 +350,11 @@ module.exports = async ({ cdp, evaluate, wait, capture, viewport, settingsFixtur
   await focus('#hotkey-back'); await mouse('forward', 1);
   assert.equal(await savedValue('back'), 'Alt + Mouse5');
   await focus('#hotkey-back'); await mouse('back');
+  // Up and Down belong to the volume shortcuts until the user clears them.
+  for (const [id, arrow] of [['volumeUp', 'ArrowUp'], ['volumeDown', 'ArrowDown']]) {
+    assert.equal(await savedValue(id), arrow);
+    await click('#hotkey-' + id + ' + button');
+  }
   for (const value of ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']) {
     await record('nextTab', value); assert.equal(await savedValue('nextTab'), value);
   }

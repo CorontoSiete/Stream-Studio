@@ -354,31 +354,23 @@ public sealed class VideoSurfaceGridPanel : Panel
         if (slotAspectRatio > aspectRatio)
         {
             var width = slot.Height * aspectRatio;
-            return new Rect(GetHorizontalOffset(slot, width, column, columnSpan, columns), slot.Y, width, slot.Height);
+            var x = GetFittedOffset(slot.X, slot.Width - width, column, columnSpan, columns);
+            return new Rect(x, slot.Y, width, slot.Height);
         }
 
         var height = slot.Width / aspectRatio;
-        return new Rect(slot.X, GetVerticalOffset(slot, height, row, rowSpan, rows), slot.Width, height);
+        var y = GetFittedOffset(slot.Y, slot.Height - height, row, rowSpan, rows);
+        return new Rect(slot.X, y, slot.Width, height);
     }
 
-    private static double GetHorizontalOffset(Rect slot, double width, int column, int columnSpan, int columns)
+    private static double GetFittedOffset(double start, double unusedSpace, int index, int span, int partitions)
     {
-        if (columnSpan >= columns)
+        if (span >= partitions)
         {
-            return slot.X + (slot.Width - width) / 2;
+            return start + unusedSpace / 2;
         }
 
-        return column == 0 ? slot.Right - width : slot.X;
-    }
-
-    private static double GetVerticalOffset(Rect slot, double height, int row, int rowSpan, int rows)
-    {
-        if (rowSpan >= rows)
-        {
-            return slot.Y + (slot.Height - height) / 2;
-        }
-
-        return row == 0 ? slot.Bottom - height : slot.Y;
+        return index == 0 ? start + unusedSpace : start;
     }
 
     private static int GetPartitionBoundary(int totalPixels, int index, int partitions)

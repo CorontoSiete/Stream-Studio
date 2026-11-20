@@ -1,5 +1,3 @@
-using System.Diagnostics;
-
 internal static partial class ApplicationTestCatalog
 {
     internal static IReadOnlyList<(string Name, Func<Task> Run)> LoadingPerformanceTests { get; } =

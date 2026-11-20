@@ -49,12 +49,7 @@ internal static class ProfileAvatarTestCatalog
             host.Resources.MergedDictionaries.Add(palette);
             previousPalette = palette;
             Layout(host);
-            var surfaceColorKey = surface switch
-            {
-                "live card" => "StudioSurface3Color",
-                "offline card" => "StudioSurface2Color",
-                _ => "StudioSurface0Color"
-            };
+            var surfaceColorKey = surface == "offline card" ? "StudioSurface2Color" : "StudioSurface0Color";
             WpfVisualTest.AssertSolidBrushColor(((Color)palette[surfaceColorKey]).ToString(), border.Background);
             var actual = RenderAvatar(border);
             var expectedBorder = new RoundedClipBorder

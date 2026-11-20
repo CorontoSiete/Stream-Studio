@@ -178,6 +178,22 @@ $global:LASTEXITCODE = if ($args[0] -eq $env:STUDIO_DEV_TEST_FAIL) { 19 } else {
     Assert-DevelopmentFailure { Resolve-PackageVersion -RepositoryRoot $versionFixture -Version '' } 'canonical three-part'
     Write-Host 'PASS development: package version defaults, explicit overrides, and failures before publishing'
 
+    $missingOverlay = Join-Path $fixtureRoot 'missing overlay'
+    Assert-DevelopmentFailure {
+        & (Join-Path $repoRoot 'scripts\package-release.ps1') -OverlaySource 'missing overlay' -Quiet
+    } ([regex]::Escape($missingOverlay))
+    $missingZip = Join-Path $fixtureRoot 'missing.zip'
+    $installerOutput = Join-Path $fixtureRoot 'installer output'
+    Assert-DevelopmentFailure {
+        & (Join-Path $repoRoot 'scripts\build-installer.ps1') -ProductVersion $defaultVersion `
+            -ReleaseZip 'missing.zip' -OutputRoot $installerOutput -Quiet
+    } ([regex]::Escape($missingZip))
+    Assert-DevelopmentFailure {
+        & (Join-Path $repoRoot 'scripts\build-installer.ps1') -ProductVersion "0$defaultVersion" `
+            -ReleaseZip 'missing.zip' -OutputRoot $installerOutput -Quiet
+    } 'no prerelease, metadata, or leading zeroes'
+    Write-Host 'PASS development: packaging honors the caller directory and rejects noncanonical installer versions'
+
     # Load only the installer resolver, without downloading or running setup.
     $tokens = $null
     $parseErrors = $null

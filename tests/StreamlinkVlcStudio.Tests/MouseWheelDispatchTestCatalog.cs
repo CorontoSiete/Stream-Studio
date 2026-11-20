@@ -1,5 +1,3 @@
-using System.Windows.Threading;
-
 internal static class MouseWheelDispatchTestCatalog
 {
     private static readonly TimeSpan WaitTimeout = TimeSpan.FromSeconds(5);

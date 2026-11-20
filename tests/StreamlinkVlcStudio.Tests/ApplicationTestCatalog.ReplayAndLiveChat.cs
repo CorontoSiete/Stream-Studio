@@ -476,8 +476,8 @@ internal static partial class ApplicationTestCatalog
             var initialBounds = GetNativeOverlayAlphaBounds(initialFrame);
             Assert.True(initialBounds.Height > 0);
             await TestWait.UntilAsync(
-                () => tab.IsNativeReplayOverlayEventHostRunning &&
-                    string.Equals(tab.NativeReplayOverlayEventHostPipeName, pipeName, StringComparison.Ordinal),
+                () => TestViewModels.GetNativeOverlay(tab).IsNativeReplayOverlayEventHostRunning &&
+                    string.Equals(TestViewModels.GetNativeOverlay(tab).NativeReplayOverlayEventHostPipeName, pipeName, StringComparison.Ordinal),
                 TimeSpan.FromSeconds(2));
 
             var resizedFrameTask = ReadNativeOverlayPipeMatchingMessageAsync(
@@ -502,8 +502,8 @@ internal static partial class ApplicationTestCatalog
                 resizedBounds.Height <= initialBounds.Height + 3,
                 $"Expected resized replay overlay text to stay within 3px of {initialBounds.Height}px, got {resizedBounds.Height}px.");
             Assert.Equal("reference 960 540", File.ReadAllText($"{positionStatePath}.size"));
-            Assert.True(tab.IsNativeReplayOverlayEventHostRunning);
-            Assert.Equal(pipeName, tab.NativeReplayOverlayEventHostPipeName);
+            Assert.True(TestViewModels.GetNativeOverlay(tab).IsNativeReplayOverlayEventHostRunning);
+            Assert.Equal(pipeName, TestViewModels.GetNativeOverlay(tab).NativeReplayOverlayEventHostPipeName);
             Assert.True(tab.IsBehindLive);
             Assert.True(tab.DockedChatMessages.Any(message => message.Message == "native replay resize hello"));
 
@@ -602,11 +602,7 @@ internal static partial class ApplicationTestCatalog
                 pipeName,
                 message => BinaryPrimitives.ReadUInt32LittleEndian(message.AsSpan(8, 4)) > 4,
                 TimeSpan.FromSeconds(3));
-            var catalogChanged = typeof(StreamTabViewModel).GetMethod(
-                "OnChatRenderCatalogChanged",
-                BindingFlags.Instance | BindingFlags.NonPublic);
-            Assert.NotNull(catalogChanged);
-            catalogChanged!.Invoke(tab, [sharedCatalog, EventArgs.Empty]);
+            TestViewModels.GetNativeOverlay(tab).OnChatRenderCatalogChanged(sharedCatalog, EventArgs.Empty);
 
             AssertNativeOverlayChatFrame(await refreshedFrameTask);
             await tab.DisposeAsync();
@@ -688,14 +684,14 @@ internal static partial class ApplicationTestCatalog
             await tab.SeekReplayAsync(TimeSpan.FromMinutes(10));
             AssertNativeOverlayChatFrame(await initialFrameTask);
             await TestWait.UntilAsync(
-                () => tab.IsNativeReplayOverlayEventHostRunning,
+                () => TestViewModels.GetNativeOverlay(tab).IsNativeReplayOverlayEventHostRunning,
                 TimeSpan.FromSeconds(2));
 
             await tab.ReturnToLiveAsync();
 
             Assert.Equal(false, tab.IsReplayMode);
             Assert.Equal(false, tab.IsBehindLive);
-            Assert.Equal(false, tab.IsNativeReplayOverlayEventHostRunning);
+            Assert.Equal(false, TestViewModels.GetNativeOverlay(tab).IsNativeReplayOverlayEventHostRunning);
 
             await tab.DisposeAsync();
         });

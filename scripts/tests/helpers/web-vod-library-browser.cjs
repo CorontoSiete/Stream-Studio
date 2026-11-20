@@ -1,7 +1,7 @@
 'use strict';
 const assert = require('node:assert/strict');
 
-module.exports = async ({ evaluate, wait, capture, viewport }) => {
+module.exports = async ({ evaluate, wait, capture, viewport, selectVodChannel }) => {
   const order = () => evaluate("[...document.querySelectorAll('#cards .card')].map(card=>card.dataset.key)");
   const verify = async (page, provider = 'twitch') => {
     await viewport(1440);
@@ -9,9 +9,7 @@ module.exports = async ({ evaluate, wait, capture, viewport }) => {
     await wait(`document.querySelector('#studio').dataset.page==='${page}' && document.querySelector('#cards').getAttribute('aria-busy')==='false'`);
     if (page === 'vods') {
       const channel = provider === 'kick' ? 'Afterhours' : 'Northstar';
-      await evaluate(`document.querySelector('#query').value='${channel}';document.querySelector('#search-form').requestSubmit()`);
-      await wait(`!!document.querySelector('.search-option[data-provider=${provider}]')`);
-      await evaluate(`document.querySelector('.search-option[data-provider=${provider}]').click()`);
+      await selectVodChannel(channel, provider);
       await wait("document.querySelectorAll('#cards .card').length===4 && document.querySelector('#cards').getAttribute('aria-busy')==='false'");
       assert.ok(await evaluate(`[...document.querySelectorAll('#cards .card')].every(card=>card.dataset.provider==='${provider}')`));
       assert.deepEqual(await order(), ['new', 'broken', 'old', 'unknown']);

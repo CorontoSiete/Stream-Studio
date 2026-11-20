@@ -6,7 +6,7 @@ const path = require('node:path');
 const http = require('node:http');
 const { spawn } = require('node:child_process');
 const root = path.resolve(__dirname, '../..');
-const assets = path.join(root, 'src/StreamlinkVlcStudio.Infrastructure/LocalWeb/Assets');
+const assets = path.join(root, 'src/StreamlinkVlcStudio.WebClient/Assets');
 const fixtures = path.join(root, 'tests/StreamlinkVlcStudio.Tests/Fixtures/twitch-badges');
 const output = path.join(root, '.artifacts/twitch-badges', process.env.SVS_BADGE_TEST_LABEL || 'browser');
 fs.mkdirSync(output, { recursive: true });

@@ -1,4 +1,5 @@
 import importlib.util
+from io import BytesIO
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -61,6 +62,12 @@ class ReleaseFeedTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             release_feed.build_payloads(release)
 
+    def test_unicode_title_fits_discord(self):
+        release = published_release()
+        release["name"] = "a" + "\U0001F3AC" * 239
+        title = release_feed.build_payloads(release)[0]["embeds"][0]["title"]
+        self.assertEqual(title, "a" + "\U0001F3AC" * 119)
+
     def test_empty_notes_link_to_release(self):
         message = release_feed.build_payloads(published_release(""))[0]
         self.assertIn("release details", message["embeds"][0]["description"])
@@ -80,6 +87,34 @@ class ReleaseFeedTests(unittest.TestCase):
               patch("builtins.print")):
             release_feed.main()
             request.assert_called_once_with(webhook)
+
+    def test_saved_release_dry_run_works_offline_without_a_webhook(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "release.json"
+            path.write_text(json.dumps(published_release()), encoding="utf-8")
+            with (patch.dict("os.environ", {}, clear=True), patch("builtins.print"),
+                  patch("sys.argv", ["announce-discord-release.py", "--release-json", str(path), "--dry-run"]),
+                  patch.object(release_feed, "request_json") as request):
+                release_feed.main()
+                request.assert_not_called()
+
+    def test_rate_limit_retries_use_provider_delay_and_tolerate_nonobject_responses(self):
+        url = "https://example.com/test"
+        for body, expected in [(b'{"retry_after":12.5}', 12.5), (b'{"retry_after":"NaN"}', 3), (b"null", 3), (b"", 3)]:
+            with self.subTest(body=body):
+                limited = HTTPError(url, 429, "", {"Retry-After": "3"}, BytesIO(body))
+                with (patch.object(release_feed, "urlopen", side_effect=[limited, BytesIO(b"{}")]),
+                      patch.object(release_feed.time, "sleep") as sleep):
+                    self.assertEqual(release_feed.request_json(url), {})
+                    sleep.assert_called_once_with(expected)
+
+        limited = HTTPError(url, 429, "", {"Retry-After": "120"}, BytesIO(b""))
+        with (patch.object(release_feed, "urlopen", side_effect=limited) as request,
+              patch.object(release_feed.time, "sleep") as sleep):
+            with self.assertRaisesRegex(RuntimeError, "Retry after 120 seconds"):
+                release_feed.request_json(url)
+            self.assertEqual(request.call_count, 1)
+            sleep.assert_not_called()
 
     def test_workflow_call_fetches_the_published_release_by_tag(self):
         release = published_release()

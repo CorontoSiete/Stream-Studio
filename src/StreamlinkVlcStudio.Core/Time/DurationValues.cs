@@ -80,20 +80,12 @@ public static partial class DurationValues
         }
 
         var roundedTicks = Math.Round(ticks, MidpointRounding.AwayFromZero);
-        if (!double.IsFinite(roundedTicks) ||
-            roundedTicks <= 0 ||
-            roundedTicks >= exclusiveMaximumTicks)
+        if (roundedTicks <= 0 || roundedTicks >= exclusiveMaximumTicks)
         {
             return false;
         }
 
-        var convertedTicks = checked((long)roundedTicks);
-        if (convertedTicks <= 0)
-        {
-            return false;
-        }
-
-        duration = TimeSpan.FromTicks(convertedTicks);
+        duration = TimeSpan.FromTicks((long)roundedTicks);
         return true;
     }
 

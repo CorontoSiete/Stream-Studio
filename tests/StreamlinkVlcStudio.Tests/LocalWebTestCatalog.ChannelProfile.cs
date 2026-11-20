@@ -1,5 +1,3 @@
-using System.Net;
-using StreamlinkVlcStudio.Core.Parsing;
 using StreamlinkVlcStudio.Infrastructure.LocalWeb;
 
 internal static partial class LocalWebTestCatalog

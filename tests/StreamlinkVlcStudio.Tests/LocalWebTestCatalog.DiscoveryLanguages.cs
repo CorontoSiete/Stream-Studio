@@ -64,6 +64,7 @@ internal static partial class LocalWebTestCatalog
         {
             await Call(session, "streams", new { platform = "twitch", categoryId = "1" });
             Assert.Equal("", browse.StreamRequests[^1].Language);
+            Assert.Equal(0, users.PreferencesFor(bob.Id).CategoryLanguages.Count);
         }
         Assert.Equal(0, fixture.Settings.BrowseCategoryLanguages.Count);
     });

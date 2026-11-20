@@ -475,7 +475,7 @@ try {
     $identity = Get-StableReleaseIdentity -Tag 'v1.7.0' -MinimumVersion '1.7.0'
     Assert-True ($identity.VersionText -ceq '1.7.0') 'Stable release version was not preserved exactly.'
     Assert-True ($identity.FourPartVersion -ceq '1.7.0.0') 'Bundle version was not derived from the stable tag.'
-    foreach ($invalidTag in @('release-170', 'v1.7', 'v01.7.0', 'v1.7.0-beta.1', 'v1.6.65')) {
+    foreach ($invalidTag in @('release-170', 'v1.7', 'V1.7.0', "v1.7.0`n", 'v01.7.0', 'v1.7.0-beta.1', 'v1.6.65')) {
         Assert-Throws { Get-StableReleaseIdentity -Tag $invalidTag -MinimumVersion '1.7.0' | Out-Null } 'stable|exact|below'
     }
     Assert-True (

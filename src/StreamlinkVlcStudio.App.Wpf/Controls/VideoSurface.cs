@@ -5,6 +5,7 @@ using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Threading;
+using static StreamlinkVlcStudio.App.Wpf.Controls.VideoWindowInterop;
 
 namespace StreamlinkVlcStudio.App.Wpf.Controls;
 
@@ -26,10 +27,7 @@ public sealed partial class VideoSurface : HwndHost
     private const int WmMouseMove = 0x0200;
     private const int WmMouseWheel = 0x020A;
     private const int WsChild = 0x40000000;
-    private const int WsPopup = unchecked((int)0x80000000);
     private const int WsVisible = 0x10000000;
-    private const int WsClipChildren = 0x02000000;
-    private const int WsClipSiblings = 0x04000000;
     private const int WsExToolWindow = 0x00000080;
     private const int WsExAppWindow = 0x00040000;
     private const int WsExNoActivate = 0x08000000;
@@ -95,23 +93,8 @@ public sealed partial class VideoSurface : HwndHost
     {
         EnsureWindowClassRegistered();
 
-        handle = CreateWindowEx(
-            CaptureFriendlyChildExtendedStyle,
-            VideoSurfaceWindowClassName,
-            "",
-            WsChild | WsVisible | WsClipChildren | WsClipSiblings,
-            0,
-            0,
-            1,
-            1,
-            hwndParent.Handle,
-            IntPtr.Zero,
-            IntPtr.Zero,
-            IntPtr.Zero);
-        if (handle == IntPtr.Zero)
-        {
-            throw new Win32Exception(Marshal.GetLastPInvokeError(), "Failed to create the video surface window.");
-        }
+        handle = CreateVideoWindow(VideoSurfaceWindowClassName, WsChild | WsVisible,
+            CaptureFriendlyChildExtendedStyle, 0, 0, hwndParent.Handle, "Failed to create the video surface window.");
 
         ResetNativeBoundsCache();
         SyncNativeBounds();
@@ -227,7 +210,7 @@ public sealed partial class VideoSurface : HwndHost
             ResetLastLeftButtonDown();
             // A second press on a PiP resize border still belongs to the border, even
             // when Windows reports it as a double-click on this child HWND.
-            if (TryRaiseNativeMouseLeftButtonDown(hwnd, lParam, out var mouseDownResult))
+            if (TryRaiseNativeMouseEvent(hwnd, lParam, NativeMouseLeftButtonDown, out var mouseDownResult))
             {
                 handled = true;
                 return mouseDownResult;
@@ -237,7 +220,7 @@ public sealed partial class VideoSurface : HwndHost
         }
         else if (msg == WmLeftButtonDown)
         {
-            if (TryRaiseNativeMouseLeftButtonDown(hwnd, lParam, out var mouseDownResult))
+            if (TryRaiseNativeMouseEvent(hwnd, lParam, NativeMouseLeftButtonDown, out var mouseDownResult))
             {
                 handled = true;
                 return mouseDownResult;
@@ -331,15 +314,7 @@ public sealed partial class VideoSurface : HwndHost
             return false;
         }
 
-        var args = new VideoSurfaceNativeMouseEventArgs(screenPoint.X, screenPoint.Y);
-        handler(this, args);
-        if (!args.Handled)
-        {
-            return false;
-        }
-
-        result = args.Result;
-        return true;
+        return RaiseNativeMouseEvent(screenPoint, handler, out result);
     }
 
     private bool TryRaiseNativeSetCursorRequested(out IntPtr result)
@@ -351,44 +326,18 @@ public sealed partial class VideoSurface : HwndHost
             return false;
         }
 
-        var args = new VideoSurfaceNativeMouseEventArgs(screenPoint.X, screenPoint.Y);
-        handler(this, args);
-        if (!args.Handled)
-        {
-            return false;
-        }
-
-        result = args.Result;
-        return true;
+        return RaiseNativeMouseEvent(screenPoint, handler, out result);
     }
 
-    private bool TryRaiseNativeMouseLeftButtonDown(IntPtr hwnd, IntPtr lParam, out IntPtr result)
+    private bool RaiseNativeMouseEvent(
+        NativePoint screenPoint,
+        EventHandler<VideoSurfaceNativeMouseEventArgs> handler,
+        out IntPtr result)
     {
-        result = IntPtr.Zero;
-        if (NativeMouseLeftButtonDown is not { } handler)
-        {
-            return false;
-        }
-
-        var screenPoint = new NativePoint
-        {
-            X = WindowInteropHelpers.GetSignedLowWord(lParam),
-            Y = WindowInteropHelpers.GetSignedHighWord(lParam)
-        };
-        if (!ClientToScreen(hwnd, ref screenPoint))
-        {
-            return false;
-        }
-
         var args = new VideoSurfaceNativeMouseEventArgs(screenPoint.X, screenPoint.Y);
         handler(this, args);
-        if (!args.Handled)
-        {
-            return false;
-        }
-
-        result = args.Result;
-        return true;
+        result = args.Handled ? args.Result : IntPtr.Zero;
+        return args.Handled;
     }
 
     public void SyncNativeBounds() => SyncNativeBounds(forceDirectChildResize: false);
@@ -769,7 +718,7 @@ public sealed partial class VideoSurface : HwndHost
         var changed = false;
         var style = GetWindowLong(hwnd, GwlStyle);
         var wasChild = (style & WsChild) != 0;
-        var normalizedStyle = (style | WsChild | WsClipChildren | WsClipSiblings) & ~WsPopup;
+        var normalizedStyle = (style | WsChild | ClipChildrenAndSiblings) & ~WsPopup;
         if (normalizedStyle != style)
         {
             SetWindowLong(hwnd, GwlStyle, normalizedStyle);
@@ -1039,25 +988,6 @@ public sealed partial class VideoSurface : HwndHost
 
     [LibraryImport("gdi32")]
     private static partial IntPtr GetStockObject(int objectType);
-
-    [LibraryImport("user32", EntryPoint = "CreateWindowExW", StringMarshalling = StringMarshalling.Utf16, SetLastError = true)]
-    private static partial IntPtr CreateWindowEx(
-        int dwExStyle,
-        string lpClassName,
-        string lpWindowName,
-        int dwStyle,
-        int x,
-        int y,
-        int nWidth,
-        int nHeight,
-        IntPtr hWndParent,
-        IntPtr hMenu,
-        IntPtr hInstance,
-        IntPtr lpParam);
-
-    [LibraryImport("user32", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static partial bool DestroyWindow(IntPtr hwnd);
 
     [LibraryImport("user32")]
     [return: MarshalAs(UnmanagedType.Bool)]

@@ -124,11 +124,7 @@ internal static partial class ApplicationTestCatalog
                 AssertHomeCardCompactHorizontalGutter(window, vodClip);
 
                 viewModel.ShowBrowseHomePageCommand.Execute(null);
-                var selectBrowseStreamsPage = typeof(MainViewModel).GetMethod(
-                    "SetBrowseStreamsPageSelected",
-                    BindingFlags.Instance | BindingFlags.NonPublic);
-                Assert.NotNull(selectBrowseStreamsPage);
-                selectBrowseStreamsPage!.Invoke(viewModel, [true]);
+                viewModel.SetBrowseStreamsPageSelected(true);
                 viewModel.BrowseStreams.Add(browseItem);
                 window.Dispatcher.Invoke(
                     () => { },
@@ -4989,7 +4985,9 @@ internal static partial class ApplicationTestCatalog
             pause.Dispatcher.Invoke(
                 () => { },
                 System.Windows.Threading.DispatcherPriority.DataBind);
-            Assert.Equal("\uE768", pause.Content?.ToString());
+            Assert.Equal(window.FindResource("StudioIconPlay"), pause.Tag);
+            Assert.Equal("Resume playback", System.Windows.Automation.AutomationProperties.GetName(pause));
+            Assert.Equal("Resume playback", pause.ToolTip);
             WpfVisualTest.AssertTemplateBorderColor(
                 pause,
                 WpfVisualTest.PaletteColor(window, "StudioAccentPressedColor"),

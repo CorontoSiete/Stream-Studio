@@ -27,11 +27,12 @@ internal static partial class ApplicationTestCatalog
         main.LiveFollowedChannels.Add(stream);
         try
         {
-            var following = FindVisualDescendants<Button>(root).Single(button =>
+            LayoutStudioPolishWindow(window, new Size(1320, 820));
+            var rail = (FrameworkElement)window.FindName("LibraryRail");
+            var following = FindVisualDescendants<Button>(rail).Single(button =>
                 ReferenceEquals(button.Command, main.ShowFollowedHomePageCommand) && Equals(button.Content, "Following"));
             var liveBadge = (Border)following.Template.FindName("RailBadge", following);
             Assert.True(main.HasLiveFollowedChannels);
-            LayoutStudioPolishWindow(window, new Size(1320, 820));
             Assert.Equal(Visibility.Visible, liveBadge.Visibility);
             Assert.Equal("1", ((TextBlock)following.Template.FindName("RailBadgeText", following)).Text);
             foreach (var theme in Enum.GetValues<AppTheme>())

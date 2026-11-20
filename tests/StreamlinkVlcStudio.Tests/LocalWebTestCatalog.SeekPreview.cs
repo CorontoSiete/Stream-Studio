@@ -1,5 +1,4 @@
 using System.Collections;
-using System.Reflection;
 using Microsoft.AspNetCore.Http;
 using StreamlinkVlcStudio.Infrastructure.LocalWeb;
 

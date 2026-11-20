@@ -31,14 +31,14 @@ internal static partial class TwitchVodVariantPlaylist
         var variants = new List<(string Name, int Weight, Uri Uri)>();
         for (var i = 0; i < lines.Length; i++)
         {
-            if (!lines[i].StartsWith("#EXT-X-STREAM-INF:", StringComparison.Ordinal)) continue;
-            if (!HlsAttributeList.TryParse(lines[i].AsSpan(18), out var attributes)) throw Unsupported();
+            if (!lines[i].StartsWith(HlsPlaylistPolicy.VariantTag, StringComparison.Ordinal)) continue;
+            if (!HlsPlaylistPolicy.TryReadVariant(lines, i, baseUri, out var attributes, out var uri) || !isAllowedUri(uri))
+                throw Unsupported();
+            i++;
             var name = attributes.TryGetValue("VIDEO", out var group) && groups.TryGetValue(group.Value, out var groupName)
                 ? groupName : attributes.TryGetValue("IVS-NAME", out var identifier) ? identifier.Value : null;
             if (name is null) throw Unsupported();
-            // Streamlink lowercases names and retains their leading identifier. In the
-            // current VOD master, "Audio Only" therefore becomes "audio".
-            name = name == "Audio Only" ? "audio" : name.ToLowerInvariant();
+            name = name.ToLowerInvariant();
             var match = ResolutionName().Match(name);
             var weight = name == "source" ? int.MaxValue : 0;
             if (match.Success)
@@ -48,10 +48,9 @@ internal static partial class TwitchVodVariantPlaylist
                     height is <= 0 or > 16384 || fps is < 0 or > 1000) throw Unsupported();
                 weight = height + fps;
             }
-            else if (name is not ("source" or "audio" or "audio_only")) throw Unsupported();
+            else if (name != "source" && !QualityOption.IsAudioOnly(name)) throw Unsupported();
 
-            if (++i >= lines.Length || lines[i].StartsWith('#') || variants.Any(variant => variant.Name == name) ||
-                lines[i].Any(char.IsControl) || !Uri.TryCreate(baseUri, lines[i], out var uri) || !isAllowedUri(uri)) throw Unsupported();
+            if (variants.Any(variant => variant.Name == name)) throw Unsupported();
             variants.Add((name, weight, uri));
         }
         if (variants.Count == 0) throw Unsupported();
@@ -66,6 +65,8 @@ internal static partial class TwitchVodVariantPlaylist
                 return quality == "best" ? ranked[^1].Uri : ranked[0].Uri;
             }
             if (variants.FirstOrDefault(variant => variant.Name == quality).Uri is { } selected) return selected;
+            if (QualityOption.IsAudioOnly(quality) && variants.FirstOrDefault(v => QualityOption.IsAudioOnly(v.Name)).Uri is { } audio)
+                return audio;
         }
         throw Unsupported();
     }

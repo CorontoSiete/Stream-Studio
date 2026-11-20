@@ -7,7 +7,16 @@ internal static partial class LocalWebTestCatalog
 
     private static async Task CheckBrowserFullArchive(CoreWebView2 core, CoreWebView2Controller controller, BrowserWorkspace workspace)
     {
-        await core.ExecuteScriptAsync("window.seekErrors=[];window.Hls=new Proxy(window.Hls,{construct(target,args){const h=Reflect.construct(target,args);window.seekHls=h;h.on(target.Events.ERROR,(_,data)=>{if(data.fatal)window.seekErrors.push(data.details)});return h}})");
+        await core.ExecuteScriptAsync("""
+            window.seekErrors=[];
+            window.hlsByVideo=new WeakMap();
+            window.Hls=new Proxy(window.Hls,{construct(target,args){
+                const h=Reflect.construct(target,args);
+                h.on(target.Events.MEDIA_ATTACHING,(_,data)=>window.hlsByVideo.set(data.media,h));
+                h.on(target.Events.ERROR,(_,data)=>{if(data.fatal)window.seekErrors.push(data.details)});
+                return h;
+            }});
+            """);
         await core.ExecuteScriptAsync($"document.querySelector('#password').value={JsonSerializer.Serialize(TestPassword)};document.querySelector('#login-form').requestSubmit()");
         await WaitBrowser(core, "!document.querySelector('#studio').hidden && document.querySelectorAll('.card').length===1");
         foreach (var platform in new[] { "Twitch", "Kick" })
@@ -31,7 +40,7 @@ internal static partial class LocalWebTestCatalog
             await core.CallDevToolsProtocolMethodAsync("Input.dispatchKeyEvent", "{\"type\":\"keyDown\",\"key\":\"Home\",\"code\":\"Home\",\"windowsVirtualKeyCode\":36}");
             await core.CallDevToolsProtocolMethodAsync("Input.dispatchKeyEvent", "{\"type\":\"keyUp\",\"key\":\"Home\",\"code\":\"Home\",\"windowsVirtualKeyCode\":36}");
             await WaitBrowser(core, "document.querySelector('video')!==originalLive && document.querySelector('video').duration===Infinity && document.querySelector('video').videoWidth>0 && document.querySelector('video').currentTime<1");
-            Assert.Equal("true", await core.ExecuteScriptAsync("document.querySelector('video').paused && seekHls.config.startPosition===0"));
+            Assert.Equal("true", await core.ExecuteScriptAsync("(()=>{const video=document.querySelector('video');return video.paused && hlsByVideo.get(video)?.config.startPosition===0})()"));
             Assert.True(workspace.ArchiveRequestedSegments.Contains("index0.ts"));
             await ClickBrowser(core, "[data-action=play]");
             await WaitBrowser(core, "document.querySelector('video').currentTime>1 && document.querySelector('video').getVideoPlaybackQuality().totalVideoFrames>10");
@@ -45,8 +54,9 @@ internal static partial class LocalWebTestCatalog
             await WaitBrowser(core, "innerWidth===390");
             await CaptureBrowser(core, "full-archive-" + platform.ToLowerInvariant());
             controller.Bounds = new System.Drawing.Rectangle(0, 0, 1440, 1000);
+            await WaitBrowser(core, "innerWidth===1440");
             await ClickBrowser(core, "[data-action=live]");
-            await WaitBrowser(core, "document.querySelector('video').videoWidth>0 && seekHls.config.startPosition===-1");
+            await WaitBrowser(core, "(()=>{const video=document.querySelector('video');return video.videoWidth>0 && hlsByVideo.get(video)?.config.startPosition===-1})()");
             await ClickBrowser(core, "[data-action=play]");
             await WaitBrowser(core, "!document.querySelector('video').paused && document.querySelector('video').getVideoPlaybackQuality().totalVideoFrames>10");
             Assert.Equal("[]", await core.ExecuteScriptAsync("window.seekErrors"));

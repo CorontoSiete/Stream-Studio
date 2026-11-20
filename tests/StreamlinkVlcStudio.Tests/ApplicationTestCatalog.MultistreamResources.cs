@@ -166,7 +166,7 @@ internal static partial class ApplicationTestCatalog
                 afterProcesses,
                 gpuError = metrics.GpuError,
                 samples,
-                applicationSha256 = FileHash(typeof(MainViewModel).Assembly.Location),
+                applicationSha256 = FileHash(typeof(MainWindow).Assembly.Location),
                 infrastructureSha256 = FileHash(typeof(StreamlinkService).Assembly.Location),
                 rendererSha256 = FileHash(renderer)
             };

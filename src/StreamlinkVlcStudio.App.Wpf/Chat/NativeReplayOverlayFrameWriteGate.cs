@@ -266,8 +266,8 @@ internal sealed class NativeReplayOverlayFrameWriteGate : IDisposable, IAsyncDis
             RemovePendingWriteLocked(countAsDropped: true);
             if (includeCritical)
             {
-                ClearPendingCriticalWritesLocked();
-                ClearParkedWritesLocked();
+                DropQueuedWritesLocked(pendingCriticalWrites, pendingCriticalByKey);
+                DropQueuedWritesLocked(parkedWrites, parkedByKey);
             }
 
             // A persistent clear survives ordinary render invalidation, but every other active
@@ -291,8 +291,8 @@ internal sealed class NativeReplayOverlayFrameWriteGate : IDisposable, IAsyncDis
         {
             var activeIsSupersedableEmptyWrite = activeWriteRequest is { } activeRequest &&
                 IsEmptyCriticalWrite(activeRequest);
-            RemoveMatchingPendingCriticalWritesLocked(IsEmptyCriticalWrite);
-            RemoveMatchingParkedWritesLocked(IsEmptyCriticalWrite);
+            DropQueuedWritesLocked(pendingCriticalWrites, pendingCriticalByKey, IsEmptyCriticalWrite);
+            DropQueuedWritesLocked(parkedWrites, parkedByKey, IsEmptyCriticalWrite);
 
             Interlocked.Increment(ref persistentCriticalClearGeneration);
             Interlocked.Increment(ref emptyCriticalGeneration);
@@ -333,8 +333,8 @@ internal sealed class NativeReplayOverlayFrameWriteGate : IDisposable, IAsyncDis
             activeLoop = writeLoopTask;
             activeCancellation = activeWriteCancellation;
             RemovePendingWriteLocked(countAsDropped: true);
-            ClearPendingCriticalWritesLocked();
-            ClearParkedWritesLocked();
+            DropQueuedWritesLocked(pendingCriticalWrites, pendingCriticalByKey);
+            DropQueuedWritesLocked(parkedWrites, parkedByKey);
         }
 
         Interlocked.Increment(ref generation);
@@ -843,23 +843,22 @@ internal sealed class NativeReplayOverlayFrameWriteGate : IDisposable, IAsyncDis
 
     private void RemovePendingCriticalNodeLocked(
         LinkedListNode<NativeReplayOverlayFrameWriteRequest> node,
-        bool countAsDropped)
-    {
-        pendingCriticalWrites.Remove(node);
-        pendingCriticalByKey.Remove(GetSemanticKey(node.Value));
-        queuedBytes -= GetRequestByteCount(node.Value);
-        if (countAsDropped)
-        {
-            CountDroppedWrite();
-        }
-    }
+        bool countAsDropped) =>
+        RemoveQueuedNodeLocked(pendingCriticalWrites, pendingCriticalByKey, node, countAsDropped);
 
     private void RemoveParkedNodeLocked(
         LinkedListNode<NativeReplayOverlayFrameWriteRequest> node,
+        bool countAsDropped) =>
+        RemoveQueuedNodeLocked(parkedWrites, parkedByKey, node, countAsDropped);
+
+    private void RemoveQueuedNodeLocked(
+        LinkedList<NativeReplayOverlayFrameWriteRequest> queue,
+        Dictionary<string, LinkedListNode<NativeReplayOverlayFrameWriteRequest>> byKey,
+        LinkedListNode<NativeReplayOverlayFrameWriteRequest> node,
         bool countAsDropped)
     {
-        parkedWrites.Remove(node);
-        parkedByKey.Remove(GetSemanticKey(node.Value));
+        queue.Remove(node);
+        byKey.Remove(GetSemanticKey(node.Value));
         queuedBytes -= GetRequestByteCount(node.Value);
         if (countAsDropped)
         {
@@ -867,48 +866,18 @@ internal sealed class NativeReplayOverlayFrameWriteGate : IDisposable, IAsyncDis
         }
     }
 
-    private void ClearPendingCriticalWritesLocked()
+    private void DropQueuedWritesLocked(
+        LinkedList<NativeReplayOverlayFrameWriteRequest> queue,
+        Dictionary<string, LinkedListNode<NativeReplayOverlayFrameWriteRequest>> byKey,
+        Func<NativeReplayOverlayFrameWriteRequest, bool>? predicate = null)
     {
-        while (pendingCriticalWrites.First is { } node)
-        {
-            RemovePendingCriticalNodeLocked(node, countAsDropped: true);
-        }
-    }
-
-    private void ClearParkedWritesLocked()
-    {
-        while (parkedWrites.First is { } node)
-        {
-            RemoveParkedNodeLocked(node, countAsDropped: true);
-        }
-    }
-
-    private void RemoveMatchingPendingCriticalWritesLocked(
-        Func<NativeReplayOverlayFrameWriteRequest, bool> predicate)
-    {
-        var node = pendingCriticalWrites.First;
+        var node = queue.First;
         while (node is not null)
         {
             var next = node.Next;
-            if (predicate(node.Value))
+            if (predicate is null || predicate(node.Value))
             {
-                RemovePendingCriticalNodeLocked(node, countAsDropped: true);
-            }
-
-            node = next;
-        }
-    }
-
-    private void RemoveMatchingParkedWritesLocked(
-        Func<NativeReplayOverlayFrameWriteRequest, bool> predicate)
-    {
-        var node = parkedWrites.First;
-        while (node is not null)
-        {
-            var next = node.Next;
-            if (predicate(node.Value))
-            {
-                RemoveParkedNodeLocked(node, countAsDropped: true);
+                RemoveQueuedNodeLocked(queue, byKey, node, countAsDropped: true);
             }
 
             node = next;

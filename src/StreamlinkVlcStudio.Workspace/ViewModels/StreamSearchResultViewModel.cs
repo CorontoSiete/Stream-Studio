@@ -1,0 +1,173 @@
+using StreamlinkVlcStudio.Core.Models;
+using StreamlinkVlcStudio.Core.Services;
+using static StreamlinkVlcStudio.Core.Text.StringValues;
+using static StreamlinkVlcStudio.Workspace.ViewModels.StreamViewModelHelpers;
+
+namespace StreamlinkVlcStudio.Workspace.ViewModels;
+
+public sealed class StreamSearchResultViewModel : ObservableObject, IHomeStreamOpenItemViewModel
+{
+    private readonly StreamSearchChannel? channel;
+    private readonly StreamlinkProbeResult probeResult;
+    private StreamMetadataResult? metadata;
+    private int? viewerCount;
+
+    public StreamSearchResultViewModel(
+        StreamSearchChannel channel,
+        Func<StreamSearchResultViewModel, bool, Task> openAsync,
+        int? viewerCount = null,
+        Func<PlatformKind, string, Task>? openVodsAsync = null,
+        Func<bool>? keepHomeOnOpen = null)
+        : this(channel.Target, new(channel.CanPlay, channel.StatusMessage), null, openAsync,
+            viewerCount ?? channel.ViewerCount, openVodsAsync, keepHomeOnOpen, channel)
+    {
+    }
+
+    public StreamSearchResultViewModel(
+        StreamTarget target,
+        StreamlinkProbeResult probeResult,
+        StreamMetadataResult? metadata,
+        Func<StreamSearchResultViewModel, bool, Task> openAsync,
+        int? viewerCount = null,
+        Func<PlatformKind, string, Task>? openVodsAsync = null,
+        Func<bool>? keepHomeOnOpen = null)
+        : this(target, probeResult, metadata, openAsync, viewerCount, openVodsAsync, keepHomeOnOpen, null)
+    {
+    }
+
+    private StreamSearchResultViewModel(
+        StreamTarget target,
+        StreamlinkProbeResult probeResult,
+        StreamMetadataResult? metadata,
+        Func<StreamSearchResultViewModel, bool, Task> openAsync,
+        int? viewerCount,
+        Func<PlatformKind, string, Task>? openVodsAsync,
+        Func<bool>? keepHomeOnOpen,
+        StreamSearchChannel? channel)
+    {
+        this.channel = channel;
+        this.probeResult = probeResult;
+        this.metadata = metadata?.State == StreamMetadataState.Available ? metadata : null;
+        ViewerCount = NormalizeViewerCount(viewerCount);
+        Target = channel is not null ? target : target with
+        {
+            CategoryName = string.IsNullOrWhiteSpace(this.metadata?.CategoryName)
+                ? target.CategoryName
+                : this.metadata.CategoryName.Trim(),
+            ProfileImageUrl = FirstNonEmpty(target.ProfileImageUrl, this.metadata?.ProfileImageUrl)
+        };
+        OpenCommand = new AsyncRelayCommand(
+            () => openAsync(this, keepHomeOnOpen?.Invoke() == true),
+            () => CanOpen);
+        OpenAndStayOnHomeCommand = new AsyncRelayCommand(
+            () => openAsync(this, true),
+            () => CanOpen);
+        GoToVodsCommand = new AsyncRelayCommand(
+            () => openVodsAsync!(Platform, Channel),
+            () => openVodsAsync is not null && !Target.IsExplicitVod && !string.IsNullOrWhiteSpace(Channel));
+    }
+
+    public AsyncRelayCommand OpenCommand { get; }
+
+    public AsyncRelayCommand OpenAndStayOnHomeCommand { get; }
+
+    public AsyncRelayCommand GoToVodsCommand { get; }
+
+    public StreamTarget Target { get; private set; }
+
+    internal void UpdateMetadata(StreamMetadataResult? value)
+    {
+        if (value?.State != StreamMetadataState.Available || metadata == value) return;
+        metadata = value;
+        Target = Target with
+        {
+            CategoryName = CategoryName,
+            ProfileImageUrl = FirstNonEmpty(Target.ProfileImageUrl, value.ProfileImageUrl)
+        };
+        OnPropertyChanged(nameof(Target));
+        OnPropertyChanged(nameof(DisplayName));
+        OnPropertyChanged(nameof(ThumbnailUrl));
+        OnPropertyChanged(nameof(HasThumbnail));
+        OnPropertyChanged(nameof(CategoryName));
+        OnPropertyChanged(nameof(HasCategory));
+        OnPropertyChanged(nameof(Title));
+        OnPropertyChanged(nameof(HasTitle));
+    }
+
+    public PlatformKind Platform => Target.Platform;
+
+    public string PlatformText => Target.Platform.ToString();
+
+    public string Channel => Target.Channel;
+
+    public string DisplayName => Target.IsExplicitVod
+        ? Target.TabTitle
+        : FirstNonEmpty(channel?.DisplayName, metadata?.DisplayName, Target.Channel);
+
+    public string ThumbnailUrl => FirstNonEmpty(channel?.ThumbnailUrl, metadata?.ThumbnailUrl);
+
+    public bool HasThumbnail => !string.IsNullOrWhiteSpace(ThumbnailUrl);
+
+    public string CategoryName => FirstNonEmpty(channel?.CategoryName, metadata?.CategoryName, Target.CategoryName);
+
+    public bool HasCategory => !string.IsNullOrWhiteSpace(CategoryName);
+
+    public string Title => FirstNonEmpty(channel?.Title, metadata?.Title);
+
+    public bool HasTitle => !string.IsNullOrWhiteSpace(Title);
+
+    public string Url => Target.Url;
+
+    public StreamSearchChannelState State => channel?.State ??
+        (probeResult.HasPlayableStream ? StreamSearchChannelState.Live : StreamSearchChannelState.Unavailable);
+
+    public bool IsLive => !Target.IsExplicitVod && (channel?.IsLive ?? probeResult.HasPlayableStream);
+
+    public bool CanPlay => channel?.CanPlay ?? probeResult.HasPlayableStream;
+
+    public bool IsOffline => State == StreamSearchChannelState.Offline;
+
+    public bool CanOpen => CanPlay || IsOffline;
+
+    public string StateText => Target.IsExplicitVod && CanPlay ? "VOD" : IsLive ? "Live" : State switch
+    {
+        StreamSearchChannelState.Offline => "Offline",
+        _ => "Unavailable"
+    };
+
+    public int? ViewerCount
+    {
+        get => viewerCount;
+        private set
+        {
+            if (SetProperty(ref viewerCount, value))
+            {
+                OnPropertyChanged(nameof(HasViewerCount));
+                OnPropertyChanged(nameof(ViewerCountText));
+            }
+        }
+    }
+
+    internal void UpdateViewerCount(int? value) => ViewerCount = NormalizeViewerCount(value);
+
+    public bool HasViewerCount => IsLive && ViewerCount is not null;
+
+    public string ViewerCountText => ViewerCount is { } value
+        ? FormatViewerCountLabel(value)
+        : "";
+
+    public string StatusText => string.IsNullOrWhiteSpace(probeResult.Message)
+        ? State switch
+        {
+            StreamSearchChannelState.Live => "Playable stream found.",
+            StreamSearchChannelState.Offline => "Offline. Open VODs.",
+            _ => "Stream unavailable."
+        }
+        : probeResult.Message;
+
+    private static int? NormalizeViewerCount(int? viewerCount)
+    {
+        return viewerCount is { } value ? Math.Max(0, value) : null;
+    }
+
+}

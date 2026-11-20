@@ -10,6 +10,7 @@ using StreamlinkVlcStudio.App.Wpf.Services;
 using StreamlinkVlcStudio.App.Wpf.Twitch;
 using StreamlinkVlcStudio.Core;
 using StreamlinkVlcStudio.Core.Models;
+using StreamlinkVlcStudio.Core.Parsing;
 using StreamlinkVlcStudio.Core.Services;
 using StreamlinkVlcStudio.Infrastructure.Twitch;
 
@@ -34,7 +35,7 @@ internal sealed class ChannelFollowService(
         var accessToken = GetConnectedTwitchToken(target.Platform);
         if (accessToken.Length == 0) return await RunAsync(target, null, cancellationToken);
 
-        if (!ChannelFollowResponseTracker.TryGetChannel(target, out var channel))
+        if (!ChannelFollowTarget.TryResolve(target, out var channel))
             throw new InvalidOperationException("Select a Twitch broadcaster to check follow status.");
         var result = await twitchLookup!.GetFollowStatusAsync(
             channel with { BroadcasterId = target.BroadcasterId }, accessToken, cancellationToken);

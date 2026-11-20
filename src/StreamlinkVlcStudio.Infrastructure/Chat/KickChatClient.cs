@@ -204,41 +204,19 @@ public sealed class KickChatClient : IChatClient
         }
     }
 
-    private async Task ReconnectCoreAsync(
+    private Task ReconnectCoreAsync(
         LiveChatConnectionSupervisor supervisor,
         StreamTarget target,
-        CancellationToken cancellationToken)
-    {
-        await lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
+        CancellationToken cancellationToken) =>
+        ChatConnectionCleanup.ConnectAsync(lifecycleGate, () =>
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            lock (lifecycleStateGate)
-            {
-                ObjectDisposedException.ThrowIf(disposed, this);
-            }
-
+            ThrowIfDisposed();
             if (!ReferenceEquals(connectionSupervisor, supervisor))
             {
                 throw new OperationCanceledException("The Kick chat connection was replaced.", cancellationToken);
             }
-
-            await DisconnectCoreAsync().ConfigureAwait(false);
-            try
-            {
-                await ConnectCoreAsync(target, cancellationToken, supervisor).ConfigureAwait(false);
-            }
-            catch
-            {
-                await DisconnectCoreAsync().ConfigureAwait(false);
-                throw;
-            }
-        }
-        finally
-        {
-            lifecycleGate.Release();
-        }
-    }
+        }, DisconnectCoreAsync, () => ConnectCoreAsync(target, cancellationToken, supervisor),
+            logger, "KickChat", cancellationToken);
 
     public async Task SendMessageAsync(string message, CancellationToken cancellationToken = default)
     {

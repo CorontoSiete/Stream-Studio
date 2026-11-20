@@ -10,19 +10,10 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-$repoRoot = if ([string]::IsNullOrWhiteSpace($RepositoryRoot)) {
-    [IO.Path]::GetFullPath((Join-Path $scriptRoot '..'))
-} else {
-    [IO.Path]::GetFullPath($RepositoryRoot)
-}
-$contractFile = if ([string]::IsNullOrWhiteSpace($ContractPath)) {
-    Join-Path $repoRoot 'shared\release-contract.json'
-} else {
-    [IO.Path]::GetFullPath($ContractPath)
-}
-
 . (Join-Path $scriptRoot 'lib\common.ps1')
 . (Join-Path $scriptRoot 'lib\release-contract.ps1')
+$repoRoot = Resolve-ReleasePath $RepositoryRoot (Join-Path $scriptRoot '..')
+$contractFile = Resolve-ReleasePath $ContractPath (Join-Path $repoRoot 'shared\release-contract.json')
 $contract = Read-ReleaseContract $contractFile
 
 function Assert-SignedReleaseSet([object[]]$Files) {
@@ -30,6 +21,7 @@ function Assert-SignedReleaseSet([object[]]$Files) {
     foreach ($item in $Files) { $byName[[string]$item.Entry.name] = $item.File.FullName }
     $metadata = Get-Content -LiteralPath $byName['RELEASE-METADATA.json'] -Raw | ConvertFrom-Json
     & (Join-Path $scriptRoot 'verify-update-manifest.ps1') `
+        -ContractPath $contractFile `
         -ManifestPath $byName['UPDATE-MANIFEST.json'] `
         -SignaturePath $byName['UPDATE-MANIFEST.sig'] `
         -SetupPath $byName['StreamlinkVlcStudio-Setup.exe'] `
@@ -41,22 +33,14 @@ function Assert-SignedReleaseSet([object[]]$Files) {
 }
 
 if ($Check) {
-    $root = if ([string]::IsNullOrWhiteSpace($CheckRoot)) {
-        Join-Path $repoRoot 'artifacts\release-set'
-    } else {
-        [IO.Path]::GetFullPath($CheckRoot)
-    }
+    $root = Resolve-ReleasePath $CheckRoot (Join-Path $repoRoot 'artifacts\release-set')
     $files = @(Test-VerifiedReleaseSet -Contract $contract -Root $root)
     Assert-SignedReleaseSet $files
     Write-Info "Verified closed release set with $($files.Count) assets: $root"
     return
 }
 
-$destinationRoot = if ([string]::IsNullOrWhiteSpace($Destination)) {
-    Join-Path $repoRoot 'artifacts\release-set'
-} else {
-    [IO.Path]::GetFullPath($Destination)
-}
-$files = @(New-VerifiedReleaseSet -Contract $contract -RepositoryRoot $repoRoot -Destination $destinationRoot)
-Assert-SignedReleaseSet $files
+$destinationRoot = Resolve-ReleasePath $Destination (Join-Path $repoRoot 'artifacts\release-set')
+$files = @(New-VerifiedReleaseSet -Contract $contract -RepositoryRoot $repoRoot -Destination $destinationRoot `
+    -ValidateStagedSet ${function:Assert-SignedReleaseSet})
 Write-Info "Promoted closed release set with $($files.Count) assets: $destinationRoot"

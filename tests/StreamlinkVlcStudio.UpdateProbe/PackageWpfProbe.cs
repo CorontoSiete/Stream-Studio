@@ -47,7 +47,11 @@ internal static class PackageWpfProbe
                 applicationType.GetMethod("Shutdown", Type.EmptyTypes)!.Invoke(application, null);
             }
             catch (Exception ex) { failure = ex; }
-        }) { IsBackground = true, Name = "Packaged WPF resource probe" };
+        })
+        {
+            IsBackground = true,
+            Name = "Packaged WPF resource probe"
+        };
         thread.SetApartmentState(ApartmentState.STA);
         thread.Start();
         if (!thread.Join(TimeSpan.FromSeconds(30))) throw new TimeoutException("Packaged WPF rendering timed out.");

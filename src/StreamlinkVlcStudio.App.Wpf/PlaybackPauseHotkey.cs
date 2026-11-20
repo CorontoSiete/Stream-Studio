@@ -1,8 +1,8 @@
 using System.Windows;
 using StreamlinkVlcStudio.App.Wpf.Controls;
-using StreamlinkVlcStudio.App.Wpf.ViewModels;
 using StreamlinkVlcStudio.Core.Models;
 using StreamlinkVlcStudio.Core.Settings;
+using StreamlinkVlcStudio.Workspace.ViewModels;
 
 namespace StreamlinkVlcStudio.App.Wpf;
 

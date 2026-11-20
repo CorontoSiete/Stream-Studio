@@ -1,4 +1,3 @@
-using StreamlinkVlcStudio.App.Wpf.Services;
 using StreamlinkVlcStudio.Infrastructure.Http;
 
 internal static partial class CodeCleanupTestCatalog
