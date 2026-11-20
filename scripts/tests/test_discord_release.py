@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
-from unittest.mock import patch
+from unittest.mock import call, patch
 from urllib.error import HTTPError, URLError
 
 SPEC = importlib.util.spec_from_file_location(
@@ -76,6 +76,46 @@ class ReleaseFeedTests(unittest.TestCase):
         message = release_feed.build_payloads(published_release(), ping_everyone=False)[0]
         self.assertNotIn("content", message)
         self.assertEqual(message["allowed_mentions"], {"parse": []})
+
+    def test_stable_notes_require_a_populated_improvements_and_bug_fixes_section(self):
+        valid = "## Improvements and bug fixes\n\n- Playback resumes more reliably.\n\n## Updating\n\nUse Setup."
+        release_feed.validate_release_notes(valid)
+
+        for notes in (
+            valid.replace("Improvements and bug fixes", "New features"),
+            valid.replace("- Playback resumes more reliably.", "<!-- TODO -->"),
+        ):
+            with self.subTest(notes=notes), self.assertRaisesRegex(ValueError, "Improvements and bug fixes"):
+                release_feed.validate_release_notes(notes)
+
+    def test_workflow_edits_the_existing_message_without_posting_or_pinging(self):
+        webhook = "https://discord.com/api/webhooks/123/test-token"
+        edit_id = "1573447742682833044"
+        environment = {"DISCORD_RELEASE_WEBHOOK_URL": webhook, "DISCORD_EDIT_MESSAGE_ID": edit_id}
+        release = published_release("## Improvements and bug fixes\n\n- Playback resumes more reliably.")
+        original = {"id": edit_id, "embeds": [{"url": release["html_url"]}]}
+        payload = release_feed.build_payloads(release, ping_everyone=False)[0]
+        edited = {"id": edit_id, "embeds": payload["embeds"]}
+        endpoint = f"{webhook}/messages/{edit_id}"
+        with (patch.dict("os.environ", environment, clear=True),
+              patch("sys.argv", ["announce-discord-release.py"]),
+              patch.object(release_feed, "load_release", return_value=release),
+              patch.object(release_feed, "request_json", side_effect=[original, edited]) as request,
+              patch("builtins.print")):
+            release_feed.main()
+            self.assertEqual(request.call_args_list, [call(endpoint), call(endpoint, payload=payload, method="PATCH")])
+
+    def test_workflow_rejects_an_edit_for_a_different_announcement(self):
+        environment = {"DISCORD_RELEASE_WEBHOOK_URL": "https://discord.com/api/webhooks/123/test-token",
+                       "DISCORD_EDIT_MESSAGE_ID": "1573447742682833044"}
+        original = {"embeds": [{"url": release_feed.RELEASE_PREFIX + "tag/v1.8.11"}]}
+        with (patch.dict("os.environ", environment, clear=True),
+              patch("sys.argv", ["announce-discord-release.py"]),
+              patch.object(release_feed, "load_release", return_value=published_release()),
+              patch.object(release_feed, "request_json", return_value=original) as request):
+            with self.assertRaisesRegex(ValueError, "not the announcement for this release"):
+                release_feed.main()
+            self.assertEqual(request.call_count, 1)
 
     def test_workflow_dry_run_checks_webhook_without_posting(self):
         webhook = "https://discord.com/api/webhooks/123/test-token"

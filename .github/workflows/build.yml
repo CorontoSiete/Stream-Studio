@@ -67,6 +67,11 @@ jobs:
           "IS_STABLE_TAG=$stable" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           Write-Host "Validation identity: version $version; stable tag: $stable."
 
+      - name: Check release notes for improvements and bug fixes
+        if: env.IS_STABLE_TAG == 'true'
+        shell: pwsh
+        run: python scripts/announce-discord-release.py --validate-notes "docs/releases/$env:RELEASE_TAG.md"
+
       - name: Restore with vulnerability audit
         run: >
           dotnet restore StreamlinkVlcStudio.sln

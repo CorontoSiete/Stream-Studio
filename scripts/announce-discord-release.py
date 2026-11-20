@@ -85,13 +85,26 @@ def split_notes(text, limit=3600):
     return chunks
 
 
+def public_notes(notes):
+    return re.sub(r"<!--.*?-->", "", notes, flags=re.S).strip()
+
+
+def validate_release_notes(notes):
+    improvement_section = re.search(
+        r"^##[ \t]+Improvements and bug fixes[ \t]*\n(.*?)(?=^#{1,2}[ \t]|\Z)",
+        public_notes(notes), flags=re.M | re.S,
+    )
+    if not improvement_section or not improvement_section[1].strip():
+        raise ValueError("Add a nonempty '## Improvements and bug fixes' section to the release notes.")
+
+
 def build_payloads(release, *, ping_everyone=True):
     url = release.get("html_url", "")
     if not url.startswith(RELEASE_PREFIX + "tag/") or release.get("draft"):
         raise ValueError("Only published Stream Studio releases can be announced.")
     tag = release["tag_name"]
     title = release.get("name") or f"Stream Studio {tag}"
-    notes = re.sub(r"<!--.*?-->", "", release.get("body") or "", flags=re.S).strip()
+    notes = public_notes(release.get("body") or "")
     lines = notes.split("\n", 1)
     normalize = lambda value: re.sub(r"\bv(?=\d)", "", value.lower()).strip("# \r")
     if len(lines) > 1 and lines[0].startswith("#") and normalize(lines[0]) == normalize(title):
@@ -147,26 +160,47 @@ def load_release(path=None):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--release-json")
+    parser.add_argument("--validate-notes", type=Path)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--edit-message-id")
     args = parser.parse_args()
+    if args.validate_notes is not None:
+        validate_release_notes(args.validate_notes.read_text(encoding="utf-8-sig"))
+        return
+
     dry_run = args.dry_run or os.environ.get("DISCORD_DRY_RUN", "").lower() == "true"
     webhook = os.environ.get("DISCORD_RELEASE_WEBHOOK_URL", "").strip()
     if not (dry_run and args.release_json) and not re.fullmatch(WEBHOOK_PATTERN, webhook):
         raise ValueError("DISCORD_RELEASE_WEBHOOK_URL is missing or is not a Discord webhook.")
-    if args.edit_message_id is not None and not args.edit_message_id.isdecimal():
+    edit_id = args.edit_message_id
+    if edit_id is None:
+        edit_id = os.environ.get("DISCORD_EDIT_MESSAGE_ID", "").strip() or None
+    if edit_id is not None and not re.fullmatch(r"[0-9]+", edit_id):
         raise ValueError("The message ID must contain only digits.")
     release = load_release(args.release_json)
-    messages = build_payloads(release, ping_everyone=args.edit_message_id is None)
+    messages = build_payloads(release, ping_everyone=not edit_id)
+    edit_endpoint = f"{webhook}/messages/{edit_id}" if edit_id else None
+
+    if edit_endpoint and not (dry_run and args.release_json):
+        original = request_json(edit_endpoint)
+        if not any(embed.get("url") == release["html_url"] for embed in original.get("embeds", [])):
+            raise ValueError("The Discord message is not the announcement for this release.")
+
     message_ids = []
     if dry_run:
-        if not args.release_json:
+        if not args.release_json and not edit_endpoint:
             request_json(webhook)
     else:
         for index, payload in enumerate(messages):
-            edit = args.edit_message_id if index == 0 else None
-            endpoint = webhook + (f"/messages/{edit}" if edit else "") + "?wait=true"
-            result = request_json(endpoint, payload=payload, method="PATCH" if edit else "POST")
+            if edit_endpoint and index == 0:
+                result = request_json(edit_endpoint, payload=payload, method="PATCH")
+                if result.get("id") != edit_id or not any(
+                    embed.get("description") == payload["embeds"][0]["description"]
+                    for embed in result.get("embeds", [])
+                ):
+                    raise RuntimeError("Discord did not confirm the edited announcement.")
+            else:
+                result = request_json(webhook + "?wait=true", payload=payload, method="POST")
             message_ids.append(result.get("id"))
     print(json.dumps({"release": release["tag_name"], "messages": len(messages),
                       "dry_run": dry_run, "message_ids": message_ids}))

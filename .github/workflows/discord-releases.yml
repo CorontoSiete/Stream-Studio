@@ -9,6 +9,10 @@ on:
         description: "Release tag to announce (blank uses the latest published release)"
         required: false
         type: string
+      edit_message_id:
+        description: "Existing Discord message ID to edit silently"
+        required: false
+        type: string
       dry_run:
         description: "Validate without posting to Discord"
         required: true
@@ -46,10 +50,11 @@ jobs:
       - name: Test announcement formatting
         run: python3 -m unittest discover -s scripts/tests -p test_discord_release.py
 
-      - name: Announce the published release
+      - name: Post or edit the release announcement
         run: python3 scripts/announce-discord-release.py
         env:
           GITHUB_TOKEN: ${{ github.token }}
           DISCORD_RELEASE_WEBHOOK_URL: ${{ secrets.DISCORD_RELEASE_WEBHOOK_URL }}
           DISCORD_RELEASE_TAG: ${{ inputs.release_tag }}
+          DISCORD_EDIT_MESSAGE_ID: ${{ inputs.edit_message_id }}
           DISCORD_DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
