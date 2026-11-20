@@ -25,7 +25,19 @@
 
 Follow your favorite channels, watch up to **16 streams at once**, and pick up past broadcasts where you left off. Stream Studio combines Streamlink with embedded VLC playback and offers an optional browser player for other devices on your home network.
 
-**Start here:** [Install](#install-latest-release) · [Getting started](#getting-started) · [Shortcuts](#keyboard-shortcuts) · [Other devices](#watch-on-other-devices) · [Troubleshooting](#troubleshooting) · [Build from source](#build-and-run) · [Documentation](#documentation)
+**Start here:** [Screenshots](#screenshots) · [Install](#install-latest-release) · [Getting started](#getting-started) · [Shortcuts](#keyboard-shortcuts) · [Other devices](#watch-on-other-devices) · [Troubleshooting](#troubleshooting) · [Build from source](#build-and-run) · [Documentation](#documentation)
+
+## Screenshots
+
+### Windows app
+
+![Stream Studio for Windows showing the Discover page with Twitch category artwork and language filters](docs/assets/screenshots/windows-app.png)
+
+### Web UI
+
+![Stream Studio’s web player showing an aurora from orbit, playback controls, and docked replay chat](docs/assets/screenshots/web-ui.png)
+
+The web screenshot uses a fictional channel and chat. The sample video is [Earth Illuminated](https://svs.gsfc.nasa.gov/11474/) from NASA’s Goddard Space Flight Center, with footage courtesy of NASA Johnson Space Center’s Gateway to Astronaut Photography of Earth.
 
 ## Features
 
