@@ -35,7 +35,7 @@ Follow your favorite channels, watch up to **16 streams at once**, and pick up p
 
 ### Following on Windows
 
-![Stream Studio for Windows showing the Following tab with live and offline demo channels](docs/assets/screenshots/windows-following.png)
+![Stream Studio for Windows showing the Following tab with live and offline demo channels](docs/assets/screenshots/windows-following-demo.png)
 
 The Following screenshot shows fictional Twitch and Kick channels.
 
