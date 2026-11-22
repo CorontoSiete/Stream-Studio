@@ -33,6 +33,12 @@ Follow your favorite channels, watch up to **16 streams at once**, and pick up p
 
 ![Stream Studio for Windows showing the Discover page with Twitch category artwork and language filters](docs/assets/screenshots/windows-app.png)
 
+### Following on Windows
+
+![Stream Studio for Windows with the Following tab selected and an empty list of live and offline channels](docs/assets/screenshots/windows-following.png)
+
+The Following screenshot uses an empty demo profile.
+
 ### Web UI
 
 ![Stream Studio’s web player showing an aurora from orbit, playback controls, and docked replay chat](docs/assets/screenshots/web-ui.png)
