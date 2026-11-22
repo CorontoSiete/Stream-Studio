@@ -35,15 +35,15 @@ Follow your favorite channels, watch up to **16 streams at once**, and pick up p
 
 ### Following on Windows
 
-![Stream Studio for Windows with the Following tab selected and an empty list of live and offline channels](docs/assets/screenshots/windows-following.png)
+![Stream Studio for Windows showing the Following tab with live and offline demo channels](docs/assets/screenshots/windows-following.png)
 
-The Following screenshot uses an empty demo profile.
+The Following screenshot shows fictional Twitch and Kick channels.
 
 ### Web UI
 
 ![Stream Studio’s web player showing an aurora from orbit, playback controls, and docked replay chat](docs/assets/screenshots/web-ui.png)
 
-The web screenshot uses a fictional channel and chat. The sample video is [Earth Illuminated](https://svs.gsfc.nasa.gov/11474/) from NASA’s Goddard Space Flight Center, with footage courtesy of NASA Johnson Space Center’s Gateway to Astronaut Photography of Earth.
+The web screenshot uses a fictional channel and chat. The Following thumbnails and web video use [Earth Illuminated](https://svs.gsfc.nasa.gov/11474/) from NASA’s Goddard Space Flight Center, with footage courtesy of NASA Johnson Space Center’s Gateway to Astronaut Photography of Earth.
 
 ## Features
 
