@@ -6,7 +6,8 @@ internal static class StreamSearchTestCatalog
         ("stream search keeps relevant offline substring matches within the result limit", PartialMatchRelevanceAsync),
         ("stream search falls back to Helix for rejected malformed and empty website results", WebsiteFallbackAsync),
         ("stream search retains Kick discovery and exact probing when Twitch website search fails", IndependentPlatformFallbackAsync),
-        ("stream search cancellation stops website discovery without starting Helix or probes", WebsiteCancellationAsync)
+        ("stream search cancellation stops website discovery without starting Helix or probes", WebsiteCancellationAsync),
+        ("stream search cancellation rejects queued probes when active probes finish", QueuedProbeCancellationAsync)
     ];
 
     private static async Task PartialNameSearchAsync()
@@ -210,6 +211,29 @@ internal static class StreamSearchTestCatalog
     {
         data = new { searchFor = new { channels = new { edges = items.Select(item => new { item }) } } }
     });
+
+    private static async Task QueuedProbeCancellationAsync()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var channels = Enumerable.Range(1, 5).Select(index => new { login = $"streamer{index}" }).ToArray();
+        using var httpClient = new HttpClient(new FakeHttpMessageHandler(request => JsonResponse(
+            request.RequestUri!.Host == "gql.twitch.tv" ? WebsiteResponse(channels) : """{"channels":[]}""")));
+        // Complete the active probes synchronously inside the caller's cancellation
+        // callback, before the queued semaphore waiters receive cancellation.
+        var active = new TaskCompletionSource<StreamlinkProbeResult>();
+        var streamlink = new FakeStreamlinkService { ProbeStreamsOverride = (_, _) => active.Task };
+        var service = new StreamSearchService(new MemoryLogger(), streamlink, httpClient);
+        var search = service.SearchAsync(new("streamer"), new AppSettings { StreamlinkPath = "streamlink.exe" }, cancellation.Token);
+        try
+        {
+            Assert.Equal(4, streamlink.ProbeRequests.Count);
+            using var release = cancellation.Token.Register(() => active.TrySetResult(new(true, "Playable stream found.")));
+            cancellation.Cancel();
+            await Assert.ThrowsAsync<OperationCanceledException>(() => search.WaitAsync(TimeSpan.FromSeconds(2)));
+            Assert.Equal(4, streamlink.ProbeRequests.Count);
+        }
+        finally { active.TrySetResult(new(false, "Probe ended.")); }
+    }
 
     private static HttpResponseMessage JsonResponse(string json) => new(HttpStatusCode.OK)
     {

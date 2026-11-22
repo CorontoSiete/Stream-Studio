@@ -72,7 +72,9 @@ function Resolve-PackageVersion {
 function Get-FileSha256 {
     param([Parameter(Mandatory = $true)][string]$Path)
 
-    $stream = [IO.File]::OpenRead($Path)
+    # Native build checks also run in a PowerShell host without the utility module.
+    $fullPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)
+    $stream = [IO.File]::OpenRead($fullPath)
     try {
         $algorithm = [Security.Cryptography.SHA256]::Create()
         try {
@@ -591,7 +593,7 @@ function Assert-PinnedInstallerDependency {
         throw "Dependency length mismatch for $Path. Expected $($Dependency.length), found $($item.Length)."
     }
 
-    $actualHash = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+    $actualHash = Get-FileSha256 $Path
     $expectedHash = ([string]$Dependency.sha256).Trim().ToLowerInvariant()
     if (-not [string]::Equals($actualHash, $expectedHash, [StringComparison]::Ordinal)) {
         throw "Dependency SHA-256 mismatch for $Path. Expected $expectedHash, found $actualHash."

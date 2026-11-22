@@ -31,7 +31,8 @@ Discord.
 To correct an existing announcement, update the GitHub release notes and supply
 the Discord message ID alongside the release tag. Run with validation disabled
 to apply the edit. The workflow checks that the message links to that release
-before editing it.
+before editing it. An edit updates the message ID you supplied. If the revised
+notes exceed one message, the edited message links to the rest of the changelog.
 
 With validation disabled and the message ID blank, the workflow posts an
 announcement and pings `@everyone`. Check the channel before retrying a failed

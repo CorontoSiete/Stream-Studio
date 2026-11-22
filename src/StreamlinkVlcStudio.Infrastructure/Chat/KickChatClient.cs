@@ -221,7 +221,7 @@ public sealed class KickChatClient : IChatClient
     public async Task SendMessageAsync(string message, CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
-        var sanitized = SanitizeMessage(message);
+        var sanitized = ChatTextNormalizer.NormalizeOutgoingMessage(message);
         if (string.IsNullOrWhiteSpace(sanitized))
         {
             return;
@@ -776,11 +776,6 @@ public sealed class KickChatClient : IChatClient
         var scopes = ReadScopes(data);
 
         return new KickTokenInfo(active, tokenType, scopes);
-    }
-
-    private static string SanitizeMessage(string message)
-    {
-        return ChatTextNormalizer.NormalizeSingleLine(message, 500);
     }
 
     private static bool KickSendResponseIndicatesSuccess(string responseBody)

@@ -1,13 +1,17 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Sockets;
 using System.Text;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.WebUtilities;
+using StreamlinkVlcStudio.Core.Models;
 using StreamlinkVlcStudio.Core.Twitch;
 using StreamlinkVlcStudio.Infrastructure.Hls;
 using StreamlinkVlcStudio.Infrastructure.Http;
+using StreamlinkVlcStudio.Infrastructure.Previews;
 using StreamlinkVlcStudio.Infrastructure.Replay;
 using StreamlinkVlcStudio.Infrastructure.Vod;
 
@@ -16,6 +20,7 @@ namespace StreamlinkVlcStudio.Infrastructure.LocalWeb;
 /// <summary>Only server-resolved resources receive opaque IDs. There is no URL/path proxy endpoint.</summary>
 internal sealed partial class LocalWebMedia : IDisposable
 {
+    internal const string PlaylistContentType = "application/vnd.apple.mpegurl";
     private const int MaximumPlaylistBytes = 16 * 1024 * 1024;
     private static readonly Encoding StrictUtf8 = new UTF8Encoding(false, true);
     private static readonly Uri TrustedPlaylistUri = new("https://trusted-playlist.invalid/index.m3u8");
@@ -25,11 +30,21 @@ internal sealed partial class LocalWebMedia : IDisposable
     private readonly object gate = new();
     private readonly HttpClient http;
     private string? trustedPlaylist;
+    private PlatformKind? directPreviewPlatform;
+    private InitialPreviewPlaylist? initialPreviewPlaylist;
     internal string Root { get; }
     internal string PlaybackId { get; }
     internal bool ContainsResource(string id) => resources.ContainsKey(id);
     internal bool GrowingArchive { get; set; }
     internal bool RewriteTwitchArchive { get; set; }
+
+    private sealed record InitialPreviewPlaylist(string Content, Uri Origin, long LoadedAt);
+
+    internal void SetDirectPreviewPlaylist(string content, Uri origin, PlatformKind platform)
+    {
+        directPreviewPlatform = platform;
+        initialPreviewPlaylist = new(content, origin, Stopwatch.GetTimestamp());
+    }
 
     internal LocalWebMedia(string playbackId, Uri root, HttpClient? http = null)
     {
@@ -186,6 +201,16 @@ internal sealed partial class LocalWebMedia : IDisposable
             await WritePlaylistAsync(context, trustedPlaylist, uri).ConfigureAwait(false);
             return;
         }
+        if (resourceId == Root && context.Request.Query.Count == 0)
+        {
+            var initial = HttpMethods.IsHead(context.Request.Method) ? Volatile.Read(ref initialPreviewPlaylist) :
+                Interlocked.Exchange(ref initialPreviewPlaylist, null);
+            if (initial is not null && Stopwatch.GetElapsedTime(initial.LoadedAt) < TimeSpan.FromSeconds(1))
+            {
+                await WritePlaylistAsync(context, initial.Content, initial.Origin).ConfigureAwait(false);
+                return;
+            }
+        }
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
         timeout.CancelAfter(TimeSpan.FromSeconds(45));
         if (uri.IsFile)
@@ -205,18 +230,28 @@ internal sealed partial class LocalWebMedia : IDisposable
         }
         if (context.Request.Query.Count > 0)
             uri = new Uri(QueryHelpers.AddQueryString(uri.AbsoluteUri, context.Request.Query.Select(p => new KeyValuePair<string, string?>(p.Key, p.Value.ToString()))));
-        var requestedRange = context.Request.Headers.Range.ToString();
         var knownPlaylist = resourceId.EndsWith(".m3u8", StringComparison.OrdinalIgnoreCase);
-        var response = await FetchAsync(uri, knownPlaylist ? "" : requestedRange, timeout.Token).ConfigureAwait(false);
+        var upstreamRange = knownPlaylist ? "" : context.Request.Headers.Range.ToString();
+        var measured = context.Request.Query.Count == 0 && upstreamRange.Length == 0 ? FindMeasuredArchive(uri) : null;
+        var response = await FetchAsync(uri, upstreamRange, timeout.Token, measured).ConfigureAwait(false);
         try
         {
+            if (measured is not null && !CanStoreArchive(response))
+                Interlocked.CompareExchange(ref measuredArchive, null, measured);
+            // The browser still receives a complete, rewritten playlist. Only its
+            // provider transfer becomes conditional, using the exact validated origin.
+            if (measured?.IsNotModified(response) == true)
+            {
+                await WritePlaylistAsync(context, measured.Content, measured.Origin).ConfigureAwait(false);
+                return;
+            }
             var final = response.RequestMessage!.RequestUri!;
             var type = response.Content.Headers.ContentType?.MediaType ?? "";
             var isPlaylist = knownPlaylist || final.AbsolutePath.EndsWith(".m3u8", StringComparison.OrdinalIgnoreCase) ||
                 type.Contains("mpegurl", StringComparison.OrdinalIgnoreCase);
             // A native media stack may probe an extensionless URL with a byte range.
             // A partial playlist cannot be rewritten or played, so fetch it whole.
-            if (isPlaylist && response.StatusCode == HttpStatusCode.PartialContent)
+            if (isPlaylist && upstreamRange.Length != 0 && response.StatusCode == HttpStatusCode.PartialContent)
             {
                 response.Dispose();
                 response = await FetchAsync(uri, "", timeout.Token).ConfigureAwait(false);
@@ -230,6 +265,8 @@ internal sealed partial class LocalWebMedia : IDisposable
             if (isPlaylist)
             {
                 var playlist = await ReadRemotePlaylistAsync(response, timeout.Token).ConfigureAwait(false);
+                if (directPreviewPlatform is { } platform)
+                    LivePreviewPlaylist.Validate(playlist, final, platform);
                 await WritePlaylistAsync(context, playlist, final).ConfigureAwait(false);
                 return;
             }
@@ -255,31 +292,30 @@ internal sealed partial class LocalWebMedia : IDisposable
         finally { response.Dispose(); }
     }
 
-    private static async Task<string> ReadRemotePlaylistAsync(HttpResponseMessage response, CancellationToken token)
-    {
-        response.EnsureSuccessStatusCode();
-        if (response.StatusCode == HttpStatusCode.PartialContent) throw new InvalidDataException("The media playlist is incomplete.");
-        var bytes = await BoundedByteReader.ReadOrThrowAsync(response.Content, MaximumPlaylistBytes, token).ConfigureAwait(false);
-        return StrictUtf8.GetString(bytes);
-    }
+    private static Task<string> ReadRemotePlaylistAsync(HttpResponseMessage response, CancellationToken token) =>
+        BoundedHttpContentReader.ReadPlaylistAsync(response, token, MaximumPlaylistBytes, StrictUtf8);
 
     private async Task WritePlaylistAsync(HttpContext context, string playlist, Uri source)
     {
         var rewritten = RewritePlaylist(playlist, source);
-        context.Response.ContentType = "application/vnd.apple.mpegurl";
+        context.Features.Get<IHttpsCompressionFeature>()?.Mode = HttpsCompressionMode.Compress;
+        context.Response.ContentType = PlaylistContentType;
         context.Response.ContentLength = Encoding.UTF8.GetByteCount(rewritten);
         if (!HttpMethods.IsHead(context.Request.Method)) await context.Response.WriteAsync(rewritten, context.RequestAborted).ConfigureAwait(false);
     }
 
-    private async Task<HttpResponseMessage> FetchAsync(Uri uri, string range, CancellationToken token)
+    private async Task<HttpResponseMessage> FetchAsync(Uri uri, string range, CancellationToken token, ArchivePlaylist? measured = null)
     {
-        if (range.Length != 0 && (range.Length > 80 || !RangeHeaderValue.TryParse(range, out var parsed) ||
+        RangeHeaderValue? parsed = null;
+        if (range.Length != 0 && (range.Length > 80 || !RangeHeaderValue.TryParse(range, out parsed) ||
             parsed.Unit != "bytes" || parsed.Ranges.Count != 1)) throw new InvalidDataException("Invalid byte range.");
         for (var redirects = 0; redirects <= 5; redirects++)
         {
             if (!IsSafeUri(uri)) throw new InvalidDataException("Invalid media endpoint.");
             using var request = new HttpRequestMessage(HttpMethod.Get, uri);
-            if (range.Length != 0) request.Headers.Range = RangeHeaderValue.Parse(range);
+            request.Headers.Range = parsed;
+            if (measured is not null && measured.Origin.AbsoluteUri == uri.AbsoluteUri)
+                request.Headers.IfNoneMatch.Add(measured.Validator);
             var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
             if ((int)response.StatusCode is not (301 or 302 or 303 or 307 or 308)) return response;
             var location = response.Headers.Location;

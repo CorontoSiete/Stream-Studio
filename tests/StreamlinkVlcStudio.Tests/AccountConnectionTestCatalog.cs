@@ -316,6 +316,9 @@ internal static class AccountConnectionTestCatalog
         Assert.Equal(HttpStatusCode.BadRequest, duplicate.StatusCode);
         using var unsupported = await fixture.Client.PostAsync("/v1/kick/token", new StringContent("{}", Encoding.UTF8, "application/json"));
         Assert.Equal(HttpStatusCode.UnsupportedMediaType, unsupported.StatusCode);
+        using var oversized = await fixture.Client.PostAsync("/v1/kick/token",
+            new StringContent(new string('x', 16_385), Encoding.UTF8, "application/x-www-form-urlencoded"));
+        Assert.Equal(HttpStatusCode.RequestEntityTooLarge, oversized.StatusCode);
         Assert.Equal(0, calls);
     }
 

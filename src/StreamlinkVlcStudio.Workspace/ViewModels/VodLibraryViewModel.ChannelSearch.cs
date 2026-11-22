@@ -19,7 +19,6 @@ internal sealed partial class VodLibraryViewModel
     private bool isVodChannelSearchOpen;
     private bool vodStreamerResolved;
     private bool suppressAutomaticVodSearch;
-    private long twitchVodScheduleVersion;
 
     public ObservableCollection<VodChannelSearchResultViewModel> VodChannelSearchResults { get; } = [];
     public bool HasVodChannelSearchResults => VodChannelSearchResults.Count > 0;

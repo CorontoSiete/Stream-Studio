@@ -80,10 +80,16 @@ class ReleaseFeedTests(unittest.TestCase):
     def test_stable_notes_require_a_populated_improvements_and_bug_fixes_section(self):
         valid = "## Improvements and bug fixes\n\n- Playback resumes more reliably.\n\n## Updating\n\nUse Setup."
         release_feed.validate_release_notes(valid)
+        release_feed.validate_release_notes(valid.replace("## Improvements and bug fixes", "## Improvements and bug fixes ##"))
+        release_feed.validate_release_notes(valid.replace("- Playback", "### Playback\n\n- Playback"))
 
         for notes in (
             valid.replace("Improvements and bug fixes", "New features"),
             valid.replace("- Playback resumes more reliably.", "<!-- TODO -->"),
+            "````markdown\n```\n" + valid + "\n````",
+            "~~~markdown\n" + valid + "\n~~~",
+            "## Improvements and bug fixes\n\n##\n\nText outside the section.",
+            "## Improvements and bug fixes\n\n### Playback\n\n## Updating\n\nText outside the section.",
         ):
             with self.subTest(notes=notes), self.assertRaisesRegex(ValueError, "Improvements and bug fixes"):
                 release_feed.validate_release_notes(notes)
@@ -116,6 +122,33 @@ class ReleaseFeedTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "not the announcement for this release"):
                 release_feed.main()
             self.assertEqual(request.call_count, 1)
+
+    def test_long_announcement_edit_updates_one_message_and_links_to_remaining_notes(self):
+        webhook = "https://discord.com/api/webhooks/123/test-token"
+        edit_id = "1573447742682833044"
+        environment = {"DISCORD_RELEASE_WEBHOOK_URL": webhook, "DISCORD_EDIT_MESSAGE_ID": edit_id}
+        release = published_release(("Playback 🎬 improves.\n\n" * 600).strip())
+        endpoint = f"{webhook}/messages/{edit_id}"
+        original = {"id": edit_id, "embeds": [{"url": release["html_url"]}]}
+
+        def reply(url, *, payload=None, method=None):
+            self.assertEqual(url, endpoint)
+            if method is None:
+                return original
+            self.assertEqual(method, "PATCH")
+            self.assertNotIn("content", payload)
+            description = payload["embeds"][0]["description"]
+            self.assertLessEqual(len(description.encode("utf-16-le")) // 2, 3600)
+            self.assertIn(f"[full changelog]({release['html_url']})", description)
+            return {"id": edit_id, "embeds": payload["embeds"]}
+
+        with (patch.dict("os.environ", environment, clear=True),
+              patch("sys.argv", ["announce-discord-release.py"]),
+              patch.object(release_feed, "load_release", return_value=release),
+              patch.object(release_feed, "request_json", side_effect=reply) as request,
+              patch("builtins.print")):
+            release_feed.main()
+            self.assertEqual(request.call_count, 2)
 
     def test_workflow_dry_run_checks_webhook_without_posting(self):
         webhook = "https://discord.com/api/webhooks/123/test-token"

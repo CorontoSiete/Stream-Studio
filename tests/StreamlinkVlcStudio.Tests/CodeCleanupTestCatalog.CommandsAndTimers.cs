@@ -99,4 +99,24 @@ internal static partial class CodeCleanupTestCatalog
         Assert.True(!reactivated, "A completed debounce timer can still be reactivated.");
         Assert.Equal<object?>(null, GetPrivateField(coordinator, "timer"));
     }
+
+    private static async Task CanceledDebounceDispatchAsync()
+    {
+        using var coordinator = new CancellationDebounceCoordinator();
+        var posted = new TaskCompletionSource<Action>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var executions = 0;
+        coordinator.Schedule(TimeSpan.FromMilliseconds(1), () => executions++, dispatch: action => posted.SetResult(action));
+        var canceled = await posted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        coordinator.CancelScheduled();
+        canceled();
+        Assert.Equal(0, executions);
+
+        var queue = new Queue<Action>();
+        coordinator.Schedule(Timeout.InfiniteTimeSpan, () => executions += 100, dispatch: queue.Enqueue);
+        Assert.Equal(0, queue.Count);
+        coordinator.Schedule(TimeSpan.Zero, () => executions++, dispatch: queue.Enqueue);
+        coordinator.Schedule(TimeSpan.Zero, () => executions += 10, dispatch: queue.Enqueue);
+        while (queue.TryDequeue(out var action)) action();
+        Assert.Equal(10, executions);
+    }
 }

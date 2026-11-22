@@ -20,7 +20,7 @@ internal sealed class TwitchGraphQlTransport(HttpClient httpClient)
     internal static string CreateDeviceId() =>
         Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
 
-    internal async Task<Uri> GetPlaybackMasterUriAsync(StreamTarget target, CancellationToken cancellationToken)
+    internal async Task<Uri> GetPlaybackMasterUriAsync(StreamTarget target, CancellationToken cancellationToken, string? oauthToken = null)
     {
         var vod = target.IsExplicitTwitchVod;
         var payload = JsonSerializer.Serialize(new
@@ -37,9 +37,8 @@ internal sealed class TwitchGraphQlTransport(HttpClient httpClient)
             },
             extensions = new { persistedQuery = new { version = 1, sha256Hash = "ed230aa1e33e07eebb8928504583da78a5173989fadfb1ac94be06a04f3cdbe9" } }
         });
-        // Live previews use Streamlink's anonymous identity. A new device ID
-        // changes the live token and can introduce an unnecessary preroll.
-        using var document = await SendAsync(payload, PublicClientId, vod ? CreateDeviceId() : null, cancellationToken).ConfigureAwait(false);
+        // A new device ID changes the live token and can introduce a preroll.
+        using var document = await SendAsync(payload, PublicClientId, vod ? CreateDeviceId() : null, cancellationToken, oauthToken).ConfigureAwait(false);
         var root = document.RootElement;
         if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Object ||
             !data.TryGetProperty(vod ? "videoPlaybackAccessToken" : "streamPlaybackAccessToken", out var access) ||

@@ -61,7 +61,7 @@ app. The app uses the installed core for other VLC DLL pairs.
 
 ## Build and verify
 
-Python 3.12+, the pinned upstream source archive, x64 WinLibs GCC 16.1.0
+Python 3.12+, Git, the pinned upstream source archive, x64 WinLibs GCC 16.1.0
 (`x86_64-w64-mingw32`, MSVCRT), and the pinned MSYS2 contrib package archives
 are required. Their checksums and the hashes of the linked `.a` files are in
 `provenance.json`; GNU and GnuPG project pages describe the library licenses
@@ -89,7 +89,8 @@ The build verifies the source and compiler archive hashes, GCC executable and
 runtime hashes, all contrib package and linked-library hashes, official VLC DLL
 hashes, exported symbol set, PE imports, and a second clean build's
 byte-for-byte identity before replacing the output. It disables linker
-timestamps. It does not modify the VLC installation.
+timestamps and strips the temporary source directory from embedded file names.
+It does not modify the VLC installation.
 
 The real multistream regression confirms the core is loaded by VLC's own
 `vlc_cond_*` APIs. On this host the original core consumed 1.50 CPU cores in an

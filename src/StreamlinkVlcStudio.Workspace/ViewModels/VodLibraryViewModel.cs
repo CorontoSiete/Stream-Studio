@@ -84,10 +84,7 @@ internal sealed partial class VodLibraryViewModel : HomeFeatureViewModel
             if (SetProperty(ref twitchVodSearchText, value ?? ""))
             {
                 ResetVodChannelSearch();
-                vodBrowseController.AdvanceTwitchVodGeneration();
-                CancelTwitchVodSearchDebounce();
-                CancelActiveTwitchVodSearch();
-                IsTwitchVodSearchRunning = false;
+                CancelVodResultSearch();
                 ClearTwitchVodSearchResults();
                 OnPropertyChanged(nameof(HasTwitchVodSearchText));
                 OnPropertyChanged(nameof(IsTwitchVodSearchPlaceholderVisible));
@@ -244,15 +241,8 @@ internal sealed partial class VodLibraryViewModel : HomeFeatureViewModel
 
         SelectedVodPlatform = platform;
         ResetVodChannelSearch();
-        vodBrowseController.AdvanceTwitchVodGeneration();
-        CancelTwitchVodSearchDebounce();
-        CancelActiveTwitchVodSearch();
-        IsTwitchVodSearchRunning = false;
+        CancelVodResultSearch();
         ClearTwitchVodSearchResults();
-        if (!HasTwitchVodSearchText)
-        {
-            TwitchVodStatus = $"Type part of a {VodPlatformText} streamer name to browse broadcasts.";
-        }
 
         if (HasTwitchVodSearchText && !suppressAutomaticVodSearch)
         {
@@ -262,16 +252,17 @@ internal sealed partial class VodLibraryViewModel : HomeFeatureViewModel
 
     internal void SelectTwitchVodType(TwitchVodTypeFilter type)
     {
-        if (SelectedTwitchVodType == type)
+        if (SelectedVodPlatform != PlatformKind.Twitch || SelectedTwitchVodType == type)
         {
             return;
         }
 
         SelectedTwitchVodType = type;
+        CancelVodResultSearch();
         TwitchVodNextCursor = "";
         TwitchVods.Clear();
         HasTwitchVodSearchCompleted = false;
-        if (SelectedVodPlatform == PlatformKind.Twitch && HasTwitchVodSearchText)
+        if (HasTwitchVodSearchText)
         {
             if (CanLoadEnteredVodStreamer)
             {
@@ -282,6 +273,14 @@ internal sealed partial class VodLibraryViewModel : HomeFeatureViewModel
                 ScheduleAutomaticTwitchVodSearch();
             }
         }
+    }
+
+    private void CancelVodResultSearch()
+    {
+        vodBrowseController.AdvanceTwitchVodGeneration();
+        CancelTwitchVodSearchDebounce();
+        CancelActiveTwitchVodSearch();
+        IsTwitchVodSearchRunning = false;
     }
 
     internal Task SearchTwitchVodsAsync(bool reset)
@@ -379,7 +378,7 @@ internal sealed partial class VodLibraryViewModel : HomeFeatureViewModel
             else
             {
                 var result = await kickVodService!.SearchAsync(
-                    new KickVodSearchRequest(query, cursor, 100),
+                    new KickVodSearchRequest(query, cursor, request.PageSize),
                     Settings,
                     searchCancellation.Token);
                 if (!IsCurrentTwitchVodSearch(searchGeneration, query, type, platform)) return;
@@ -508,22 +507,11 @@ internal sealed partial class VodLibraryViewModel : HomeFeatureViewModel
         var searchGeneration = vodBrowseController.CurrentTwitchVodGeneration;
         var type = SelectedTwitchVodType;
         var platform = SelectedVodPlatform;
-        var scheduleVersion = Interlocked.Increment(ref twitchVodScheduleVersion);
-        void StartSearchIfCurrent()
-        {
-            if (scheduleVersion == Volatile.Read(ref twitchVodScheduleVersion))
-                _ = RunAutomaticTwitchVodSearchAsync(query, type, platform, searchGeneration);
-        }
-        if (twitchVodSearchDebounceInterval <= TimeSpan.Zero)
-        {
-            dispatch(StartSearchIfCurrent);
-            return;
-        }
-
         vodBrowseController.ScheduleTwitchVod(
             twitchVodSearchDebounceInterval,
-            () => dispatch(StartSearchIfCurrent),
-            ReportDebouncedCallbackFailure);
+            () => _ = RunAutomaticTwitchVodSearchAsync(query, type, platform, searchGeneration),
+            ReportDebouncedCallbackFailure,
+            dispatch);
     }
 
     private async Task RunAutomaticTwitchVodSearchAsync(
@@ -540,11 +528,7 @@ internal sealed partial class VodLibraryViewModel : HomeFeatureViewModel
         await SearchVodStreamerAsync();
     }
 
-    internal void CancelTwitchVodSearchDebounce()
-    {
-        Interlocked.Increment(ref twitchVodScheduleVersion);
-        vodBrowseController.CancelScheduledTwitchVod();
-    }
+    internal void CancelTwitchVodSearchDebounce() => vodBrowseController.CancelScheduledTwitchVod();
 
     internal void CancelActiveTwitchVodSearch()
     {

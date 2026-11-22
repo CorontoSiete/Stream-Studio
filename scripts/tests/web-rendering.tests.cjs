@@ -129,3 +129,22 @@ test('a card with the same key on another page receives that page\'s controls', 
     assert.equal(cards.children[0].children[1].className, 'download-progress');
   } finally { f.disconnect(); }
 });
+
+test('downloads recovered by the background refresh have download controls', async () => {
+  const item = { id: 'download', key: 'video', title: 'Recorded video', state: 'Completed' };
+  let downloads = 0;
+  const f = fixture({ now: () => 10_000, onRequest: url => {
+    if (url !== '/api/downloads') return;
+    if (++downloads === 1) throw new Error('The desktop connection was interrupted.');
+    return json([item]);
+  } });
+  try {
+    await f.showPage('downloads');
+    const cards = f.document.querySelector('#cards');
+    assert.equal(cards.children.length, 0);
+    await f.tick(2000);
+    assert.equal(cards.children[0].dataset.key, item.id);
+    assert.equal(cards.children[0].children[1].className, 'download-progress');
+    assert.ok(cards.children[0].children[2].children.some(button => button.className === 'danger'));
+  } finally { f.disconnect(); }
+});

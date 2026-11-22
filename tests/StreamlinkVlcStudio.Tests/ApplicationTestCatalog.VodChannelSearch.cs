@@ -95,10 +95,9 @@ internal static partial class ApplicationTestCatalog
             var input = (TextBox)window.FindName("VodStreamerSearchTextBox");
             input.Text = "timmy";
             input.GetBindingExpression(TextBox.TextProperty)!.UpdateSource();
-            var source = new SkipHotkeyPresentationSource { RootVisual = window };
+            var source = new SyntheticKeyboardInput(window);
             for (var count = 0; count < 2; count++)
-                input.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, source, 0, Key.Enter)
-                { RoutedEvent = Keyboard.KeyDownEvent });
+                input.RaiseEvent(source.CreateEvent(Key.Enter, Keyboard.KeyDownEvent));
             Assert.Equal(1, search.CallCount);
             Assert.True(main.IsVodChannelSearchRunning);
             LayoutStudioPolishWindow(window, new Size(1320, 820));

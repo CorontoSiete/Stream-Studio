@@ -1,15 +1,19 @@
 using System.Collections.Frozen;
 using System.Security.Authentication;
+using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using StreamlinkVlcStudio.Core.Json;
 using StreamlinkVlcStudio.Infrastructure.Threading;
+using EntityTagHeaderValue = Microsoft.Net.Http.Headers.EntityTagHeaderValue;
+using HeaderNames = Microsoft.Net.Http.Headers.HeaderNames;
 
 namespace StreamlinkVlcStudio.Infrastructure.LocalWeb;
 
@@ -43,7 +47,7 @@ public sealed class LocalWebServer : IAsyncDisposable
     private Task? maintenance;
     private bool disposed;
     private Task? disposalTask;
-    private readonly FrozenDictionary<string, LocalWebStaticAsset> assets;
+    private readonly FrozenDictionary<string, (LocalWebStaticAsset Asset, EntityTagHeaderValue? Validator)> assets;
     public Uri Address { get; private set; } = null!;
     internal LocalWebUserStore Users => users;
 
@@ -55,7 +59,10 @@ public sealed class LocalWebServer : IAsyncDisposable
         this.createWorkspace = createWorkspace;
         this.users = users;
         this.networkIsCurrent = networkIsCurrent;
-        this.assets = assets?.ToFrozenDictionary(StringComparer.Ordinal) ?? FrozenDictionary<string, LocalWebStaticAsset>.Empty;
+        this.assets = (assets ?? FrozenDictionary<string, LocalWebStaticAsset>.Empty).ToFrozenDictionary(
+            entry => entry.Key,
+            entry => (entry.Value, AssetValidator(entry.Key, entry.Value)),
+            StringComparer.Ordinal);
         // Empty configuration prevents environment variables/appsettings from adding public listeners.
         var builder = WebApplication.CreateEmptyBuilder(new WebApplicationOptions { ApplicationName = typeof(LocalWebServer).Assembly.FullName });
         builder.Logging.ClearProviders(); // Never log passwords, cookies, signed URLs, or account data.
@@ -75,7 +82,10 @@ public sealed class LocalWebServer : IAsyncDisposable
             });
         });
         builder.Services.ConfigureHttpJsonOptions(o => o.SerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase);
+        builder.Services.AddResponseCompression(options => options.MimeTypes =
+            ["text/html", "text/css", "text/javascript", "application/javascript", "image/svg+xml", LocalWebMedia.PlaylistContentType]);
         app = builder.Build();
+        app.UseResponseCompression();
         app.Run(HandleAsync);
     }
 
@@ -148,14 +158,18 @@ public sealed class LocalWebServer : IAsyncDisposable
             request.Headers["Sec-Fetch-Site"].ToString() is "cross-site")
         { response.StatusCode = 403; return; }
         var path = request.Path.Value ?? "";
-        if (request.Method is "GET" or "HEAD" && assets.TryGetValue(path, out var asset) &&
+        if (request.Method is "GET" or "HEAD" && assets.TryGetValue(path, out var entry) &&
             !request.Path.StartsWithSegments("/api") && !request.Path.StartsWithSegments("/media") &&
             !request.Path.StartsWithSegments("/category-artwork") && !request.Path.StartsWithSegments("/chat-assets"))
         {
-            response.ContentType = asset.ContentType;
-            response.ContentLength = asset.Content.Length;
-            if (request.Method == "GET")
-                await response.Body.WriteAsync(asset.Content, context.RequestAborted).ConfigureAwait(false);
+            var (asset, validator) = entry;
+            context.Features.Get<IHttpsCompressionFeature>()?.Mode = HttpsCompressionMode.Compress;
+            if (validator is not null)
+            {
+                response.Headers.CacheControl = "private, no-cache";
+                response.Headers.Vary = HeaderNames.AcceptEncoding;
+            }
+            await Results.Bytes(asset.Content, asset.ContentType, entityTag: validator).ExecuteAsync(context).ConfigureAwait(false);
             return;
         }
         if (request.Method == "POST" && (origin.Count != 1 || !request.HasJsonContentType() ||
@@ -232,9 +246,10 @@ public sealed class LocalWebServer : IAsyncDisposable
                     return;
                 }
                 if (!path.StartsWith("/api/", StringComparison.Ordinal)) { response.StatusCode = 404; return; }
-                // Keep independent metadata and preference reads separate from playback and navigation.
-                var independentRead = path is "/api/categories/viewers" or "/api/following/history" or "/api/hotkeys";
-                if (!independentRead && !await current.Commands.WaitAsync(0, linked.Token).ConfigureAwait(false)) { response.StatusCode = 429; return; }
+                // Preview resolution and cleanup have their own lifetime and must not hold the command queue.
+                var independent = path is "/api/categories/viewers" or "/api/following/history" or "/api/hotkeys" or "/api/settings/save" or
+                    "/api/preview/open" or "/api/preview/close";
+                if (!independent && !await current.Commands.WaitAsync(0, linked.Token).ConfigureAwait(false)) { response.StatusCode = 429; return; }
                 try
                 {
                     using var timeout = CancellationTokenSource.CreateLinkedTokenSource(linked.Token);
@@ -244,7 +259,7 @@ public sealed class LocalWebServer : IAsyncDisposable
                     var result = await current.Workspace.InvokeAsync(path[5..], input, timeout.Token).ConfigureAwait(false);
                     await response.WriteAsJsonAsync(result, timeout.Token).ConfigureAwait(false);
                 }
-                finally { if (!independentRead) current.Commands.Release(); }
+                finally { if (!independent) current.Commands.Release(); }
             }
             finally { current.Requests.Release(); }
         }
@@ -255,6 +270,11 @@ public sealed class LocalWebServer : IAsyncDisposable
         catch (Exception)
         { if (!response.HasStarted) { response.StatusCode = 502; await response.WriteAsJsonAsync(new { error = "The provider could not complete this request. Check the desktop account connection and try again." }); } }
     }
+
+    private static EntityTagHeaderValue? AssetValidator(string path, LocalWebStaticAsset asset) =>
+        path == "/" || asset.ContentType.StartsWith("text/html", StringComparison.OrdinalIgnoreCase)
+            ? null
+            : new EntityTagHeaderValue($"\"{Convert.ToHexString(SHA256.HashData(asset.Content.Span))}\"", isWeak: true);
 
     private static CookieOptions CookieOptions() => new() { Secure = true, HttpOnly = true, SameSite = SameSiteMode.Strict, Path = "/", IsEssential = true };
 

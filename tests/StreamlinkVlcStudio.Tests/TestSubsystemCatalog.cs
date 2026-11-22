@@ -390,7 +390,7 @@ internal static class TestSubsystemCatalog
         Assert.Contains("PONG :tmi.twitch.tv", Encoding.UTF8.GetString(handshakeOutput.ToArray()));
 
         var family = "👨‍👩‍👧‍👦";
-        var truncated = TwitchChatClient.TruncateIrcMessage("channel", string.Concat(Enumerable.Repeat(family, 100)));
+        var truncated = TwitchIrcProtocol.TruncateChatMessage("channel", string.Concat(Enumerable.Repeat(family, 100)));
         Assert.True(Encoding.UTF8.GetByteCount($"PRIVMSG #channel :{truncated}\r\n") <= 512);
         Assert.True(truncated.Length > 0);
         Assert.Equal(0, truncated.Length % family.Length);

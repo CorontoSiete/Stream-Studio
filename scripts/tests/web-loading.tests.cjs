@@ -122,6 +122,87 @@ test('a canceled provider that returns late cannot replace the selected page', a
   } finally { release?.(); f.disconnect(); }
 });
 
+test('leaving Downloads cancels a background refresh before the next page loads', { timeout: 5000 }, async () => {
+  const started = Promise.withResolvers(), pending = Promise.withResolvers();
+  let downloadReads = 0;
+  const f = fixture({ onRequest: (url, _, { signal }) => {
+    if (url === '/api/downloads' && ++downloadReads === 2) {
+      signal?.addEventListener('abort', () => pending.reject(signal.reason), { once: true });
+      started.resolve(signal);
+      return pending.promise;
+    }
+    if (url === '/api/recent') return json({ items: [{ key: 'new' }] });
+  } });
+  let polling, navigation;
+  try {
+    await f.showPage('downloads');
+    polling = f.tick(2000);
+    const signal = await started.promise;
+    navigation = f.showPage('recent');
+    assert.equal(signal?.aborted, true);
+    await Promise.all([navigation, polling]);
+    assert.equal(f.state.items[0]?.key, 'new');
+  } finally {
+    pending.resolve(json({ items: [] }));
+    await Promise.all([navigation, polling]);
+    f.disconnect();
+  }
+});
+
+test('Downloads still refreshes when a background video bookmark fails to save', async () => {
+  let downloadReads = 0;
+  const f = fixture({ onRequest: url => url === '/api/downloads'
+    ? json({ items: [{ id: 'saved', state: ++downloadReads === 1 ? 'Downloading' : 'Completed' }] })
+    : undefined });
+  try {
+    f.target({ isVod: true });
+    await f.open();
+    await f.showPage('downloads');
+    f.failProgressSave(true);
+    await f.tick(2000);
+    assert.equal(f.state.items[0]?.state, 'Completed');
+  } finally { f.disconnect(); }
+});
+
+test('category suggestions offer a retry when the directory is unavailable', async ({ mock }) => {
+  mock.timers.enable({ apis: ['setTimeout'] });
+  const message = 'Twitch categories are temporarily unavailable.';
+  const f = fixture({ onRequest: url => url === '/api/categories'
+    ? json({ available: false, message, items: [] })
+    : undefined });
+  try {
+    await f.showPage('discover');
+    const input = f.document.querySelector('#query');
+    input.value = 'games';
+    input.dispatchEvent(new Event('input'));
+    mock.timers.tick(250);
+    await f.flush();
+    const feedback = f.document.querySelector('#search-feedback');
+    assert.equal(feedback.children[1]?.textContent, 'Search couldn’t finish');
+    assert.equal(feedback.children[2]?.textContent, message);
+    assert.equal(feedback.children[3]?.textContent, 'Try again');
+  } finally { f.disconnect(); }
+});
+
+test('submitting a channel search runs the pending debounce immediately', async ({ mock }) => {
+  mock.timers.enable({ apis: ['setTimeout'] });
+  const f = fixture({ onRequest: url => url === '/api/search' ? json({ items: [] }) : undefined });
+  try {
+    const input = f.document.querySelector('#query');
+    input.value = 'streamer';
+    input.dispatchEvent(new Event('input'));
+    assert.equal(f.requests.filter(request => request.url === '/api/search').length, 0);
+    f.document.querySelector('#search-form').dispatchEvent(new Event('submit', { cancelable: true }));
+    mock.timers.tick(1);
+    await f.flush();
+    const searches = () => f.requests.filter(request => request.url === '/api/search');
+    assert.equal(searches().length, 1);
+    mock.timers.tick(250);
+    await f.flush();
+    assert.equal(searches().length, 1);
+  } finally { f.disconnect(); }
+});
+
 test('Discover and other notices expire, including after replacement or manual dismissal', async ({ mock }) => {
   mock.timers.enable({ apis: ['setTimeout'] });
   const message = 'Loaded 50 categories from Twitch.';

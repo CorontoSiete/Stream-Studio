@@ -17,6 +17,36 @@ internal static partial class LocalWebTestCatalog
     private static Task TwitchBadgeRecoveryAsync() => WithWorkspaceAsync(f => VerifyTwitchBadgeRecoveryAsync(f.Dependencies, f.Chats));
     private static Task FollowingLastLiveAsync() => WithWorkspaceAsync(f => VerifyFollowingLastLiveAsync(f.Dependencies));
 
+    private static Task PageAvailabilityAsync() => WithWorkspaceAsync(async fixture =>
+    {
+        const string failure = "Provider temporarily unavailable.";
+        var browse = (FakeBrowseService)fixture.Dependencies.Browse;
+        browse.EnqueueCategories(BrowseResult<BrowseCategory>.Unavailable(failure));
+        browse.EnqueueStreams(BrowseResult<BrowseLiveStream>.Unavailable(failure));
+        await using var workspace = new LocalWebWorkspace(fixture.Dependencies with
+        {
+            TwitchVods = new FakeTwitchVodService(new TwitchVodSearchResult(TwitchVodSearchStatus.Unavailable, null, [], "", failure)),
+            KickVods = new FakeKickVodService(new KickVodSearchResult(KickVodSearchStatus.Unavailable, [], "", failure))
+        });
+
+        var results = new[]
+        {
+            await Call(workspace, "categories", new { }),
+            await Call(workspace, "streams", new { categoryId = "1" }),
+            await Call(workspace, "vods", new { platform = "twitch", channel = "streamer" }),
+            await Call(workspace, "vods", new { platform = "kick", channel = "streamer" })
+        };
+        foreach (var result in results)
+        {
+            Assert.Equal(false, result.GetProperty("available").GetBoolean());
+            Assert.Equal(failure, result.GetProperty("message").GetString());
+        }
+
+        var empty = await Call(workspace, "categories", new { });
+        Assert.True(empty.GetProperty("available").GetBoolean());
+        Assert.Equal(0, empty.GetProperty("items").GetArrayLength());
+    });
+
     private static Task PlayerReplacementAsync() => WithWorkspaceAsync(async fixture =>
     {
         var dependencies = fixture.Dependencies;

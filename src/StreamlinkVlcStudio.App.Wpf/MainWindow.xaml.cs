@@ -345,9 +345,10 @@ public partial class MainWindow : Window
 
     private void MainWindowPreviewKeyDown(object sender, KeyEventArgs e)
     {
+        var modifiers = e.KeyboardDevice.Modifiers;
         if (e.Key == Key.C &&
             !e.IsRepeat &&
-            Keyboard.Modifiers == ModifierKeys.Control &&
+            modifiers == ModifierKeys.Control &&
             Keyboard.FocusedElement is not TextBoxBase &&
             viewModel?.SelectedTab is { } selectedTab &&
             selectedTab.NativeOverlay is NativeChatOverlayController { HasNativeReplayOverlayTextSelection: true } overlay)
@@ -357,7 +358,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        var input = new HotkeyGesture(HotkeyGesture.GetEventKey(e), Keyboard.Modifiers);
+        var input = new HotkeyGesture(HotkeyGesture.GetEventKey(e), modifiers);
         if (TryExecuteHotkey(input, Keyboard.FocusedElement, e.IsRepeat))
         {
             e.Handled = true;
@@ -3070,7 +3071,7 @@ public partial class MainWindow : Window
 
     private void ChatInputTextBox_KeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key != Key.Enter || Keyboard.Modifiers.HasFlag(ModifierKeys.Shift))
+        if (e.Key != Key.Enter || e.KeyboardDevice.Modifiers.HasFlag(ModifierKeys.Shift))
         {
             return;
         }
@@ -3086,7 +3087,7 @@ public partial class MainWindow : Window
 
     private void StreamSearchTextBox_KeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key != Key.Enter || Keyboard.Modifiers.HasFlag(ModifierKeys.Shift))
+        if (e.Key != Key.Enter || e.KeyboardDevice.Modifiers.HasFlag(ModifierKeys.Shift))
         {
             return;
         }

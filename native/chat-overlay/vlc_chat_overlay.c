@@ -54,6 +54,7 @@
 #include <stdbool.h>
 #include <time.h>
 #include <ctype.h>
+#include <errno.h>
 #include <limits.h>
 #include <wchar.h>
 #include <objidl.h>
@@ -2075,6 +2076,22 @@ static bool json_get_array_direct(const char *obj, const char *obj_end,
     return true;
 }
 
+static int json_int_from_value(const char *p, const char *limit, int fallback)
+{
+    if (!p || p >= limit || (*p != '-' && (*p < '0' || *p > '9')))
+        return fallback;
+
+    errno = 0;
+    char *end = NULL;
+    long long value = strtoll(p, &end, 10);
+    if (end == p || end >= limit || errno == ERANGE
+        || value < INT_MIN || value > INT_MAX)
+        return fallback;
+
+    while (end < limit && isspace((unsigned char)*end)) end++;
+    return end < limit && (*end == ',' || *end == '}') ? (int)value : fallback;
+}
+
 static int json_get_int_default(const char *obj, const char *obj_end,
                                 const char *key, int fallback)
 {
@@ -2084,15 +2101,14 @@ static int json_get_int_default(const char *obj, const char *obj_end,
     if (!p) return fallback;
     p += strlen(needle);
     while (p < obj_end && isspace((unsigned char)*p)) p++;
-    return (int)strtol(p, NULL, 10);
+    return json_int_from_value(p, obj_end, fallback);
 }
 
 static int json_get_int_default_direct(const char *obj, const char *obj_end,
                                        const char *key, int fallback)
 {
-    const char *p = json_find_direct_value(obj, obj_end, key);
-    if (!p) return fallback;
-    return (int)strtol(p, NULL, 10);
+    return json_int_from_value(json_find_direct_value(obj, obj_end, key),
+                               obj_end, fallback);
 }
 
 static bool json_get_bool_default(const char *obj, const char *obj_end,
@@ -3525,69 +3541,76 @@ static bool twitch_badges_current_channel_room_id(char *out, int out_size)
     return loaded;
 }
 
+static void register_subscriber_badge_version(int *versions, int *count,
+                                              int capacity, int version)
+{
+    if (*count >= capacity) return;
+
+    int index = 0;
+    while (index < *count && versions[index] < version) index++;
+    if (index < *count && versions[index] == version) return;
+    if (index < *count)
+        memmove(versions + index + 1, versions + index,
+                (size_t)(*count - index) * sizeof(*versions));
+    versions[index] = version;
+    (*count)++;
+}
+
 static void twitch_register_subscriber_badge_version(int version)
 {
     if (version < 0) return;
 
     EnterCriticalSection(&g_bttv.cs);
-    for (int i = 0; i < g_twitch_subscriber_badge_version_count; i++) {
-        if (g_twitch_subscriber_badge_versions[i] == version) {
-            LeaveCriticalSection(&g_bttv.cs);
-            return;
-        }
-    }
-    if (g_twitch_subscriber_badge_version_count >= TWITCH_BADGE_VERSION_CAP) {
-        LeaveCriticalSection(&g_bttv.cs);
-        return;
-    }
-
-    int index = g_twitch_subscriber_badge_version_count++;
-    g_twitch_subscriber_badge_versions[index] = version;
-    while (index > 0
-           && g_twitch_subscriber_badge_versions[index - 1]
-              > g_twitch_subscriber_badge_versions[index]) {
-        int tmp = g_twitch_subscriber_badge_versions[index - 1];
-        g_twitch_subscriber_badge_versions[index - 1] =
-            g_twitch_subscriber_badge_versions[index];
-        g_twitch_subscriber_badge_versions[index] = tmp;
-        index--;
-    }
+    register_subscriber_badge_version(g_twitch_subscriber_badge_versions,
+                                      &g_twitch_subscriber_badge_version_count,
+                                      TWITCH_BADGE_VERSION_CAP, version);
     LeaveCriticalSection(&g_bttv.cs);
 }
 
-static bool parse_nonnegative_int_string(const char *value, int *out)
+static bool parse_badge_version(const char *value, int minimum, int *out)
 {
     if (!value || !value[0] || !out) return false;
     char *end = NULL;
+    errno = 0;
     long parsed = strtol(value, &end, 10);
-    if (end == value) return false;
-    while (end && *end && isspace((unsigned char)*end)) end++;
-    if (end && *end) return false;
-    if (parsed < 0 || parsed > INT_MAX) return false;
+    if (end == value || errno == ERANGE || parsed < minimum || parsed > INT_MAX)
+        return false;
+    while (isspace((unsigned char)*end)) end++;
+    if (*end) return false;
     *out = (int)parsed;
     return true;
+}
+
+static int find_subscriber_badge_version(const int *versions, int count,
+                                         int requested)
+{
+    for (int i = count - 1; i >= 0; i--) {
+        if (versions[i] <= requested) return versions[i];
+    }
+    return -1;
+}
+
+static bool format_subscriber_badge_version(int version, char *out, int out_size)
+{
+    if (version < 0) return false;
+    int n = snprintf(out, (size_t)out_size, "%d", version);
+    return n > 0 && n < out_size;
 }
 
 static bool twitch_best_subscriber_badge_version(const char *requested_version,
                                                  char *out, int out_size)
 {
     int requested = 0;
-    if (!parse_nonnegative_int_string(requested_version, &requested)) {
+    if (!parse_badge_version(requested_version, 0, &requested)) {
         return false;
     }
 
     EnterCriticalSection(&g_bttv.cs);
-    int selected = -1;
-    for (int i = 0; i < g_twitch_subscriber_badge_version_count; i++) {
-        int candidate = g_twitch_subscriber_badge_versions[i];
-        if (candidate > requested) break;
-        selected = candidate;
-    }
+    int selected = find_subscriber_badge_version(g_twitch_subscriber_badge_versions,
+                                                 g_twitch_subscriber_badge_version_count,
+                                                 requested);
     LeaveCriticalSection(&g_bttv.cs);
-
-    if (selected < 0) return false;
-    int n = snprintf(out, (size_t)out_size, "%d", selected);
-    return n > 0 && n < out_size;
+    return format_subscriber_badge_version(selected, out, out_size);
 }
 
 static bool make_twitch_badge_code_for_request(const char *id,
@@ -3658,19 +3681,6 @@ static bool make_twitch_badge_code_for_request(const char *id,
     return false;
 }
 
-static bool parse_positive_int_string(const char *value, int *out)
-{
-    if (!value || !value[0] || !out) return false;
-    char *end = NULL;
-    long parsed = strtol(value, &end, 10);
-    if (end == value) return false;
-    while (end && *end && isspace((unsigned char)*end)) end++;
-    if (end && *end) return false;
-    if (parsed <= 0 || parsed > INT_MAX) return false;
-    *out = (int)parsed;
-    return true;
-}
-
 static bool make_kick_badge_code(const char *id, const char *version,
                                  char *out, int out_size)
 {
@@ -3695,24 +3705,9 @@ static bool make_kick_badge_code(const char *id, const char *version,
 static void kick_register_subscriber_badge_version(int version)
 {
     if (version <= 0) return;
-    for (int i = 0; i < g_kick_subscriber_badge_version_count; i++) {
-        if (g_kick_subscriber_badge_versions[i] == version) return;
-    }
-    if (g_kick_subscriber_badge_version_count >= KICK_BADGE_VERSION_CAP) {
-        return;
-    }
-
-    int index = g_kick_subscriber_badge_version_count++;
-    g_kick_subscriber_badge_versions[index] = version;
-    while (index > 0
-           && g_kick_subscriber_badge_versions[index - 1]
-              > g_kick_subscriber_badge_versions[index]) {
-        int tmp = g_kick_subscriber_badge_versions[index - 1];
-        g_kick_subscriber_badge_versions[index - 1] =
-            g_kick_subscriber_badge_versions[index];
-        g_kick_subscriber_badge_versions[index] = tmp;
-        index--;
-    }
+    register_subscriber_badge_version(g_kick_subscriber_badge_versions,
+                                      &g_kick_subscriber_badge_version_count,
+                                      KICK_BADGE_VERSION_CAP, version);
 }
 
 static void kick_record_subscriber_badge(const char *id, const char *version)
@@ -3721,7 +3716,7 @@ static void kick_record_subscriber_badge(const char *id, const char *version)
     char normalized_id[MAX_BADGE_ID] = {0};
     normalize_badge_id(id, normalized_id, sizeof(normalized_id));
     if (ascii_equals_ci(normalized_id, "subscriber")
-        && parse_positive_int_string(version, &version_number)) {
+        && parse_badge_version(version, 1, &version_number)) {
         kick_register_subscriber_badge_version(version_number);
     }
 }
@@ -3730,28 +3725,20 @@ static bool kick_best_subscriber_badge_version(const char *requested_version,
                                                char *out, int out_size)
 {
     int requested = 0;
-    if (!parse_positive_int_string(requested_version, &requested)) {
+    if (!parse_badge_version(requested_version, 1, &requested)) {
         return false;
     }
 
-    int selected = 0;
-    for (int i = 0; i < g_kick_subscriber_badge_version_count; i++) {
-        int candidate = g_kick_subscriber_badge_versions[i];
-        if (candidate > requested) break;
-        selected = candidate;
-    }
-    if (selected <= 0) return false;
-
-    int n = snprintf(out, (size_t)out_size, "%d", selected);
-    return n > 0 && n < out_size;
+    int selected = find_subscriber_badge_version(g_kick_subscriber_badge_versions,
+                                                 g_kick_subscriber_badge_version_count,
+                                                 requested);
+    return format_subscriber_badge_version(selected, out, out_size);
 }
 
-static int candidate_kick_badge_ids(const char *id,
+static int candidate_kick_badge_ids(const char *normalized_id,
                                     char candidates[][MAX_BADGE_ID],
                                     int cap)
 {
-    char normalized_id[MAX_BADGE_ID] = {0};
-    normalize_badge_id(id, normalized_id, sizeof(normalized_id));
     if (!normalized_id[0]) return 0;
 
     int count = 0;
@@ -3764,10 +3751,6 @@ static int candidate_kick_badge_ids(const char *id,
     copy_replace_char(normalized_id, '-', '_', swapped, sizeof(swapped));
     append_badge_candidate(candidates, &count, cap, swapped);
 
-    char alias[MAX_BADGE_ID] = {0};
-    normalize_badge_id(normalized_id, alias, sizeof(alias));
-    append_badge_candidate(candidates, &count, cap, alias);
-
     return count;
 }
 
@@ -3778,11 +3761,11 @@ static bool make_kick_badge_code_for_request(const char *id,
 {
     if (!out || out_size <= 0 || !cursor) return false;
 
-    char ids[4][MAX_BADGE_ID] = {{0}};
+    char ids[3][MAX_BADGE_ID] = {{0}};
     char versions[3][MAX_BADGE_VERSION] = {{0}};
-    int id_count = candidate_kick_badge_ids(id, ids, 4);
     char normalized_id[MAX_BADGE_ID] = {0};
     normalize_badge_id(id, normalized_id, sizeof(normalized_id));
+    int id_count = candidate_kick_badge_ids(normalized_id, ids, 3);
     int version_count = candidate_badge_versions(
         version, versions, 3, is_kick_gift_badge_id(normalized_id), true);
     if (id_count <= 0) {
@@ -4055,7 +4038,7 @@ static int twitch_badges_parse_json(const char *json, size_t len,
             if (channel_scope
                 && is_twitch_subscriber_badge_id(badge_id)) {
                 int version_number = 0;
-                if (parse_nonnegative_int_string(version, &version_number)) {
+                if (parse_badge_version(version, 0, &version_number)) {
                     twitch_register_subscriber_badge_version(version_number);
                 }
             }
@@ -4136,7 +4119,7 @@ static int twitch_badges_parse_helix_json(const char *json, size_t len,
             }
             if (channel_scope && is_twitch_subscriber_badge_id(badge_id)) {
                 int version_number = 0;
-                if (parse_nonnegative_int_string(version, &version_number)) {
+                if (parse_badge_version(version, 0, &version_number)) {
                     twitch_register_subscriber_badge_version(version_number);
                 }
             }
@@ -5231,61 +5214,49 @@ static bool ascii_equals_ci(const char *a, const char *b) {
     return *a == '\0' && *b == '\0';
 }
 
-static void normalize_badge_id(const char *id, char *out, int out_size) {
+static bool badge_alias_matches(const char *id, const char *alias) {
+    for (; *id && *alias; id++, alias++) {
+        if ((*id == '-' ? '_' : *id) != *alias) return false;
+    }
+    return *id == '\0' && *alias == '\0';
+}
+
+static const char *canonical_badge_alias(const char *id) {
+    static const char *const gift_aliases[] = {
+        "subgifter", "sub_gifter", "gift_sub", "gift_subs", "gift_subscriber",
+        "gift_subscription", "gifted_sub", "gifted_subs", "gifted_subscriber",
+        "gifted_subscription", "gifter", "sub_gift", "subgift", "sub_gifts",
+        "sub_gifter_badge", "subscriber_gifter", "subscription_gift", "subscription_gifts"
+    };
+    for (size_t i = 0; i < sizeof(gift_aliases) / sizeof(gift_aliases[0]); i++) {
+        if (badge_alias_matches(id, gift_aliases[i])) return "sub_gifter";
+    }
+    if (badge_alias_matches(id, "channel_host") || strcmp(id, "creator") == 0)
+        return "broadcaster";
+    if (strcmp(id, "subscription") == 0 || strcmp(id, "subscriptions") == 0 || strcmp(id, "sub") == 0)
+        return "subscriber";
+    return NULL;
+}
+
+static void normalize_badge_token(const char *id, char *out, int out_size, bool for_style) {
     if (!out || out_size <= 0) return;
     int o = 0;
     if (id) {
         while (*id && isspace((unsigned char)*id)) id++;
         for (; *id && o + 1 < out_size; id++) {
             unsigned char c = (unsigned char)*id;
-            if (isspace(c)) break;
-            out[o++] = (char)tolower(c);
+            if (isspace(c) || (for_style && (c == ',' || c == '/'))) break;
+            out[o++] = (char)(for_style && c == '-' ? '_' : tolower(c));
         }
     }
-    while (o > 0 && isspace((unsigned char)out[o - 1])) o--;
     out[o] = '\0';
 
-    if (ascii_equals_ci(out, "subgifter")
-        || ascii_equals_ci(out, "sub-gifter")
-        || ascii_equals_ci(out, "gift-sub")
-        || ascii_equals_ci(out, "gift-subs")
-        || ascii_equals_ci(out, "gift-subscriber")
-        || ascii_equals_ci(out, "gift-subscription")
-        || ascii_equals_ci(out, "gifted-sub")
-        || ascii_equals_ci(out, "gifted-subs")
-        || ascii_equals_ci(out, "gifted-subscriber")
-        || ascii_equals_ci(out, "gifted-subscription")
-        || ascii_equals_ci(out, "gifter")
-        || ascii_equals_ci(out, "gift_sub")
-        || ascii_equals_ci(out, "gift_subs")
-        || ascii_equals_ci(out, "gift_subscriber")
-        || ascii_equals_ci(out, "gift_subscription")
-        || ascii_equals_ci(out, "gifted_sub")
-        || ascii_equals_ci(out, "gifted_subs")
-        || ascii_equals_ci(out, "gifted_subscriber")
-        || ascii_equals_ci(out, "gifted_subscription")
-        || ascii_equals_ci(out, "sub_gift")
-        || ascii_equals_ci(out, "sub-gift")
-        || ascii_equals_ci(out, "subgift")
-        || ascii_equals_ci(out, "sub_gifts")
-        || ascii_equals_ci(out, "sub-gifts")
-        || ascii_equals_ci(out, "sub_gifter_badge")
-        || ascii_equals_ci(out, "subscriber_gifter")
-        || ascii_equals_ci(out, "subscriber-gifter")
-        || ascii_equals_ci(out, "subscription_gift")
-        || ascii_equals_ci(out, "subscription-gift")
-        || ascii_equals_ci(out, "subscription_gifts")
-        || ascii_equals_ci(out, "subscription-gifts")) {
-        snprintf(out, (size_t)out_size, "%s", "sub_gifter");
-    } else if (ascii_equals_ci(out, "channel_host")
-               || ascii_equals_ci(out, "channel-host")
-               || ascii_equals_ci(out, "creator")) {
-        snprintf(out, (size_t)out_size, "%s", "broadcaster");
-    } else if (ascii_equals_ci(out, "subscription")
-               || ascii_equals_ci(out, "subscriptions")
-               || ascii_equals_ci(out, "sub")) {
-        snprintf(out, (size_t)out_size, "%s", "subscriber");
-    }
+    const char *alias = canonical_badge_alias(out);
+    if (alias) snprintf(out, (size_t)out_size, "%s", alias);
+}
+
+static void normalize_badge_id(const char *id, char *out, int out_size) {
+    normalize_badge_token(id, out, out_size, false);
 }
 
 static const char *known_badge_label(const char *id) {
@@ -5584,7 +5555,7 @@ static bool emote_code_range_is_plausible(const char *code, int len) {
 
     for (int i = 0; i < len; i++) {
         unsigned char c = (unsigned char)code[i];
-        if (c == '\0' || c <= 0x20 || c == 0x7F) {
+        if (c <= 0x20 || c == 0x7F) {
             return false;
         }
     }
@@ -6977,7 +6948,7 @@ static int kick_parse_channel_subscriber_badges(const char *json, size_t len)
         char image_url[IMAGE_PATH_MAX] = {0};
         if (json_get_scalar_string_direct(value, value_end,
                                           "months", months, sizeof(months))
-            && parse_positive_int_string(months, &(int){0})
+            && parse_badge_version(months, 1, &(int){0})
             && kick_badge_image_url(value, value_end,
                                     image_url, sizeof(image_url))
             && kick_add_channel_badge("subscriber", months, image_url)) {
@@ -7409,45 +7380,7 @@ static const badge_visual_t kBadgeVisuals[] = {
 
 static void normalize_badge_style_id(const char *id, char *out, int out_size)
 {
-    if (!out || out_size <= 0) return;
-    int o = 0;
-    if (id) {
-        while (*id && isspace((unsigned char)*id)) id++;
-        for (; *id && o + 1 < out_size; id++) {
-            unsigned char c = (unsigned char)*id;
-            if (isspace(c) || c == ',' || c == '/') break;
-            out[o++] = (char)(c == '-' ? '_' : tolower(c));
-        }
-    }
-    while (o > 0 && isspace((unsigned char)out[o - 1])) o--;
-    out[o] = '\0';
-
-    if (ascii_equals_ci(out, "subgifter")
-        || ascii_equals_ci(out, "gift_sub")
-        || ascii_equals_ci(out, "gift_subs")
-        || ascii_equals_ci(out, "gift_subscriber")
-        || ascii_equals_ci(out, "gift_subscription")
-        || ascii_equals_ci(out, "gifted_sub")
-        || ascii_equals_ci(out, "gifted_subs")
-        || ascii_equals_ci(out, "gifted_subscriber")
-        || ascii_equals_ci(out, "gifted_subscription")
-        || ascii_equals_ci(out, "gifter")
-        || ascii_equals_ci(out, "sub_gift")
-        || ascii_equals_ci(out, "subgift")
-        || ascii_equals_ci(out, "sub_gifts")
-        || ascii_equals_ci(out, "sub_gifter_badge")
-        || ascii_equals_ci(out, "subscriber_gifter")
-        || ascii_equals_ci(out, "subscription_gift")
-        || ascii_equals_ci(out, "subscription_gifts")) {
-        snprintf(out, (size_t)out_size, "%s", "sub_gifter");
-    } else if (ascii_equals_ci(out, "channel_host")
-               || ascii_equals_ci(out, "creator")) {
-        snprintf(out, (size_t)out_size, "%s", "broadcaster");
-    } else if (ascii_equals_ci(out, "subscription")
-               || ascii_equals_ci(out, "subscriptions")
-               || ascii_equals_ci(out, "sub")) {
-        snprintf(out, (size_t)out_size, "%s", "subscriber");
-    }
+    normalize_badge_token(id, out, out_size, true);
 }
 
 static bool badge_visual_for_id_ex(const char *id, bool allow_default,
@@ -7690,6 +7623,8 @@ static bool renderer_surface_capacity(int width, int height,
     return true;
 }
 
+static void renderer_destroy(renderer_t *r);
+
 static bool renderer_init(renderer_t *r, int width, int height) {
     memset(r, 0, sizeof(*r));
     int surface_bytes;
@@ -7703,7 +7638,7 @@ static bool renderer_init(renderer_t *r, int width, int height) {
     r->height = height;
     HDC screen_dc = GetDC(NULL);
     r->mem_dc = CreateCompatibleDC(screen_dc);
-    ReleaseDC(NULL, screen_dc);
+    if (screen_dc) ReleaseDC(NULL, screen_dc);
     if (!r->mem_dc) return false;
 
     BITMAPINFO bmi = {0};
@@ -7715,11 +7650,9 @@ static bool renderer_init(renderer_t *r, int width, int height) {
     bmi.bmiHeader.biCompression = BI_RGB;
 
     r->dib_bitmap = CreateDIBSection(r->mem_dc, &bmi, DIB_RGB_COLORS, &r->pixels, NULL, 0);
-    if (!r->dib_bitmap || !r->pixels) {
-        DeleteDC(r->mem_dc);
-        return false;
-    }
+    if (!r->dib_bitmap || !r->pixels) goto failed;
     r->prev_bitmap = (HBITMAP)SelectObject(r->mem_dc, r->dib_bitmap);
+    if (!r->prev_bitmap) goto failed;
     SetBkMode(r->mem_dc, TRANSPARENT);
 
     const int font_msg_px = scale_reference_px(g_font_size_px);
@@ -7732,36 +7665,23 @@ static bool renderer_init(renderer_t *r, int width, int height) {
         -font_sys_px, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
         ANTIALIASED_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+    if (!r->font_msg || !r->font_sys) goto failed;
     r->prev_font = (HFONT)SelectObject(r->mem_dc, r->font_msg);
+    if (!r->prev_font) goto failed;
     if (!renderer_init_directwrite(r, font_msg_px, font_sys_px)) {
         log_msg("DirectWrite color-font renderer unavailable; falling back to GDI text");
     }
 
     r->rgba_cap = (int)surface_bytes;
     r->rgba_out = (uint8_t *)malloc((size_t)r->rgba_cap);
-    if (!r->rgba_out) {
-        renderer_release_directwrite(r);
-        SelectObject(r->mem_dc, r->prev_bitmap);
-        SelectObject(r->mem_dc, r->prev_font);
-        DeleteObject(r->dib_bitmap);
-        DeleteObject(r->font_msg);
-        DeleteObject(r->font_sys);
-        DeleteDC(r->mem_dc);
-        return false;
-    }
+    if (!r->rgba_out) goto failed;
     r->snapshot = (chat_msg_t *)calloc(QUEUE_CAP, sizeof(chat_msg_t));
-    if (!r->snapshot) {
-        renderer_release_directwrite(r);
-        free(r->rgba_out);
-        SelectObject(r->mem_dc, r->prev_bitmap);
-        SelectObject(r->mem_dc, r->prev_font);
-        DeleteObject(r->dib_bitmap);
-        DeleteObject(r->font_msg);
-        DeleteObject(r->font_sys);
-        DeleteDC(r->mem_dc);
-        return false;
-    }
+    if (!r->snapshot) goto failed;
     return true;
+
+failed:
+    renderer_destroy(r);
+    return false;
 }
 
 /* Resize only the pixel surfaces.  Fonts, DirectWrite factories, and the
@@ -7926,9 +7846,9 @@ static void renderer_destroy(renderer_t *r) {
         r->emote_render_cache[i].pixels = NULL;
     }
     renderer_release_directwrite(r);
-    SelectObject(r->mem_dc, r->prev_bitmap);
-    SelectObject(r->mem_dc, r->prev_font);
-    DeleteObject(r->dib_bitmap);
+    if (r->prev_bitmap) SelectObject(r->mem_dc, r->prev_bitmap);
+    if (r->prev_font) SelectObject(r->mem_dc, r->prev_font);
+    if (r->dib_bitmap) DeleteObject(r->dib_bitmap);
     if (r->font_msg) DeleteObject(r->font_msg);
     if (r->font_sys) DeleteObject(r->font_sys);
     DeleteDC(r->mem_dc);
@@ -8112,10 +8032,9 @@ static bool draw_directwrite_layout(renderer_t *r,
 
     ID2D1SolidColorBrush *brush = NULL;
     bool own_draw = !r->d2d_batch_active;
-    HRESULT hr = S_OK;
     if (own_draw) {
         RECT target_rect = {0, 0, r->width, r->height};
-        hr = ID2D1DCRenderTarget_BindDC(
+        HRESULT hr = ID2D1DCRenderTarget_BindDC(
             r->d2d_target, r->mem_dc, &target_rect);
         if (FAILED(hr)) {
             r->frame_requires_heartbeat = true;
@@ -8168,7 +8087,7 @@ static bool draw_directwrite_layout(renderer_t *r,
     ID2D1RenderTarget_PopAxisAlignedClip(
         (ID2D1RenderTarget *)r->d2d_target);
     if (own_draw) {
-        hr = ID2D1RenderTarget_EndDraw(
+        HRESULT hr = ID2D1RenderTarget_EndDraw(
             (ID2D1RenderTarget *)r->d2d_target, NULL, NULL);
         ID2D1SolidColorBrush_Release(brush);
         if (FAILED(hr)) r->frame_requires_heartbeat = true;
@@ -9257,46 +9176,20 @@ static int add_text_segment_runs(renderer_t *r, layout_run_t *runs,
                                  const char *body_text,
                                  const char *text, int text_len,
                                  HFONT font, COLORREF color,
-                                 bool allow_emotes, bool *has_emote,
-                                 bool *need_space,
-                                 int *pending_space_start,
-                                 int *pending_space_end)
+                                 bool allow_emotes, bool keep_trailing_space,
+                                 bool *has_emote)
 {
     const char *p = text;
     const char *end = text + text_len;
     while (p < end && count < cap) {
-        int spaces = 0;
-        while (p + spaces < end
-               && isspace((unsigned char)p[spaces])) {
-            spaces++;
-        }
-        if (spaces > 0) {
-            if (!*need_space && pending_space_start) {
-                *pending_space_start = (int)(p - body_text);
-            }
-            if (pending_space_end) {
-                *pending_space_end = (int)(p - body_text) + spaces;
-            }
-            *need_space = true;
-            p += spaces;
-        }
-        if (p >= end) break;
-
-        if (*need_space) {
-            const int space_start = pending_space_start
-                ? *pending_space_start
-                : (int)(p - body_text);
-            const int space_end = pending_space_end
-                ? *pending_space_end
-                : space_start + 1;
+        const char *space = p;
+        while (p < end && isspace((unsigned char)*p)) p++;
+        if (p > space && (p < end || keep_trailing_space)) {
             count = add_body_space_run(
-                r, runs, count, cap,
-                body_text + space_start, space_end - space_start,
-                space_start, space_end, font, color);
-            *need_space = false;
-            if (pending_space_start) *pending_space_start = -1;
-            if (pending_space_end) *pending_space_end = -1;
+                r, runs, count, cap, space, (int)(p - space),
+                (int)(space - body_text), (int)(p - body_text), font, color);
         }
+        if (p == end || count >= cap) break;
 
         const char *start = p;
         while (p < end && !isspace((unsigned char)*p)) p++;
@@ -9374,9 +9267,6 @@ static int build_message_runs(renderer_t *r, const chat_msg_t *m,
     if (!m->is_system && m->emote_count > 0) {
         const int text_len = (int)strlen(m->text);
         int cursor = 0;
-        bool need_space = false;
-        int pending_space_start = -1;
-        int pending_space_end = -1;
 
         for (int i = 0; i < m->emote_count && count < cap; i++) {
             const chat_emote_t *emote = &m->emotes[i];
@@ -9390,54 +9280,25 @@ static int build_message_runs(renderer_t *r, const chat_msg_t *m,
             count = add_text_segment_runs(r, runs, count, cap,
                                           m->text,
                                           m->text + cursor, start - cursor,
-                                          font, body_color, true, has_emote,
-                                          &need_space,
-                                          &pending_space_start,
-                                          &pending_space_end);
-            if (need_space && count < cap) {
-                count = add_body_space_run(
-                    r, runs, count, cap,
-                    m->text + pending_space_start,
-                    pending_space_end - pending_space_start,
-                    pending_space_start, pending_space_end,
-                    font, body_color);
-                need_space = false;
-                pending_space_start = -1;
-                pending_space_end = -1;
-            }
+                                          font, body_color, true, true, has_emote);
             count = add_explicit_emote_run(r, runs, count, cap, emote,
                                            m->text + start, start, end,
                                            font, body_color, has_emote);
             cursor = end;
-            need_space = false;
-            pending_space_start = -1;
-            pending_space_end = -1;
         }
 
         if (cursor < text_len && count < cap) {
             count = add_text_segment_runs(r, runs, count, cap,
                                           m->text,
                                           m->text + cursor, text_len - cursor,
-                                          font, body_color, true, has_emote,
-                                          &need_space,
-                                          &pending_space_start,
-                                          &pending_space_end);
+                                          font, body_color, true, false, has_emote);
         }
         return count;
     }
 
-    const char *p = m->text;
-    bool need_space = false;
-    int pending_space_start = -1;
-    int pending_space_end = -1;
-    count = add_text_segment_runs(r, runs, count, cap,
-                                  m->text, p, (int)strlen(p),
-                                  font, body_color,
-                                  !m->is_system, has_emote, &need_space,
-                                  &pending_space_start,
-                                  &pending_space_end);
-
-    return count;
+    return add_text_segment_runs(r, runs, count, cap,
+                                 m->text, m->text, (int)strlen(m->text),
+                                 font, body_color, !m->is_system, false, has_emote);
 }
 
 static int layout_line_count(const layout_run_t *runs, int n, int max_width) {
@@ -9562,8 +9423,7 @@ static bool text_selection_hit_is_selected(
         return false;
     }
     if (first.message_id == last.message_id) {
-        return hit->message_id == first.message_id
-            && hit->byte_end > first.byte_offset
+        return hit->byte_end > first.byte_offset
             && hit->byte_start < last.byte_offset;
     }
     if (hit->message_id == first.message_id) {

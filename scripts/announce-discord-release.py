@@ -15,6 +15,7 @@ from urllib.request import Request, urlopen
 REPOSITORY = "CorontoSiete/Stream-Studio"
 RELEASE_PREFIX = f"https://github.com/{REPOSITORY}/releases/"
 WEBHOOK_PATTERN = r"https://discord\.com/api/(?:v10/)?webhooks/\d+/[A-Za-z0-9_-]+"
+NOTES_LIMIT = 3600
 
 
 def retry_delay(error):
@@ -69,7 +70,7 @@ def utf16_prefix_length(text, limit):
     return len(text)
 
 
-def split_notes(text, limit=3600):
+def split_notes(text, limit=NOTES_LIMIT):
     """Preserve text while respecting Discord's UTF-16 limits."""
     if limit < 2:
         raise ValueError("The note limit must accommodate any Unicode character.")
@@ -86,31 +87,53 @@ def split_notes(text, limit=3600):
 
 
 def public_notes(notes):
-    return re.sub(r"<!--.*?-->", "", notes, flags=re.S).strip()
+    return re.sub(r"<!--.*?-->", "", notes, flags=re.S)
 
 
 def validate_release_notes(notes):
-    improvement_section = re.search(
-        r"^##[ \t]+Improvements and bug fixes[ \t]*\n(.*?)(?=^#{1,2}[ \t]|\Z)",
-        public_notes(notes), flags=re.M | re.S,
-    )
-    if not improvement_section or not improvement_section[1].strip():
-        raise ValueError("Add a nonempty '## Improvements and bug fixes' section to the release notes.")
+    in_improvements = False
+    closing_fence = None
+    for line in public_notes(notes).splitlines():
+        if closing_fence is not None:
+            if closing_fence.fullmatch(line):
+                closing_fence = None
+            elif in_improvements and line.strip():
+                return
+            continue
+
+        fence = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line)
+        if fence and (fence[1][0] == "~" or "`" not in fence[2]):
+            marker = fence[1]
+            closing_fence = re.compile(rf" {{0,3}}{marker[0]}{{{len(marker)},}}[ \t]*")
+            continue
+
+        heading = re.fullmatch(r" {0,3}(#{1,6})(?:[ \t]+(.*))?", line)
+        if heading:
+            if len(heading[1]) <= 2:
+                title = re.sub(r"[ \t]+#+[ \t]*$", "", heading[2] or "").strip()
+                in_improvements = heading[1] == "##" and title == "Improvements and bug fixes"
+        elif in_improvements and line.strip():
+            return
+    raise ValueError("Add a nonempty '## Improvements and bug fixes' section to the release notes.")
 
 
-def build_payloads(release, *, ping_everyone=True):
+def build_payloads(release, *, ping_everyone=True, single_message=False):
     url = release.get("html_url", "")
     if not url.startswith(RELEASE_PREFIX + "tag/") or release.get("draft"):
         raise ValueError("Only published Stream Studio releases can be announced.")
     tag = release["tag_name"]
     title = release.get("name") or f"Stream Studio {tag}"
-    notes = public_notes(release.get("body") or "")
+    notes = public_notes(release.get("body") or "").strip()
     lines = notes.split("\n", 1)
     normalize = lambda value: re.sub(r"\bv(?=\d)", "", value.lower()).strip("# \r")
     if len(lines) > 1 and lines[0].startswith("#") and normalize(lines[0]) == normalize(title):
         notes = lines[1].strip()
     chunks = split_notes(notes or f"Read the [release details]({url}) for this update.")
-    if len(chunks) > 10:
+    if single_message and len(chunks) > 1:
+        continuation = f"\n\nRead the remaining notes in the [full changelog]({url})."
+        limit = NOTES_LIMIT - len(continuation.encode("utf-16-le")) // 2
+        chunks = [split_notes(notes, limit)[0].rstrip() + continuation]
+    elif len(chunks) > 10:
         chunks = chunks[:9] + [f"Read the remaining notes in the [full changelog]({url})."]
     installer = next(
         (asset["browser_download_url"] for asset in release.get("assets", [])
@@ -178,7 +201,7 @@ def main():
     if edit_id is not None and not re.fullmatch(r"[0-9]+", edit_id):
         raise ValueError("The message ID must contain only digits.")
     release = load_release(args.release_json)
-    messages = build_payloads(release, ping_everyone=not edit_id)
+    messages = build_payloads(release, ping_everyone=not edit_id, single_message=bool(edit_id))
     edit_endpoint = f"{webhook}/messages/{edit_id}" if edit_id else None
 
     if edit_endpoint and not (dry_run and args.release_json):
@@ -190,17 +213,18 @@ def main():
     if dry_run:
         if not args.release_json and not edit_endpoint:
             request_json(webhook)
+    elif edit_endpoint:
+        payload = messages[0]
+        result = request_json(edit_endpoint, payload=payload, method="PATCH")
+        if result.get("id") != edit_id or not any(
+            embed.get("description") == payload["embeds"][0]["description"]
+            for embed in result.get("embeds", [])
+        ):
+            raise RuntimeError("Discord did not confirm the edited announcement.")
+        message_ids.append(edit_id)
     else:
-        for index, payload in enumerate(messages):
-            if edit_endpoint and index == 0:
-                result = request_json(edit_endpoint, payload=payload, method="PATCH")
-                if result.get("id") != edit_id or not any(
-                    embed.get("description") == payload["embeds"][0]["description"]
-                    for embed in result.get("embeds", [])
-                ):
-                    raise RuntimeError("Discord did not confirm the edited announcement.")
-            else:
-                result = request_json(webhook + "?wait=true", payload=payload, method="POST")
+        for payload in messages:
+            result = request_json(webhook + "?wait=true", payload=payload, method="POST")
             message_ids.append(result.get("id"))
     print(json.dumps({"release": release["tag_name"], "messages": len(messages),
                       "dry_run": dry_run, "message_ids": message_ids}))

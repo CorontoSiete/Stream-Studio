@@ -8,13 +8,13 @@ namespace StreamlinkVlcStudio.Infrastructure.Vod;
 
 internal interface IVodMediaConverter
 {
-    Task<OfflineVodPackage> ConvertAsync(string sourceDirectory, OfflineVodPackage source, string outputDirectory,
+    Task ConvertAsync(string sourceDirectory, OfflineVodPackage source, string outputDirectory,
         VodDownloadFormat format, string streamlinkPath, CancellationToken cancellationToken);
 }
 
 internal sealed class FfmpegVodMediaConverter : IVodMediaConverter
 {
-    public async Task<OfflineVodPackage> ConvertAsync(string sourceDirectory, OfflineVodPackage source,
+    public async Task ConvertAsync(string sourceDirectory, OfflineVodPackage source,
         string outputDirectory, VodDownloadFormat format, string streamlinkPath, CancellationToken cancellationToken)
     {
         if (!Enum.IsDefined(format)) throw new ArgumentOutOfRangeException(nameof(format));
@@ -36,18 +36,15 @@ internal sealed class FfmpegVodMediaConverter : IVodMediaConverter
         if (!IsComplete(result, source.Duration))
             throw new InvalidDataException("The converted video does not contain the full VOD. The original download has been kept.");
 
-        OfflineVodPackage package;
         if (format == VodDownloadFormat.Mp4)
-            package = await OfflineVodPackage.CreateMp4Async(outputDirectory, source.Duration, cancellationToken).ConfigureAwait(false);
-        else
         {
-            var content = await File.ReadAllTextAsync(Path.Combine(outputDirectory, OfflineVodPackage.ManifestName),
-                cancellationToken).ConfigureAwait(false);
-            var playlist = OfflineHlsPlaylist.Parse(content, new Uri("https://offline.invalid/index.m3u8"), requireLocalAssets: true);
-            package = await OfflineVodPackage.CreateAsync(outputDirectory, playlist, cancellationToken).ConfigureAwait(false);
+            await OfflineVodPackage.CreateMp4Async(outputDirectory, source.Duration, cancellationToken).ConfigureAwait(false);
+            return;
         }
-        await OfflineVodPackage.ValidateAsync(outputDirectory, cancellationToken).ConfigureAwait(false);
-        return package;
+
+        var manifest = await OfflineVodPackage.ReadManifestAsync(outputDirectory, cancellationToken).ConfigureAwait(false);
+        var playlist = OfflineVodPackage.ParseManifest(manifest);
+        await OfflineVodPackage.CreateAsync(outputDirectory, playlist, cancellationToken).ConfigureAwait(false);
     }
 
     private static bool IsComplete(ConversionResult result, TimeSpan expectedDuration) =>
@@ -77,7 +74,7 @@ internal sealed class FfmpegVodMediaConverter : IVodMediaConverter
             startInfo.ArgumentList.Add("-allowed_extensions");
             startInfo.ArgumentList.Add("ALL");
         }
-        foreach (var argument in new[] { "-i", Path.Combine(sourceDirectory, source.MediaFileName),
+        foreach (var argument in new[] { "-i", Path.GetFullPath(Path.Combine(sourceDirectory, source.MediaFileName)),
             "-map", "0:v:0?", "-map", "0:a?", "-c", "copy", "-map_metadata", "-1", "-map_chapters", "-1",
             "-avoid_negative_ts", "make_zero" }) startInfo.ArgumentList.Add(argument);
         if (format == VodDownloadFormat.Mp4)
@@ -94,9 +91,11 @@ internal sealed class FfmpegVodMediaConverter : IVodMediaConverter
         }
         else
         {
+            // FFmpeg interprets percent patterns throughout the segment filename. Passing
+            // a relative pattern keeps any literal percent signs in the library path out of it.
+            startInfo.WorkingDirectory = Path.GetFullPath(outputDirectory);
             foreach (var argument in new[] { "-hls_time", "10", "-hls_playlist_type", "vod", "-hls_segment_filename",
-                Path.Combine(outputDirectory, "asset-%06d.ts"), "-f", "hls",
-                Path.Combine(outputDirectory, OfflineVodPackage.ManifestName) }) startInfo.ArgumentList.Add(argument);
+                "asset-%06d.ts", "-f", "hls", OfflineVodPackage.ManifestName }) startInfo.ArgumentList.Add(argument);
         }
         return startInfo;
     }

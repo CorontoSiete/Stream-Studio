@@ -39,14 +39,14 @@ internal sealed class SettingsAutoSaveController : IAsyncDisposable
         {
             if (disposed) return;
             changeVersion++;
-            debounce.Schedule(SaveDelay, () => dispatch(() =>
+            debounce.Schedule(SaveDelay, () =>
             {
                 lock (gate)
                 {
                     if (disposed) return;
                     _ = SavePendingAsync();
                 }
-            }), ReportResult);
+            }, ReportResult, dispatch);
         }
     }
 

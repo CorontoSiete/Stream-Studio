@@ -1,3 +1,5 @@
+using StreamlinkVlcStudio.Infrastructure.Previews;
+
 internal static partial class StreamHoverPreviewTestCatalog
 {
     internal static IReadOnlyList<(string Name, Func<Task> Run)> All =>
@@ -258,7 +260,7 @@ internal static partial class StreamHoverPreviewTestCatalog
         var count = 0;
         using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(15));
         var run = Task.Run(() => new LibVlcLivePreview(service).RunAsync(
-            new(Target(), LibVlcLivePreview.QualityPreference, "fixture", false, []), vlc, frame =>
+            new(Target(), LivePreviewPolicy.QualityPreference, "fixture", false, []), vlc, frame =>
             {
                 Interlocked.Increment(ref count);
                 Assert.Equal(320, frame.Width);
@@ -286,7 +288,7 @@ internal static partial class StreamHoverPreviewTestCatalog
     {
         using var cancellation = new CancellationTokenSource();
         var service = new FixtureTransport(new Uri("http://127.0.0.1:1/unused"), cancel ? cancellation.Cancel : null);
-        var run = new LibVlcLivePreview(service).RunAsync(new(Target(), LibVlcLivePreview.QualityPreference, "fixture", false, []),
+        var run = new LibVlcLivePreview(service).RunAsync(new(Target(), LivePreviewPolicy.QualityPreference, "fixture", false, []),
             Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")), _ => throw new InvalidOperationException("No frames expected"), cancellation.Token);
         if (cancel) await Assert.ThrowsAsync<OperationCanceledException>(() => run);
         else await Assert.ThrowsAsync<FileNotFoundException>(() => run);
@@ -317,7 +319,7 @@ internal static partial class StreamHoverPreviewTestCatalog
         };
         using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(60));
         var run = Task.Run(() => new LibVlcLivePreview(new StreamlinkService(logger), logger).RunAsync(
-            new(target, LibVlcLivePreview.QualityPreference, settings.StreamlinkPath ?? ExecutableResolver.FindStreamlink()!, settings.LowLatency,
+            new(target, LivePreviewPolicy.QualityPreference, settings.StreamlinkPath ?? ExecutableResolver.FindStreamlink()!, settings.LowLatency,
                 CommandLineTokenizer.Tokenize(settings.CustomStreamlinkArguments), true),
             settings.VlcDirectory ?? ExecutableResolver.FindVlcDirectory()!, frame =>
             {

@@ -56,15 +56,17 @@ public static partial class PathSafety
     public static IReadOnlyList<string> GetUserDataRoots()
     {
         var roots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        AddRoot(roots, Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData));
-        AddRoot(roots, Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData));
-        AddLegacyRoot(roots, Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData));
-        AddLegacyRoot(roots, Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData));
+        var roamingData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+        var localData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        AddRoot(roots, roamingData, ProductDirectoryName);
+        AddRoot(roots, localData, ProductDirectoryName);
+        AddRoot(roots, roamingData, LegacyProductDirectoryName);
+        AddRoot(roots, localData, LegacyProductDirectoryName);
         var tempRoot = Path.GetTempPath();
-        AddRoot(roots, tempRoot);
-        AddLegacyRoot(roots, tempRoot);
-        AddTempRoot(roots, tempRoot, MaintenanceLogsDirectoryName);
-        AddTempRoot(roots, tempRoot, LegacyMaintenanceLogsDirectoryName);
+        AddRoot(roots, tempRoot, ProductDirectoryName);
+        AddRoot(roots, tempRoot, LegacyProductDirectoryName);
+        AddRoot(roots, tempRoot, MaintenanceLogsDirectoryName);
+        AddRoot(roots, tempRoot, LegacyMaintenanceLogsDirectoryName);
         AddGuidSuffixedTempRoots(roots, tempRoot, InstallerTempDirectoryPrefix);
         AddGuidSuffixedTempRoots(roots, tempRoot, LegacyInstallerTempDirectoryPrefix);
         AddGuidSuffixedTempRoots(roots, tempRoot, MaintenanceStageDirectoryPrefix);
@@ -227,30 +229,12 @@ public static partial class PathSafety
                !LegacyReservedDeviceName().IsMatch(stem);
     }
 
-    private static void AddRoot(HashSet<string> roots, string baseDirectory)
+    private static void AddRoot(HashSet<string> roots, string baseDirectory, string directoryName)
     {
         if (!string.IsNullOrWhiteSpace(baseDirectory))
         {
-            roots.Add(Normalize(Path.Combine(baseDirectory, ProductDirectoryName)));
+            roots.Add(Normalize(Path.Combine(baseDirectory, directoryName)));
         }
-    }
-
-    private static void AddLegacyRoot(HashSet<string> roots, string baseDirectory)
-    {
-        if (!string.IsNullOrWhiteSpace(baseDirectory))
-        {
-            roots.Add(Normalize(Path.Combine(baseDirectory, LegacyProductDirectoryName)));
-        }
-    }
-
-    private static void AddTempRoot(HashSet<string> roots, string tempRoot, string directoryName)
-    {
-        if (string.IsNullOrWhiteSpace(tempRoot))
-        {
-            return;
-        }
-
-        roots.Add(Normalize(Path.Combine(tempRoot, directoryName)));
     }
 
     private static void AddGuidSuffixedTempRoots(

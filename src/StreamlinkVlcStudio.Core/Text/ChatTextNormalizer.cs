@@ -5,6 +5,10 @@ namespace StreamlinkVlcStudio.Core.Text;
 public static class ChatTextNormalizer
 {
     private const int MaximumBadgeTitleTextElements = 128;
+    private const int MaximumOutgoingMessageTextElements = 500;
+
+    public static string NormalizeOutgoingMessage(string? value) =>
+        NormalizeSingleLine(value, MaximumOutgoingMessageTextElements);
 
     public static string NormalizeSingleLine(string? value, int maxTextElements = int.MaxValue)
     {
@@ -12,7 +16,7 @@ public static class ChatTextNormalizer
         var builder = new System.Text.StringBuilder(input.Length);
         foreach (var character in input)
         {
-            builder.Append(char.IsControl(character) ? ' ' : character);
+            builder.Append(char.IsControl(character) || character is '\u2028' or '\u2029' ? ' ' : character);
         }
 
         var normalized = builder.ToString().Trim();
@@ -32,12 +36,7 @@ public static class ChatTextNormalizer
 
     private static string TruncateTextElements(string value, int maxTextElements)
     {
-        if (string.IsNullOrEmpty(value) || maxTextElements < 0)
-        {
-            return "";
-        }
-
-        if (maxTextElements == 0)
+        if (value.Length == 0 || maxTextElements <= 0)
         {
             return "";
         }

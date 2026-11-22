@@ -4,6 +4,7 @@ using StreamlinkVlcStudio.Core.Logging;
 using StreamlinkVlcStudio.Core.Models;
 using StreamlinkVlcStudio.Core.Services;
 using StreamlinkVlcStudio.Infrastructure.Http;
+using StreamlinkVlcStudio.Infrastructure.Threading;
 
 namespace StreamlinkVlcStudio.Infrastructure.Viewers;
 
@@ -53,8 +54,7 @@ internal sealed partial class KickBrowseProvider
             {
                 token.ThrowIfCancellationRequested();
                 var url = $"https://api.kick.com/public/v1/categories/{Uri.EscapeDataString(category.Id)}";
-                using var request = CreateKickRequest(url, accessToken);
-                using var response = await BoundedHttpResponseSender.SendAsync(owner.httpClient, request, token).ConfigureAwait(false);
+                using var response = await owner.SendKickRequestAsync(url, accessToken, token).ConfigureAwait(false);
                 var body = await BoundedHttpContentReader.ReadJsonAsync(response.Content, token).ConfigureAwait(false);
                 if (!response.IsSuccessStatusCode)
                 {
@@ -83,7 +83,7 @@ internal sealed partial class KickBrowseProvider
         {
             try
             {
-                await cancellation.CancelAsync().ConfigureAwait(false);
+                CancellationSourceCleanup.Cancel(cancellation);
                 await Task.WhenAll(requests.Values).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }

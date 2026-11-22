@@ -1,4 +1,4 @@
-using System.Security.Cryptography;
+using StreamlinkVlcStudio.Core;
 using StreamlinkVlcStudio.Infrastructure.Io;
 
 namespace StreamlinkVlcStudio.Infrastructure.Vlc;
@@ -8,14 +8,14 @@ internal sealed record LibVlcCoreSelection(string Path, string Sha256, bool IsBu
 /// <summary>Selects the matching source-built core only for the verified VLC 3.0.23 DLL pair.</summary>
 internal static class BundledVlcCoreRuntime
 {
-    private const string ResourceName =
-        "StreamlinkVlcStudio.Infrastructure.Vlc.BundledVlcCore.libvlccore.dll";
     private const string ReferenceLibVlcSha256 =
         "8ae9f16a72441f43fb4ae8f72c843736726e067ea4a8def2646748631cc4e872";
     private const string ReferenceCoreSha256 =
         "d3475b834dd3eb77910f37f71b0341d358bcbdda5b9f04cc4a3a8e2be1bc8e35";
     private const string BundledCoreSha256 =
-        "d1dbe4b571422df97c73e25ce357cc28c82d703b475f8dc5b8c6c7203da4549c";
+        "12b0a9eb0cc10099a69182fbb553f521cc90251d411460c9f3ff8ba093326de2";
+    private static readonly Lazy<BundledVlcBinary> BundledCore =
+        new(() => new("BundledVlcCore", "libvlccore.dll", BundledCoreSha256));
 
     internal static LibVlcCoreSelection Select(string vlcDirectory)
     {
@@ -34,49 +34,12 @@ internal static class BundledVlcCoreRuntime
             return new LibVlcCoreSelection(installedCorePath, installedCoreSha256, IsBundledAddressWaitBuild: false);
         }
 
-        var bundledPath = ExtractVerifiedCore();
-        return new LibVlcCoreSelection(bundledPath, BundledCoreSha256, IsBundledAddressWaitBuild: true);
-    }
-
-    private static string ExtractVerifiedCore()
-    {
-        using var resource = typeof(BundledVlcCoreRuntime).Assembly.GetManifestResourceStream(ResourceName)
-            ?? throw new FileNotFoundException("The verified VLC address-wait core resource is missing.");
-        using var buffer = new MemoryStream();
-        resource.CopyTo(buffer);
-        var bytes = buffer.ToArray();
-        var resourceHash = Convert.ToHexString(SHA256.HashData(bytes));
-        if (!resourceHash.Equals(BundledCoreSha256, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidDataException("The bundled VLC core failed its SHA-256 check.");
-
         var directory = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "StreamStudio",
+            AppIdentity.ProductDirectoryName,
             "vlc-native-core",
             BundledCoreSha256);
-        var output = Path.Combine(directory, "libvlccore.dll");
-        Directory.CreateDirectory(directory);
-        if (FileHash.MatchesSha256(output, BundledCoreSha256))
-            return output;
-
-        var temporary = Path.Combine(directory, $"{Guid.NewGuid():N}.tmp");
-        try
-        {
-            File.WriteAllBytes(temporary, bytes);
-            try { File.Move(temporary, output, overwrite: true); }
-            catch (IOException) when (FileHash.MatchesSha256(output, BundledCoreSha256))
-            {
-                // Another process extracted the same immutable build first.
-            }
-        }
-        finally
-        {
-            AtomicFile.TryDeleteTemporaryFile(temporary);
-        }
-
-        if (!FileHash.MatchesSha256(output, BundledCoreSha256))
-            throw new IOException("The verified VLC address-wait core could not be extracted.");
-        return output;
+        var bundledPath = BundledCore.Value.ExtractTo(directory);
+        return new LibVlcCoreSelection(bundledPath, BundledCoreSha256, IsBundledAddressWaitBuild: true);
     }
-
 }

@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Net.Http.Headers;
+using System.Text;
 using System.Text.Json;
 using StreamlinkVlcStudio.Core.Logging;
 using StreamlinkVlcStudio.Core.Models;
@@ -7,6 +8,7 @@ using StreamlinkVlcStudio.Core.Services;
 using StreamlinkVlcStudio.Core.Settings;
 using StreamlinkVlcStudio.Infrastructure.Chat;
 using StreamlinkVlcStudio.Infrastructure.Http;
+using StreamlinkVlcStudio.Infrastructure.Threading;
 using static StreamlinkVlcStudio.Core.Json.JsonElementReader;
 using static StreamlinkVlcStudio.Core.Text.StringValues;
 
@@ -107,14 +109,13 @@ internal sealed partial class KickBrowseProvider : BrowseProviderRequests
 
         // Only the first unfiltered page uses top-live discovery. It has no dependency
         // on the category list, so both requests can use the same network wait.
-        using var discoveryCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        var topLiveTask = LoadKickTopLiveCategoriesAsync(accessToken, discoveryCancellation.Token);
+        using var pageCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var topLiveTask = LoadKickTopLiveCategoriesAsync(accessToken, pageCancellation.Token);
+        var pageTask = LoadKickCategoryListPageAsync(pageSize, cursor, accessToken, pageCancellation.Token);
         try
         {
-            var pageTask = LoadKickCategoryListPageAsync(pageSize, cursor, accessToken, cancellationToken);
             var first = await Task.WhenAny(pageTask, topLiveTask).ConfigureAwait(false);
             // Start bounded detail requests as soon as either source supplies IDs.
-            // Observe discovery failures after the list to preserve the primary failure.
             if (first == topLiveTask && topLiveTask.IsCompletedSuccessfully)
                 startDetails(await topLiveTask.ConfigureAwait(false));
             var page = await pageTask.ConfigureAwait(false);
@@ -125,56 +126,30 @@ internal sealed partial class KickBrowseProvider : BrowseProviderRequests
         }
         finally
         {
-            // A failed category list must also stop and observe speculative discovery.
-            await discoveryCancellation.CancelAsync().ConfigureAwait(false);
-            try { await topLiveTask.ConfigureAwait(false); }
-            catch (OperationCanceledException) when (discoveryCancellation.IsCancellationRequested) { }
-            catch (Exception ex)
-            {
-                // Preserve the primary failure. If discovery was awaited above, its
-                // exception still propagates from that await through BrowseService.
-                logger.WriteSafely(AppLogLevel.Warning, "Browse", "Kick top live discovery did not complete.", ex);
-            }
+            // Drain both requests even if the page or a progress callback failed.
+            // The awaits above determine which failure is reported to the caller.
+            if (!pageTask.IsCompleted || !topLiveTask.IsCompleted)
+                CancellationSourceCleanup.Cancel(pageCancellation);
+            await Task.WhenAll(pageTask, topLiveTask).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
         }
     }
 
-    private async Task<KickCategoryListPageLoadResult> LoadKickCategoryListPageAsync(
+    private Task<KickCategoryListPageLoadResult> LoadKickCategoryListPageAsync(
         int pageSize,
         string cursor,
         string accessToken,
         CancellationToken cancellationToken)
     {
-        var queryParameters = new List<KeyValuePair<string, string>>
-        {
-            new("limit", pageSize.ToString(CultureInfo.InvariantCulture)),
-            new("cursor", cursor)
-        };
         var url = BuildUrl(
             "https://api.kick.com/public/v2/categories",
-            queryParameters);
+            [new("limit", pageSize.ToString(CultureInfo.InvariantCulture)), new("cursor", cursor)]);
 
-        using var httpRequest = CreateKickRequest(url, accessToken);
-        using var response = await BoundedHttpResponseSender.SendAsync(httpClient, httpRequest, cancellationToken).ConfigureAwait(false);
-        var responseBody = await BoundedHttpContentReader.ReadJsonAsync(response.Content, cancellationToken).ConfigureAwait(false);
-        if (!response.IsSuccessStatusCode)
-        {
-            return new KickCategoryListPageLoadResult(
-                [],
-                "",
-                HandleBrowseHttpFailure<BrowseCategory>(
-                    response,
-                    responseBody,
-                    "Kick categories unavailable. Check Kick API credentials."));
-        }
-
-        using var document = JsonDocument.Parse(responseBody);
-        return new KickCategoryListPageLoadResult(
-            BrowsePayloadMapper.ReadCategories(document.RootElement, PlatformKind.Kick).ToArray(),
-            ReadPaginationCursor(document.RootElement, "next_cursor"),
-            null);
+        return ReadKickCategoryPageAsync(url, accessToken, "Kick categories unavailable. Check Kick API credentials.",
+            static root => new(BrowsePayloadMapper.ReadCategories(root, PlatformKind.Kick).ToArray(),
+                ReadPaginationCursor(root, "next_cursor"), null), cancellationToken);
     }
 
-    private async Task<KickCategoryListPageLoadResult> LoadKickCategorySearchPageAsync(
+    private Task<KickCategoryListPageLoadResult> LoadKickCategorySearchPageAsync(
         string query,
         int pageSize,
         string cursor,
@@ -183,8 +158,8 @@ internal sealed partial class KickBrowseProvider : BrowseProviderRequests
     {
         if (!TryReadKickCategorySearchCursor(cursor, out var page, out var offset))
         {
-            return new KickCategoryListPageLoadResult(
-                [], "", BrowseResult<BrowseCategory>.Unavailable("Refresh the Kick category search to load more results."));
+            return Task.FromResult(new KickCategoryListPageLoadResult(
+                [], "", BrowseResult<BrowseCategory>.Unavailable("Refresh the Kick category search to load more results.")));
         }
 
         // Kick's v2 name filter misses matches inside a category name (e.g. "hot tubs").
@@ -192,23 +167,32 @@ internal sealed partial class KickBrowseProvider : BrowseProviderRequests
         var url = BuildUrl(
             "https://api.kick.com/public/v1/categories",
             [new("q", query), new("page", page.ToString(CultureInfo.InvariantCulture))]);
-        using var httpRequest = CreateKickRequest(url, accessToken);
-        using var response = await BoundedHttpResponseSender.SendAsync(httpClient, httpRequest, cancellationToken).ConfigureAwait(false);
+
+        return ReadKickCategoryPageAsync(url, accessToken, "Kick category search unavailable. Check Kick API credentials.",
+            root => ReadKickCategorySearchPage(root, pageSize, page, offset), cancellationToken);
+    }
+
+    private async Task<KickCategoryListPageLoadResult> ReadKickCategoryPageAsync(
+        string url, string accessToken, string failureMessage,
+        Func<JsonElement, KickCategoryListPageLoadResult> readPage, CancellationToken cancellationToken)
+    {
+        using var response = await SendKickRequestAsync(url, accessToken, cancellationToken).ConfigureAwait(false);
         var responseBody = await BoundedHttpContentReader.ReadJsonAsync(response.Content, cancellationToken).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
-        {
-            return new KickCategoryListPageLoadResult(
-                [], "", HandleBrowseHttpFailure<BrowseCategory>(
-                    response, responseBody, "Kick category search unavailable. Check Kick API credentials."));
-        }
+            return new([], "", HandleBrowseHttpFailure<BrowseCategory>(response, responseBody, failureMessage));
 
         using var document = JsonDocument.Parse(responseBody);
-        if (!TryGetArray(document.RootElement, "data", out var data))
+        return readPage(document.RootElement);
+    }
+
+    private static KickCategoryListPageLoadResult ReadKickCategorySearchPage(JsonElement root, int pageSize, int page, int offset)
+    {
+        if (!TryGetArray(root, "data", out var data))
         {
             throw new JsonException("Kick category search did not return category data.");
         }
 
-        var matches = BrowsePayloadMapper.ReadCategories(document.RootElement, PlatformKind.Kick)
+        var matches = BrowsePayloadMapper.ReadCategories(root, PlatformKind.Kick)
             .DistinctBy(category => category.Id, StringComparer.Ordinal)
             .ToArray();
         var categories = matches.Skip(offset).Take(pageSize).ToArray();
@@ -251,20 +235,26 @@ internal sealed partial class KickBrowseProvider : BrowseProviderRequests
                 new("sort", "viewer_count")
             ]);
 
-        using var httpRequest = CreateKickRequest(url, accessToken);
-        using var response = await BoundedHttpResponseSender.SendAsync(httpClient, httpRequest, cancellationToken).ConfigureAwait(false);
-        var responseBody = await BoundedHttpContentReader.ReadJsonAsync(response.Content, cancellationToken).ConfigureAwait(false);
-        if (!response.IsSuccessStatusCode)
+        try
         {
-            logger.Write(
-                AppLogLevel.Warning,
-                "Browse",
+            using var response = await SendKickRequestAsync(url, accessToken, cancellationToken).ConfigureAwait(false);
+            var responseBody = await BoundedHttpContentReader.ReadJsonAsync(response.Content, cancellationToken).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+            {
+                logger.WriteSafely(AppLogLevel.Warning, "Browse",
                     $"Kick top live category discovery failed: {(int)response.StatusCode} {response.ReasonPhrase}. {ApiErrorMessage.Extract(responseBody)}");
+                return [];
+            }
+
+            using var document = JsonDocument.Parse(responseBody);
+            return BrowsePayloadMapper.ReadKickLiveStreamCategories(document.RootElement).ToArray();
+        }
+        catch (Exception ex) when (ex is HttpRequestException or IOException or InvalidDataException or
+            DecoderFallbackException or JsonException || ex is OperationCanceledException && !cancellationToken.IsCancellationRequested)
+        {
+            logger.WriteSafely(AppLogLevel.Warning, "Browse", "Kick top live category discovery did not complete.", ex);
             return [];
         }
-
-        using var document = JsonDocument.Parse(responseBody);
-        return BrowsePayloadMapper.ReadKickLiveStreamCategories(document.RootElement).ToArray();
     }
 
     internal async Task<BrowseResult<BrowseLiveStream>> GetKickStreamsAsync(
@@ -298,8 +288,7 @@ internal sealed partial class KickBrowseProvider : BrowseProviderRequests
                 new("cursor", request.Cursor.Trim())
             ]);
 
-        using var httpRequest = CreateKickRequest(url, accessToken);
-        using var response = await BoundedHttpResponseSender.SendAsync(httpClient, httpRequest, cancellationToken).ConfigureAwait(false);
+        using var response = await SendKickRequestAsync(url, accessToken, cancellationToken).ConfigureAwait(false);
         var responseBody = await BoundedHttpContentReader.ReadJsonAsync(response.Content, cancellationToken).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
@@ -323,68 +312,50 @@ internal sealed partial class KickBrowseProvider : BrowseProviderRequests
         IReadOnlyList<BrowseCategory> categories,
         KickCategoryDetailRequests details)
     {
-        if (categories.Count == 0)
-        {
-            return new KickCategoryDetailsLoadResult([], 0, null);
-        }
-
-        var loadTasks = categories
-            .Select((category, index) => category.ViewerCount is not null
-                ? Task.FromResult(new KickCategoryDetailLoadResult(index, category, null, false))
-                : LoadKickCategoryDetailAsync(category, index, details))
-            .ToArray();
-
-        var results = await Task.WhenAll(loadTasks).ConfigureAwait(false);
+        var results = await Task.WhenAll(categories.Select(category => category.ViewerCount is not null
+            ? Task.FromResult(new KickCategoryDetailLoadResult(category, null))
+            : LoadKickCategoryDetailAsync(category, details))).ConfigureAwait(false);
         var failure = results
             .Select(result => result.Failure)
             .FirstOrDefault(result => result is not null);
         if (failure is not null)
         {
-            return new KickCategoryDetailsLoadResult([], 0, failure);
+            return new KickCategoryDetailsLoadResult([], failure);
         }
 
-        var enrichedCategories = results
-            .Where(result => result.Category is not null)
-            .OrderBy(result => result.Index)
-            .Select(result => result.Category!)
-            .ToArray();
-        return new KickCategoryDetailsLoadResult(
-            enrichedCategories,
-            results.Count(result => result.ViewerCountUnavailable),
-            null);
+        return new KickCategoryDetailsLoadResult(results.Select(result => result.Category).ToArray(), null);
     }
 
     private async Task<KickCategoryDetailLoadResult> LoadKickCategoryDetailAsync(
         BrowseCategory category,
-        int index,
         KickCategoryDetailRequests details)
     {
         var detail = await details.GetAsync(category).ConfigureAwait(false);
         if (detail.Failure is { } failure)
         {
-            return new KickCategoryDetailLoadResult(index, null, failure, false);
+            return new KickCategoryDetailLoadResult(category, failure);
         }
         if (detail.Payload is not { } payload)
         {
-            return new KickCategoryDetailLoadResult(index, category, null, category.ViewerCount is null);
+            return new KickCategoryDetailLoadResult(category, null);
         }
         // Apply the payload after merging both sources, so missing detail fields
         // retain the same discovery/list fallback regardless of arrival order.
         if (!BrowsePayloadMapper.TryReadKickCategoryDetail(payload, category, out var enrichedCategory, out var failureMessage))
         {
             logger.Write(AppLogLevel.Warning, "Browse", failureMessage);
-            return new KickCategoryDetailLoadResult(index, category, null, category.ViewerCount is null);
+            return new KickCategoryDetailLoadResult(category, null);
         }
-        return new KickCategoryDetailLoadResult(index, enrichedCategory, null, enrichedCategory.ViewerCount is null);
+        return new KickCategoryDetailLoadResult(enrichedCategory, null);
     }
 
-    private static HttpRequestMessage CreateKickRequest(string url, string accessToken)
+    private async Task<HttpResponseMessage> SendKickRequestAsync(string url, string accessToken, CancellationToken token)
     {
-        var request = new HttpRequestMessage(HttpMethod.Get, url);
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
         request.Headers.Authorization = new AuthenticationHeaderValue(
             "Bearer",
             KickOAuthService.NormalizeBearerToken(accessToken));
-        return request;
+        return await BoundedHttpResponseSender.SendAsync(httpClient, request, token).ConfigureAwait(false);
     }
 
     private static string FormatKickCategoryMessage(int count, string query, int viewerCountUnavailableCount)
@@ -463,12 +434,9 @@ internal sealed partial class KickBrowseProvider : BrowseProviderRequests
 
     private sealed record KickCategoryDetailsLoadResult(
         IReadOnlyList<BrowseCategory> Categories,
-        int ViewerCountUnavailableCount,
         BrowseResult<BrowseCategory>? Failure);
 
     private sealed record KickCategoryDetailLoadResult(
-        int Index,
-        BrowseCategory? Category,
-        BrowseResult<BrowseCategory>? Failure,
-        bool ViewerCountUnavailable);
+        BrowseCategory Category,
+        BrowseResult<BrowseCategory>? Failure);
 }

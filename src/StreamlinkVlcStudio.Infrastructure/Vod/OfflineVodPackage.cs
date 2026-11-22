@@ -16,7 +16,21 @@ internal sealed record OfflineVodPackage(int Version, string ManifestHash, TimeS
     internal const string ManifestName = "index.m3u8";
     internal const string PackageName = "package.json";
     internal const string Mp4FileName = "vod.mp4";
+    private const int MaximumManifestBytes = 16 * 1024 * 1024;
+    private static readonly Encoding StrictUtf8 = new UTF8Encoding(false, true);
+    private static readonly Uri LocalManifestUri = new("https://offline.invalid/index.m3u8");
     internal string MediaFileName => Format == VodDownloadFormat.Mp4 ? Mp4FileName : ManifestName;
+
+    internal static async Task<byte[]> ReadManifestAsync(string directory, CancellationToken cancellationToken)
+    {
+        var path = Path.Combine(directory, ManifestName);
+        RequireRegularPath(path);
+        return await BoundedByteReader.ReadFileAsync(path, MaximumManifestBytes, cancellationToken).ConfigureAwait(false) ??
+            throw new InvalidDataException("The offline VOD playlist is missing or too large.");
+    }
+
+    internal static OfflineHlsPlaylist ParseManifest(byte[] manifest) =>
+        OfflineHlsPlaylist.Parse(StrictUtf8.GetString(manifest), LocalManifestUri, requireLocalAssets: true);
 
     internal static async Task<OfflineVodPackage> CreateMp4Async(string directory, TimeSpan duration,
         CancellationToken cancellationToken)
@@ -28,9 +42,7 @@ internal sealed record OfflineVodPackage(int Version, string ManifestHash, TimeS
         var package = new OfflineVodPackage(2, "", duration, 1, length,
             [new OfflineVodFile(Mp4FileName, length)], VodDownloadFormat.Mp4);
         await ValidateMp4Async(directory, package, cancellationToken).ConfigureAwait(false);
-        await AtomicFile.WriteAsync(Path.Combine(directory, PackageName),
-            (stream, token) => JsonSerializer.SerializeAsync(stream, package, cancellationToken: token),
-            cancellationToken, flushToDisk: true).ConfigureAwait(false);
+        await package.SaveMetadataAsync(directory, cancellationToken).ConfigureAwait(false);
         return package;
     }
 
@@ -44,11 +56,14 @@ internal sealed record OfflineVodPackage(int Version, string ManifestHash, TimeS
             new FileInfo(Path.Combine(directory, asset.FileName)).Length)).ToArray();
         var package = new OfflineVodPackage(1, Convert.ToHexString(SHA256.HashData(manifest)), playlist.Duration,
             playlist.SegmentCount, files.Sum(file => file.Length), files);
-        await AtomicFile.WriteAsync(Path.Combine(directory, PackageName),
-            (stream, token) => JsonSerializer.SerializeAsync(stream, package, cancellationToken: token),
-            cancellationToken, flushToDisk: true).ConfigureAwait(false);
+        await package.SaveMetadataAsync(directory, cancellationToken).ConfigureAwait(false);
         return package;
     }
+
+    private Task SaveMetadataAsync(string directory, CancellationToken cancellationToken) =>
+        AtomicFile.WriteAsync(Path.Combine(directory, PackageName),
+            (stream, token) => JsonSerializer.SerializeAsync(stream, this, cancellationToken: token),
+            cancellationToken, flushToDisk: true);
 
     internal static async Task<OfflineVodPackage> ValidateAsync(string directory, CancellationToken cancellationToken)
     {
@@ -67,14 +82,10 @@ internal sealed record OfflineVodPackage(int Version, string ManifestHash, TimeS
         if (package.Version != 1 || package.Format != VodDownloadFormat.Hls || package.Files is null ||
             package.Files.Count is <= 0 or > OfflineHlsPlaylist.MaximumAssets)
             throw new InvalidDataException("The offline VOD package format is invalid.");
-        RequireRegularPath(Path.Combine(directory, ManifestName));
-        var manifest = await BoundedByteReader.ReadFileAsync(Path.Combine(directory, ManifestName),
-            16 * 1024 * 1024, cancellationToken).ConfigureAwait(false) ??
-            throw new InvalidDataException("The offline VOD playlist is missing or too large.");
+        var manifest = await ReadManifestAsync(directory, cancellationToken).ConfigureAwait(false);
         if (!Convert.ToHexString(SHA256.HashData(manifest)).Equals(package.ManifestHash, StringComparison.Ordinal))
             throw new InvalidDataException("The offline VOD playlist has changed or is damaged.");
-        var playlist = OfflineHlsPlaylist.Parse(new UTF8Encoding(false, true).GetString(manifest),
-            new Uri("https://offline.invalid/index.m3u8"), requireLocalAssets: true);
+        var playlist = ParseManifest(manifest);
         if (playlist.Duration != package.Duration || playlist.SegmentCount != package.SegmentCount ||
             playlist.Assets.Count != package.Files.Count)
             throw new InvalidDataException("The offline VOD package does not match its playlist.");

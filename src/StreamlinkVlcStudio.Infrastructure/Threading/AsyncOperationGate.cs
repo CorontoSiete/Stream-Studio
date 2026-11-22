@@ -8,6 +8,7 @@ internal sealed class AsyncOperationGate(int maximumConcurrency = 1) : IDisposab
 {
     private readonly object gate = new();
     private readonly SemaphoreSlim slots = new(maximumConcurrency, maximumConcurrency);
+    private readonly CancellationTokenSource closed = new();
     private int users;
     private bool disposed;
 
@@ -23,7 +24,8 @@ internal sealed class AsyncOperationGate(int maximumConcurrency = 1) : IDisposab
         var acquired = false;
         try
         {
-            await slots.WaitAsync(cancellationToken).ConfigureAwait(false);
+            using var waiting = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, closed.Token);
+            await slots.WaitAsync(waiting.Token).ConfigureAwait(false);
             acquired = true;
             lock (gate)
             {
@@ -35,9 +37,12 @@ internal sealed class AsyncOperationGate(int maximumConcurrency = 1) : IDisposab
 
             return new Lease(this);
         }
-        catch
+        catch (Exception error)
         {
+            var closedWhileWaiting = error is OperationCanceledException && closed.IsCancellationRequested;
             Release(acquired);
+            if (error is OperationCanceledException) cancellationToken.ThrowIfCancellationRequested();
+            if (closedWhileWaiting) throw new ObjectDisposedException(nameof(AsyncOperationGate));
             throw;
         }
     }
@@ -48,8 +53,12 @@ internal sealed class AsyncOperationGate(int maximumConcurrency = 1) : IDisposab
         {
             if (disposed) return;
             disposed = true;
-            if (users == 0) slots.Dispose();
+            // Keep the resources alive while cancellation wakes the queued waiters.
+            users++;
         }
+
+        try { closed.Cancel(); }
+        finally { Release(acquired: false); }
     }
 
     private void Release(bool acquired)
@@ -58,7 +67,11 @@ internal sealed class AsyncOperationGate(int maximumConcurrency = 1) : IDisposab
         {
             if (acquired) slots.Release();
             users--;
-            if (disposed && users == 0) slots.Dispose();
+            if (disposed && users == 0)
+            {
+                slots.Dispose();
+                closed.Dispose();
+            }
         }
     }
 

@@ -34,8 +34,9 @@ python scripts/build-adaptive-replay.py --gcc C:/toolchain/bin/gcc.exe `
     --vlc-library-directory C:/vlc-sdk/lib
 ```
 
-`--output` selects an independent rebuild path. Every invocation uses a fresh
-source/object directory under `artifacts/native/adaptive-replay`, verifies the
+Replacing the bundled DLL requires the import library and output hashes recorded
+in `provenance.json`. Use `--output` for independent builds. Every invocation uses
+a fresh source/object directory under `artifacts/native/adaptive-replay`, verifies the
 upstream source hash, applies the patch, and checks native imports before
 copying the result. PE timestamps are disabled and the image base is fixed;
 two independent source/object builds produced byte-identical DLLs. No download

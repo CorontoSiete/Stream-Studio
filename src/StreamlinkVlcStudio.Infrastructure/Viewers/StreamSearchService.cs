@@ -10,6 +10,7 @@ using StreamlinkVlcStudio.Core.Settings;
 using StreamlinkVlcStudio.Core.Text;
 using StreamlinkVlcStudio.Infrastructure.Chat;
 using StreamlinkVlcStudio.Infrastructure.Http;
+using StreamlinkVlcStudio.Infrastructure.Threading;
 using StreamlinkVlcStudio.Infrastructure.Twitch;
 using static StreamlinkVlcStudio.Core.Json.JsonElementReader;
 using static StreamlinkVlcStudio.Core.Text.StringValues;
@@ -39,7 +40,7 @@ public sealed class StreamSearchService : IStreamSearchService
           }
         }
         """;
-    private static readonly HttpClient SharedHttpClient = HttpClientFactory.Create(TimeSpan.FromSeconds(20));
+    private static readonly HttpClient SharedHttpClient = HttpClientFactory.CreateForText(TimeSpan.FromSeconds(20));
     private static readonly TimeSpan CurlTimeout = TimeSpan.FromSeconds(12);
     private readonly IAppLogger logger;
     private readonly IStreamlinkService streamlinkService;
@@ -164,6 +165,7 @@ public sealed class StreamSearchService : IStreamSearchService
             settings,
             customArguments,
             cancellationToken).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
 
         var orderedChannels = channels
             .OrderBy(channel => channel.IsLive ? 0 : 1)
@@ -467,23 +469,12 @@ public sealed class StreamSearchService : IStreamSearchService
         IReadOnlyList<string> customArguments,
         CancellationToken cancellationToken)
     {
-        using var throttle = new SemaphoreSlim(StreamProbeConcurrency);
+        using var throttle = new AsyncOperationGate(StreamProbeConcurrency);
         var tasks = discoveries.Select(async discovery =>
         {
-            await throttle.WaitAsync(cancellationToken).ConfigureAwait(false);
-            try
-            {
-                return await CreateSearchChannelAsync(
-                    discovery,
-                    quality,
-                    settings,
-                    customArguments,
-                    cancellationToken).ConfigureAwait(false);
-            }
-            finally
-            {
-                throttle.Release();
-            }
+            using var slot = await throttle.EnterAsync(cancellationToken).ConfigureAwait(false);
+            return await CreateSearchChannelAsync(
+                discovery, quality, settings, customArguments, cancellationToken).ConfigureAwait(false);
         });
 
         return await Task.WhenAll(tasks).ConfigureAwait(false);

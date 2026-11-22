@@ -16,6 +16,7 @@ internal static class HlsDeltaPlaylistTestCatalog
         ("HLS delta playlists: DVR discovery rejects omitted segments", () => Run(DvrDiscovery)),
         ("HLS playlists: DVR discovery requires an exact header", () => Run(DvrHeader)),
         ("HLS playlists: seek previews require an exact header", () => Run(SeekHeader)),
+        ("HLS playlists: seek previews require a complete response", SeekResponseAsync),
         ("HLS playlist review: offline VODs accept completion markers at any position", () => Run(OfflineCompletionMarker)),
         ("HLS playlist review: offline VODs accept global target duration after media", () => Run(OfflineGlobalDuration)),
         ("HLS playlist review: rebased VODs retain early completion markers", () => Run(RebasedCompletionMarker)),
@@ -24,6 +25,7 @@ internal static class HlsDeltaPlaylistTestCatalog
         ("HLS playlist review: Kick downloads materialize ranges before segment durations", () => RangesBeforeDurationsAsync(PlatformKind.Kick)),
         ("HLS playlist review: seek previews reject duplicate segment durations", () => Run(DuplicatePreviewDuration)),
         ("HLS playlist review: seek previews reject incomplete final segments", () => Run(IncompletePreviewSegment)),
+        ("HLS playlist review: timeline readers reject malformed media sequences", () => Run(InvalidMediaSequences)),
         ("HLS playlist review: duration readers reject unsupported notation", () => Run(InvalidDurationNotation)),
         ("HLS playlist review: duration readers preserve fractional seconds", () => Run(FractionalDurations)),
         ("HLS playlist review: offline completion requires complete segments and one marker", () => Run(InvalidOfflineCompletion))
@@ -49,6 +51,30 @@ internal static class HlsDeltaPlaylistTestCatalog
     {
         Assert.NotNull(LiveSeekPlaylist.Parse(Header + Segments, PlaylistUri, PlatformKind.Twitch, null));
         Assert.True(LiveSeekPlaylist.Parse(Header + Delta + Segments, PlaylistUri, PlatformKind.Twitch, null) is null);
+    }
+
+    private static void InvalidMediaSequences()
+    {
+        const string sequence = "#EXT-X-MEDIA-SEQUENCE:0\n";
+        const string eventTag = "#EXT-X-PLAYLIST-TYPE:EVENT\n";
+        var noSequence = Header.Replace(sequence, "", StringComparison.Ordinal);
+        var vlcVersion = new Version(3, 0, 23);
+        foreach (var content in new[]
+        {
+            Header + sequence + Segments,
+            noSequence + Segments + sequence,
+            noSequence + "#EXT-X-MEDIA-SEQUENCE\n" + Segments,
+            noSequence + "#EXT-X-MEDIA-SEQUENCE:0\0\n" + Segments
+        })
+        {
+            Assert.True(HlsReplayTimeline.ParsePublishedDuration(content) is null);
+            Assert.True(LiveSeekPlaylist.Parse(content, PlaylistUri, PlatformKind.Twitch, null) is null);
+            Assert.Equal(TimeSpan.Zero, TwitchVodReplayPolicy.GetLiveReplaySegmentDuration(content + eventTag, vlcVersion));
+            Assert.Throws<InvalidDataException>(() => LivePreviewPlaylist.Rewrite(content, PlaylistUri, PlatformKind.Twitch, out _));
+            Assert.Throws<InvalidDataException>(() => OfflineHlsPlaylist.Parse(content + "#EXT-X-ENDLIST\n", PlaylistUri));
+        }
+        var valid = Header + Segments;
+        Assert.Equal(TimeSpan.FromSeconds(5), TwitchVodReplayPolicy.GetLiveReplaySegmentDuration(valid + eventTag, vlcVersion));
     }
 
     private static void LivePreviews()
@@ -87,6 +113,27 @@ internal static class HlsDeltaPlaylistTestCatalog
             PlaylistUri, PlatformKind.Twitch, null) is null);
         Assert.True(LiveSeekPlaylist.Parse("<html>\n" + Header + Segments + "</html>",
             PlaylistUri, PlatformKind.Twitch, null) is null);
+    }
+
+    private static async Task SeekResponseAsync()
+    {
+        var status = HttpStatusCode.PartialContent;
+        var content = Header + Segments;
+        using var http = new HttpClient(new FakeHttpMessageHandler(_ => new(status)
+        {
+            Content = new StringContent(content)
+        }));
+        var validator = new ReplayUrlSecurityValidator((_, _) => Task.FromResult(new[] { IPAddress.Parse("8.8.8.8") }));
+        var preview = new LiveSeekPreviewClient(http, validator);
+        await Assert.ThrowsAsync<InvalidDataException>(() => preview.GetPlaylistAsync(
+            PlaylistUri, PlatformKind.Twitch, null, CancellationToken.None));
+        await Assert.ThrowsAsync<InvalidDataException>(() => preview.GetSegmentAsync(
+            new Uri(PlaylistUri, "2.ts"), PlatformKind.Twitch, CancellationToken.None));
+        status = HttpStatusCode.OK;
+        Assert.NotNull(await preview.GetPlaylistAsync(PlaylistUri, PlatformKind.Twitch, null, CancellationToken.None));
+        content = "";
+        await Assert.ThrowsAsync<InvalidDataException>(() => preview.GetSegmentAsync(
+            new Uri(PlaylistUri, "2.ts"), PlatformKind.Twitch, CancellationToken.None));
     }
 
     private static void OfflineCompletionMarker()

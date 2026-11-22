@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor
-import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -16,44 +15,13 @@ import tarfile
 import tempfile
 import sys
 
+from native_build_files import install_binary, sha256
+
 
 UPSTREAM_SHA256 = "847f1c4d7b848b3f6a3c04b7d0c05ab9fbc5f174c9f8adcd6203057e8908285e"
 REFERENCE_LIBVLC_SHA256 = "8ae9f16a72441f43fb4ae8f72c843736726e067ea4a8def2646748631cc4e872"
 REFERENCE_CORE_SHA256 = "d3475b834dd3eb77910f37f71b0341d358bcbdda5b9f04cc4a3a8e2be1bc8e35"
 SOURCE_ROOT_NAME = "vlc-3.0.23"
-PATCH_OLD = """            if (!LOOKUP(WaitOnAddress)
-             || !LOOKUP(WakeByAddressAll) || !LOOKUP(WakeByAddressSingle))
-            {"""
-PATCH_NEW = """            BOOL haveNativeAddressWaits =
-                LOOKUP(WaitOnAddress)
-             && LOOKUP(WakeByAddressAll) && LOOKUP(WakeByAddressSingle);
-            if (!haveNativeAddressWaits)
-            {
-                /* Windows forwards these APIs through KernelBase on supported builds. */
-                h = GetModuleHandle(TEXT("kernelbase.dll"));
-                if (h != NULL)
-                    haveNativeAddressWaits = LOOKUP(WaitOnAddress)
-                        && LOOKUP(WakeByAddressAll) && LOOKUP(WakeByAddressSingle);
-            }
-
-            if (!haveNativeAddressWaits)
-            {"""
-PREROLL_BUFFER_OLD = """    const vlc_tick_t i_buffering_duration = p_sys->i_pts_delay +
-                                         i_preroll_duration +
-                                         p_sys->i_buffering_extra_stream - p_sys->i_buffering_extra_initial;"""
-PREROLL_BUFFER_NEW = """    /* Decoder delay is in system time; preroll and extra buffering are in
-     * stream time. Convert the delay before comparing stream durations. */
-    const vlc_tick_t i_buffering_duration = p_sys->i_pts_delay * INPUT_RATE_DEFAULT / p_sys->i_rate +
-                                         i_preroll_duration +
-                                         p_sys->i_buffering_extra_stream - p_sys->i_buffering_extra_initial;"""
-PREROLL_ORIGIN_OLD = """    input_clock_ChangeSystemOrigin( p_sys->p_pgrm->p_clock, true,
-                                    i_current_date + i_wakeup_delay - i_buffering_duration );"""
-PREROLL_ORIGIN_NEW = """    /* Rebase the stream buffering interval in system time at the input rate.
-     * ChangeSystemOrigin accounts for the PTS delay's rate offset, so the
-     * decoder delay remains in wall time when the preroll is released. */
-    input_clock_ChangeSystemOrigin( p_sys->p_pgrm->p_clock, true,
-                                    i_current_date + i_wakeup_delay -
-                                    i_buffering_duration * p_sys->i_rate / INPUT_RATE_DEFAULT );"""
 SYSTEM_DLLS = {
     "advapi32.dll",
     "bcrypt.dll",
@@ -75,147 +43,9 @@ SYSTEM_DLLS = {
     "ws2_32.dll",
 }
 
-# Keep queued audio and video on one continuous clock when the rate changes.
-# All of these interfaces are private to libvlccore; its exported ABI is unchanged.
-CONTINUITY_REPLACEMENTS = {
-    "input/clock.h": [
-        ("vlc_tick_t *pi_ts0, vlc_tick_t *pi_ts1, vlc_tick_t i_ts_bound );",
-         "vlc_tick_t *pi_ts0, vlc_tick_t *pi_ts1, vlc_tick_t i_ts_bound,\n"
-         "                           vlc_tick_t i_audio_duration );"),
-    ],
-    "input/clock.c": [
-        ("    return ( i_stream - cl->ref.i_stream ) * cl->i_rate / INPUT_RATE_DEFAULT +\n           cl->ref.i_system;",
-         """    vlc_tick_t system = ( i_stream - cl->ref.i_stream ) * cl->i_rate / INPUT_RATE_DEFAULT +
-                        cl->ref.i_system;
-    for( unsigned i = cl->rate_history_count; i > 0; i-- )
-    {
-        if( i_stream >= cl->rate_history[i - 1].end.i_stream )
-            break;
-        system = cl->rate_history[i - 1].end.i_system - cl->i_pts_delay - ClockGetTsOffset( cl ) +
-            ( i_stream - cl->rate_history[i - 1].end.i_stream ) * cl->rate_history[i - 1].rate / INPUT_RATE_DEFAULT;
-    }
-    return system;"""),
-        ("    const vlc_tick_t i_late = ( i_ck_system - cl->i_pts_delay ) - i_system_expected;",
-         "    const vlc_tick_t i_late = ( i_ck_system - cl->i_pts_delay - ClockGetTsOffset( cl ) ) - i_system_expected;"),
-        ("    if( b_reset_reference )\n    {\n        cl->i_next_drift_update",
-         "    if( b_reset_reference )\n    {\n"
-         "        cl->audio_end = clock_point_Create( VLC_TICK_INVALID, VLC_TICK_INVALID );\n"
-         "        cl->rate_history_count = 0;\n        cl->i_next_drift_update"),
-        ("void input_clock_ChangeRate( input_clock_t *cl, int i_rate )\n{\n    vlc_mutex_lock( &cl->lock );\n\n    if( cl->b_has_reference )",
-         "void input_clock_ChangeRate( input_clock_t *cl, int i_rate )\n{\n    vlc_mutex_lock( &cl->lock );\n\n    if( cl->b_has_reference && cl->i_rate != i_rate )"),
-        ("    clock_point_t last;", "    clock_point_t last;\n\n"
-         "    /* End of the last queued audio block, in stream and system time. */\n"
-         "    clock_point_t audio_end;\n"
-         "    /* Preserve dates already queued before each rate boundary. */\n"
-         "    struct { clock_point_t end; int rate; } rate_history[64];\n"
-         "    unsigned rate_history_count;"),
-        ("    cl->b_has_reference = false;\n    cl->ref = clock_point_Create( VLC_TICK_INVALID, VLC_TICK_INVALID );",
-         "    cl->audio_end = clock_point_Create( VLC_TICK_INVALID, VLC_TICK_INVALID );\n"
-         "    cl->rate_history_count = 0;\n"
-         "    cl->b_has_reference = false;\n    cl->ref = clock_point_Create( VLC_TICK_INVALID, VLC_TICK_INVALID );"),
-        ("""        /* Move the reference point (as if we were playing at the new rate
-         * from the start */
-        cl->ref.i_system = cl->last.i_system - (cl->last.i_system - cl->ref.i_system) * i_rate / cl->i_rate;""",
-         """        /* New audio must follow samples already queued at the previous rate.
-         * Anchoring to the demux read time moves presentation timestamps across
-         * the buffered interval, causing silence or dropped pictures. */
-        const vlc_tick_t now = cl->b_paused ? cl->i_pause_date : mdate();
-        const bool have_audio = cl->audio_end.i_system >= now;
-        const vlc_tick_t stream = have_audio ? cl->audio_end.i_stream
-                                            : cl->last.i_stream + AvgGet( &cl->drift );
-        const vlc_tick_t system = have_audio ? cl->audio_end.i_system
-            : ClockStreamToSystem( cl, stream ) + cl->i_pts_delay + ClockGetTsOffset( cl );
-        /* A decoder can be ahead of the audio boundary. Preserve the previous
-         * mapping for earlier frames rather than stretching their queued dates. */
-        if( cl->rate_history_count == 0 ||
-            stream > cl->rate_history[cl->rate_history_count - 1].end.i_stream )
-        {
-            if( cl->rate_history_count == ARRAY_SIZE(cl->rate_history) )
-            {
-                memmove( cl->rate_history, cl->rate_history + 1,
-                         sizeof(cl->rate_history) - sizeof(cl->rate_history[0]) );
-                cl->rate_history_count--;
-            }
-            const unsigned index = cl->rate_history_count++;
-            cl->rate_history[index].end = clock_point_Create( stream, system );
-            cl->rate_history[index].rate = cl->i_rate;
-        }
-        cl->ref.i_system = system -
-            ( stream - cl->ref.i_stream + cl->i_pts_delay ) * i_rate / INPUT_RATE_DEFAULT;"""),
-        ("            cl->last.i_system += i_duration;",
-         "            cl->last.i_system += i_duration;\n"
-         "            if( cl->audio_end.i_system > VLC_TICK_INVALID )\n"
-         "                cl->audio_end.i_system += i_duration;\n"
-         "            for( unsigned i = 0; i < cl->rate_history_count; i++ )\n"
-         "                cl->rate_history[i].end.i_system += i_duration;"),
-        ("vlc_tick_t i_ts_bound )\n{\n    assert( pi_ts0 );",
-         "vlc_tick_t i_ts_bound, vlc_tick_t i_audio_duration )\n{\n    assert( pi_ts0 );"),
-        ("        *pi_ts0 = ClockStreamToSystem( cl, *pi_ts0 + AvgGet( &cl->drift ) );",
-         """        const vlc_tick_t stream = *pi_ts0 + AvgGet( &cl->drift );
-        *pi_ts0 = ClockStreamToSystem( cl, stream );
-        int rate = cl->i_rate;
-        for( unsigned i = cl->rate_history_count; i > 0; i-- )
-        {
-            if( stream >= cl->rate_history[i - 1].end.i_stream )
-                break;
-            rate = cl->rate_history[i - 1].rate;
-            *pi_ts0 = cl->rate_history[i - 1].end.i_system - i_ts_delay +
-                ( stream - cl->rate_history[i - 1].end.i_stream ) * rate / INPUT_RATE_DEFAULT;
-        }
-        if( pi_rate )
-            *pi_rate = rate;
-        if( i_audio_duration > 0 )
-            cl->audio_end = clock_point_Create( stream + i_audio_duration,
-                *pi_ts0 + i_ts_delay + i_audio_duration * rate / INPUT_RATE_DEFAULT );"""),
-        ("    cl->ref.i_system += i_offset;\n    cl->last.i_system += i_offset;",
-         "    cl->ref.i_system += i_offset;\n    cl->last.i_system += i_offset;\n"
-         "    for( unsigned i = 0; i < cl->rate_history_count; i++ )\n"
-         "        cl->rate_history[i].end.i_system += i_offset;\n"
-         "    if( cl->audio_end.i_system > VLC_TICK_INVALID )\n"
-         "        cl->audio_end.i_system += i_offset;"),
-    ],
-    "input/decoder.c": [
-        ("     && !DecoderTimedWait( p_dec, p_audio->i_pts - AOUT_MAX_PREPARE_TIME ) )",
-         "     /* Keep output responsive to rate changes while retaining 250 ms\n"
-         "      * of decoded audio. Encoded input caching remains unchanged. */\n"
-         "     && !DecoderTimedWait( p_dec, p_audio->i_pts - CLOCK_FREQ / 4 ) )"),
-        ("NULL, &i_ts, NULL, INT64_MAX )", "NULL, &i_ts, NULL, INT64_MAX, 0 )"),
-        ("pi_ts0, pi_ts1, i_ts_bound ) )", "pi_ts0, pi_ts1, i_ts_bound,\n"
-         "                p_dec->fmt_out.i_cat == AUDIO_ES && pi_duration ? *pi_duration : 0 ) )"),
-    ],
-}
-
-
-def apply_continuity_patch(source: Path) -> dict[str, Path]:
-    patched = {}
-    for name, replacements in CONTINUITY_REPLACEMENTS.items():
-        original = source / "src" / name
-        value = original.read_text(encoding="utf-8")
-        for old, new in replacements:
-            if name.endswith(".h") and old not in value and new in value:
-                continue
-            expected = 2 if old.startswith("    cl->b_has_reference = false;") else 1
-            if value.count(old) != expected:
-                raise ValueError(f"Unexpected VLC rate-continuity source in {name}: {old}")
-            value = value.replace(old, new)
-        # The private header must also be seen by the unmodified decoder users.
-        output = original if name.endswith(".h") else original.with_name(".studio_build_" + original.name)
-        output.write_text(value, encoding="utf-8", newline="\n")
-        patched[name] = output
-    return patched
-
-
 def resolve(root: Path, value: str) -> Path:
     path = Path(value)
     return path.resolve() if path.is_absolute() else (root / path).resolve()
-
-
-def sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def run(command: list[str], *, cwd: Path, environment: dict[str, str], capture: bool = True) -> str:
@@ -280,25 +110,14 @@ def extract_verified_source(archive_path: Path, destination: Path) -> Path:
     return destination
 
 
-def apply_wait_patch(thread_path: Path, output_path: Path) -> None:
-    source = thread_path.read_text(encoding="utf-8")
-    occurrences = source.count(PATCH_OLD)
-    if occurrences != 1:
-        raise ValueError(f"Expected exactly one VLC 3.0.23 wait lookup to patch, found {occurrences}")
-    output_path.write_text(source.replace(PATCH_OLD, PATCH_NEW), encoding="utf-8", newline="\n")
-
-
-def apply_preroll_rate_patch(source_path: Path, output_path: Path) -> None:
-    source = source_path.read_text(encoding="utf-8")
-    for original, replacement in [
-        (PREROLL_BUFFER_OLD, PREROLL_BUFFER_NEW),
-        (PREROLL_ORIGIN_OLD, PREROLL_ORIGIN_NEW),
-    ]:
-        occurrences = source.count(original)
-        if occurrences != 1:
-            raise ValueError(f"Expected exactly one VLC 3.0.23 preroll calculation to patch, found {occurrences}")
-        source = source.replace(original, replacement)
-    output_path.write_text(source, encoding="utf-8", newline="\n")
+def apply_source_patches(source: Path, patch_directory: Path, provenance: dict) -> None:
+    names = dict.fromkeys([provenance["patch"], *(entry["patch"] for entry in provenance["additionalPatches"])])
+    run(
+        ["git", "-c", "core.autocrlf=false", "apply", "--whitespace=nowarn",
+         *(str(patch_directory / name) for name in names)],
+        cwd=source,
+        environment={**os.environ, "GIT_CEILING_DIRECTORIES": str(source.parent)},
+    )
 
 
 def generated_about_header(source: Path, output: Path) -> None:
@@ -422,13 +241,6 @@ def build_once(
 ) -> Path:
     build = workspace / "build"
     build.mkdir(parents=True)
-    # Use one stable relative source name for both clean builds. GCC embeds
-    # __FILE__ in this object, so unique temporary-directory names would make
-    # otherwise identical DLLs differ.
-    patched_source = source / ".studio_build_thread.c"
-    apply_wait_patch(source / "src" / "win32" / "thread.c", patched_source)
-    patched_es_out = source / "src" / "input" / ".studio_build_es_out.c"
-    apply_preroll_rate_patch(source / "src" / "input" / "es_out.c", patched_es_out)
     generated_about_header(source, build / "vlc_about.h")
     (build / "revision.c").write_text(
         'const char psz_vlc_changeset[] = "3.0.23-windows-address-waits-replay-clock";\n', encoding="ascii"
@@ -455,6 +267,7 @@ def build_once(
     flags = [
         "-O2", "-DNDEBUG", "-DHAVE_CONFIG_H", "-fno-strict-aliasing", "-std=gnu11",
         "-fno-ident", "-fvisibility=hidden",
+        f"-ffile-prefix-map={source.as_posix()}={SOURCE_ROOT_NAME}",
         *("-I" + path.as_posix() for path in include_paths),
         "-include", (Path(__file__).resolve().parent.parent / "native" / "vlc-core" / "core-config.h").as_posix(),
     ]
@@ -474,17 +287,11 @@ def build_once(
 
     objects = build / "objects"
     objects.mkdir()
-    files = source_files(source)
-    patched_files = {"win32/thread.c": patched_source, "input/es_out.c": patched_es_out}
-    patched_files.update(apply_continuity_patch(source))
-    jobs = [(name, patched_files.get(name, source / "src" / name)) for name in files]
 
-    def compile_one(item: tuple[str, Path]) -> tuple[Path | None, str]:
-        name, source_file = item
+    def compile_one(name: str) -> tuple[Path | None, str]:
         output = objects / (name.replace("/", "_").replace(".", "_") + ".o")
-        argument = os.path.relpath(source_file, source).replace("\\", "/")
         result = subprocess.run(
-            [str(gcc), *flags, "-c", argument, "-o", os.path.relpath(output, source).replace("\\", "/")],
+            [str(gcc), *flags, "-c", "src/" + name, "-o", os.path.relpath(output, source).replace("\\", "/")],
             cwd=source,
             env=environment,
             text=True,
@@ -495,7 +302,7 @@ def build_once(
         return (output if result.returncode == 0 else None, f"{name}\n{result.stdout}" if result.returncode else "")
 
     with ThreadPoolExecutor(max_workers=6) as pool:
-        compiled = list(pool.map(compile_one, jobs))
+        compiled = list(pool.map(compile_one, source_files(source)))
     failures = [log for output, log in compiled if output is None]
     if failures:
         raise RuntimeError("VLC core compilation failed:\n" + "\n".join(failures)[:18000])
@@ -587,13 +394,18 @@ def main() -> int:
             Path(temporary),
         )
 
-    output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="vlc-core-3.0.23-") as temporary:
         workspace = Path(temporary)
-        source = extract_verified_source(archive, workspace / SOURCE_ROOT_NAME)
-        first = build_once(source, gcc, gcc.parent / "objdump.exe", contrib, reference_core, workspace / "first")
+
+        def clean_build(name: str) -> Path:
+            directory = workspace / name
+            source = extract_verified_source(archive, directory / SOURCE_ROOT_NAME)
+            apply_source_patches(source, manifest_path.parent, manifest)
+            return build_once(source, gcc, gcc.parent / "objdump.exe", contrib, reference_core, directory)
+
+        first = clean_build("first")
         first_hash = sha256(first)
-        second = build_once(source, gcc, gcc.parent / "objdump.exe", contrib, reference_core, workspace / "second")
+        second = clean_build("second")
         second_hash = sha256(second)
         if first_hash != second_hash:
             diagnostics = root / ".tmp" / "gpu-resource-2026-09-27" / "core-build-repro"
@@ -604,15 +416,13 @@ def main() -> int:
                 f"Independent clean builds differ: {first_hash} != {second_hash}; "
                 f"preserved both DLLs in {diagnostics}"
             )
-        temporary_output = output.with_name(output.name + ".tmp")
-        shutil.copyfile(second, temporary_output)
-        os.replace(temporary_output, output)
+        install_binary(second, output)
 
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    manifest["referenceVlcSha256"] = REFERENCE_LIBVLC_SHA256
-    manifest["referenceVlcCoreSha256"] = REFERENCE_CORE_SHA256
-    manifest["binarySha256"] = sha256(output)
-    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8", newline="\n")
+    if output == resolve(root, manifest["binary"]):
+        manifest["referenceVlcSha256"] = REFERENCE_LIBVLC_SHA256
+        manifest["referenceVlcCoreSha256"] = REFERENCE_CORE_SHA256
+        manifest["binarySha256"] = second_hash
+        manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8", newline="\n")
     print(f"Verified two independent VLC core builds: {first_hash}")
     print(f"Wrote {output} ({output.stat().st_size} bytes)")
     return 0

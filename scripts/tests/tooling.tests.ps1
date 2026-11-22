@@ -46,6 +46,17 @@ function Assert-Throws([scriptblock]$Action, [string]$Pattern) {
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('StreamStudio-tooling-tests-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $testRoot | Out-Null
 try {
+    [IO.File]::WriteAllBytes((Join-Path $testRoot '[payload].bin'), [Text.Encoding]::ASCII.GetBytes('abc'))
+    Push-Location -LiteralPath $testRoot
+    try {
+        Assert-True ((Get-FileSha256 '[payload].bin') -ceq
+            'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad') `
+            'SHA-256 must resolve literal paths from the current PowerShell location.'
+    } finally {
+        Pop-Location
+    }
+    Write-Host 'PASS tooling: file hashing resolves literal relative paths'
+
     $firstSearchDirectory = Join-Path $testRoot 'first search directory'
     $secondSearchDirectory = Join-Path $testRoot 'second'
     New-Item -ItemType Directory -Path $firstSearchDirectory, $secondSearchDirectory | Out-Null
@@ -389,6 +400,21 @@ try {
         New-Item -ItemType Directory -Path (Split-Path -Parent $path) -Force | Out-Null
         [IO.File]::WriteAllText($path, "stub $($entry.name)")
     }
+    $metadataPaths = @{
+        SetupPath = Get-ReleaseContractOutputPath $contract $releaseRepo 'bootstrapper'
+        ZipPath = Get-ReleaseContractOutputPath $contract $releaseRepo 'releaseZip'
+        SbomPath = Get-ReleaseContractOutputPath $contract $releaseRepo 'sbom'
+        UpdateManifestPath = Get-ReleaseContractOutputPath $contract $releaseRepo 'updateManifest'
+        UpdateSignaturePath = Get-ReleaseContractOutputPath $contract $releaseRepo 'updateSignature'
+    }
+    $metadataArtifacts = Get-ReleaseMetadataArtifacts $contract $metadataPaths
+    Assert-True (($metadataArtifacts.Keys -join ',') -ceq 'setup,zip,sbom,updateManifest,updateSignature') `
+        'Release metadata artifact fields changed.'
+    Assert-True ($metadataArtifacts.zip.name -ceq 'StreamlinkVlcStudio-release.zip' -and
+        $metadataArtifacts.zip.sha256 -ceq (Get-FileHash -LiteralPath $metadataPaths.ZipPath).Hash.ToLowerInvariant()) `
+        'Release metadata did not record the contract name and actual file hash.'
+    $metadataPaths.SetupPath = $metadataPaths.ZipPath
+    Assert-Throws { Get-ReleaseMetadataArtifacts $contract $metadataPaths | Out-Null } 'non-empty StreamlinkVlcStudio-Setup\.exe'
     Assert-Throws {
         New-VerifiedReleaseSet `
             $contract `

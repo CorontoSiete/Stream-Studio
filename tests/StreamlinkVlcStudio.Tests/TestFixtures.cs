@@ -1143,9 +1143,9 @@ public sealed class TopControlToggleTabState
     public PlaybackStatus Status { get; init; }
 }
 
-public sealed class HomeNavigationVisualState
+public sealed class HomeNavigationVisualState(bool isFollowedHomePageSelected)
 {
-    public bool IsFollowedHomePageSelected { get; init; }
+    public bool IsFollowedHomePageSelected { get; } = isFollowedHomePageSelected;
 }
 
 internal static class Assert
@@ -2171,7 +2171,6 @@ internal static class TestViewModels
             CreateParkingVideoSurface = () => new ParkingVideoSurface(),
             ConfigureChatPresentation = DockedChatBadgeCatalog.ConfigureShared,
             ApplyTheme = StreamlinkVlcStudio.App.Wpf.Themes.ThemeManager.ApplyTheme,
-            KeepHomeOnOpen = () => (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control,
             SettingsService = settingsService,
             StreamlinkService = streamlinkService,
             PlaybackFactory = playbackFactory,

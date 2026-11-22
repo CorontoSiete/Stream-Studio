@@ -13,7 +13,7 @@ namespace StreamlinkVlcStudio.Infrastructure.Viewers;
 
 public sealed class KickVodService : IKickVodService
 {
-    private static readonly HttpClient SharedHttpClient = HttpClientFactory.Create(TimeSpan.FromSeconds(20));
+    private static readonly HttpClient SharedHttpClient = HttpClientFactory.CreateForText(TimeSpan.FromSeconds(20));
     private static readonly TimeSpan CurlTimeout = TimeSpan.FromSeconds(15);
     private readonly IAppLogger logger;
     private readonly KickWebsiteJsonReader kickWebsiteJsonReader;

@@ -7,7 +7,7 @@ $nativeTestExitCode = Get-Variable -Name LASTEXITCODE -Scope Global -ErrorAction
 $nativeTestHadExitCode = $null -ne $nativeTestExitCode
 $nativeTestSavedExitCode = if ($nativeTestHadExitCode) { $nativeTestExitCode.Value } else { $null }
 try {
-    $hostExecutable = Join-Path ([Environment]::GetFolderPath('System')) 'WindowsPowerShell\v1.0\powershell.exe'
+    $hostExecutable = Join-Path ([Environment]::GetFolderPath('System')) 'WindowsPowerShell\v1.0\..\v1.0\powershell.exe'
     $output = @(Invoke-NativeTestCommand -FilePath $hostExecutable -FailureMessage 'Fixture failed' -Arguments @(
         '-NoProfile', '-NonInteractive', '-Command',
         "[Console]::Out.WriteLine('native output'); [Console]::Error.WriteLine('native diagnostic'); [Console]::Error.WriteLine(); exit 0"

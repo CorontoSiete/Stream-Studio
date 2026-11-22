@@ -5,6 +5,7 @@ using StreamlinkVlcStudio.Core.Logging;
 using StreamlinkVlcStudio.Core.Models;
 using StreamlinkVlcStudio.Core.Services;
 using StreamlinkVlcStudio.Core.Settings;
+using StreamlinkVlcStudio.Infrastructure.Threading;
 
 namespace StreamlinkVlcStudio.Workspace.ViewModels;
 
@@ -27,6 +28,7 @@ internal sealed class BrowseViewModel : HomeFeatureViewModel
         this.recordNavigation = recordNavigation;
         this.isBrowseHomeVisible = isBrowseHomeVisible;
         browseService = dependencies.BrowseService;
+        selectedBrowseLanguage = Settings.BrowseDirectoryLanguage;
         browseCategorySearchDebounceInterval = dependencies.BrowseCategorySearchDebounceInterval ?? DefaultBrowseCategorySearchDebounceInterval;
         ReturnToBrowseCategoriesCommand = new RelayCommand(ReturnToBrowseCategoriesPage, () => IsBrowseStreamsPageVisible);
         SelectTwitchBrowsePlatformCommand = new RelayCommand(() => SelectBrowsePlatform(PlatformKind.Twitch));
@@ -53,7 +55,6 @@ internal sealed class BrowseViewModel : HomeFeatureViewModel
     protected override Task WaitForOperationsAsync() => vodBrowseController.DrainAsync(Timeout.InfiniteTimeSpan);
     private static readonly TimeSpan DefaultBrowseCategorySearchDebounceInterval = TimeSpan.FromMilliseconds(450);
     private const int BrowseCategoryPageSize = 10;
-    private const int BrowseCategoryViewerCountBatchSize = 1;
     private const int BrowseCategoryViewerCountConcurrency = 4;
     private const int BrowseStreamPageSize = 50;
     private readonly IBrowseService? browseService;
@@ -63,8 +64,7 @@ internal sealed class BrowseViewModel : HomeFeatureViewModel
     private readonly PagedResultTracker browseCategoryPages = new();
     private readonly PagedResultTracker browseStreamPages = new();
     private string browseCategorySearchText = "";
-    private string selectedBrowseLanguage = "";
-    private string browseDirectoryLanguage = "";
+    private string selectedBrowseLanguage;
     private string browseStatus = "Browse Twitch or Kick categories.";
     private string browseCategoryStatus = "Browse Twitch or Kick categories.";
     private string browseCategoryNextCursor = "";
@@ -103,12 +103,8 @@ internal sealed class BrowseViewModel : HomeFeatureViewModel
         {
             if (disposed || !SetProperty(ref selectedBrowseLanguage, BrowseLanguages.Normalize(value))) return;
             if (SelectedBrowseCategory is { } category) RememberCategoryLanguage(category, selectedBrowseLanguage);
-            else browseDirectoryLanguage = selectedBrowseLanguage;
-            vodBrowseController.AdvanceBrowseStreamGeneration();
-            CancelActiveBrowseStreamSearch();
-            IsBrowseStreamsLoading = false;
-            ClearBrowseStreams(clearSelectedCategory: false);
-            HasBrowseStreamSearchCompleted = false;
+            else Settings.BrowseDirectoryLanguage = selectedBrowseLanguage;
+            ResetBrowseStreamSearch(clearSelectedCategory: false);
             if (IsBrowseStreamsPageVisible && SelectedBrowseCategory is not null)
                 _ = LoadBrowseStreamsAsync(reset: true);
         }
@@ -131,19 +127,7 @@ internal sealed class BrowseViewModel : HomeFeatureViewModel
         {
             if (SetProperty(ref browseCategorySearchText, value ?? ""))
             {
-                vodBrowseController.AdvanceBrowseCategoryGeneration();
-                vodBrowseController.AdvanceBrowseCategoryViewerCountGeneration();
-                vodBrowseController.AdvanceBrowseStreamGeneration();
-                CancelBrowseCategorySearchDebounce();
-                CancelActiveBrowseCategorySearch();
-                CancelActiveBrowseCategoryViewerCountLoad();
-                CancelActiveBrowseStreamSearch();
-                IsBrowseCategoriesLoading = false;
-                IsBrowseStreamsLoading = false;
-                SetBrowseStreamsPageSelected(false);
-                ClearBrowseCategories(clearStatus: false);
-                ClearBrowseStreams(clearSelectedCategory: true);
-                HasBrowseCategorySearchCompleted = false;
+                ResetBrowseDirectory();
                 OnPropertyChanged(nameof(HasBrowseCategorySearchText));
                 OnPropertyChanged(nameof(IsBrowseCategorySearchPlaceholderVisible));
                 RaiseBrowseCommandStates();
@@ -171,7 +155,6 @@ internal sealed class BrowseViewModel : HomeFeatureViewModel
             OnPropertyChanged();
             OnPropertyChanged(nameof(IsTwitchBrowsePlatformSelected));
             OnPropertyChanged(nameof(IsKickBrowsePlatformSelected));
-            OnPropertyChanged(nameof(BrowsePlatformText));
             OnPropertyChanged(nameof(BrowseCategoriesTitle));
         }
     }
@@ -179,8 +162,6 @@ internal sealed class BrowseViewModel : HomeFeatureViewModel
     public bool IsTwitchBrowsePlatformSelected => SelectedBrowsePlatform == PlatformKind.Twitch;
 
     public bool IsKickBrowsePlatformSelected => SelectedBrowsePlatform == PlatformKind.Kick;
-
-    public string BrowsePlatformText => SelectedBrowsePlatform.ToString();
 
     public string BrowseStatus
     {
@@ -199,12 +180,11 @@ internal sealed class BrowseViewModel : HomeFeatureViewModel
             }
 
             selectedBrowseCategory = value;
-            var language = value is null ? browseDirectoryLanguage :
-                Settings.BrowseCategoryLanguages.GetValueOrDefault(CategoryLanguagePreferences.Key(value.Platform, value.Id), browseDirectoryLanguage);
+            var language = value is null ? Settings.BrowseDirectoryLanguage :
+                Settings.BrowseCategoryLanguages.GetValueOrDefault(CategoryLanguagePreferences.Key(value.Platform, value.Id), Settings.BrowseDirectoryLanguage);
             SetProperty(ref selectedBrowseLanguage, language, nameof(SelectedBrowseLanguage));
             if (value is not null) RememberCategoryLanguage(value, language);
             OnPropertyChanged();
-            OnPropertyChanged(nameof(HasSelectedBrowseCategory));
             OnPropertyChanged(nameof(SelectedBrowseCategoryName));
             OnPropertyChanged(nameof(BrowseStreamsTitle));
             OnPropertyChanged(nameof(IsBrowseStreamsEmptyVisible));
@@ -214,7 +194,7 @@ internal sealed class BrowseViewModel : HomeFeatureViewModel
         }
     }
 
-    public bool HasSelectedBrowseCategory => SelectedBrowseCategory is not null;
+    private bool HasSelectedBrowseCategory => SelectedBrowseCategory is not null;
 
     public string SelectedBrowseCategoryName => SelectedBrowseCategory?.Name ?? "";
 
@@ -306,9 +286,9 @@ internal sealed class BrowseViewModel : HomeFeatureViewModel
 
     public string BrowseCategoriesTitle => BrowseCategories.Count switch
     {
-        0 => $"{BrowsePlatformText} categories",
-        1 => $"1 {BrowsePlatformText} category",
-        _ => $"{BrowseCategories.Count} {BrowsePlatformText} categories"
+        0 => $"{SelectedBrowsePlatform} categories",
+        1 => $"1 {SelectedBrowsePlatform} category",
+        _ => $"{BrowseCategories.Count} {SelectedBrowsePlatform} categories"
     };
 
     public string BrowseStreamsTitle
@@ -368,23 +348,15 @@ internal sealed class BrowseViewModel : HomeFeatureViewModel
         }
     }
 
-    internal void ShowBrowseCategoriesPage(bool clearSelection)
+    private void ShowBrowseCategoriesPage()
     {
         SetBrowseStreamsPageSelected(false);
-        if (!clearSelection)
-        {
-            return;
-        }
-
-        vodBrowseController.AdvanceBrowseStreamGeneration();
-        CancelActiveBrowseStreamSearch();
-        IsBrowseStreamsLoading = false;
-        ClearBrowseStreams(clearSelectedCategory: true);
+        ResetBrowseStreamSearch(clearSelectedCategory: true);
     }
 
     internal void ReturnToBrowseCategoriesPage()
     {
-        ShowBrowseCategoriesPage(clearSelection: true);
+        ShowBrowseCategoriesPage();
         BrowseStatus = browseCategoryStatus;
         StatusMessage = BrowseStatus;
         StartBrowseCategoryViewerCountLoad(SelectedBrowsePlatform, BrowseCategorySearchText.Trim());
@@ -434,18 +406,8 @@ internal sealed class BrowseViewModel : HomeFeatureViewModel
             return;
         }
 
-        vodBrowseController.AdvanceBrowseCategoryGeneration();
-        vodBrowseController.AdvanceBrowseCategoryViewerCountGeneration();
-        vodBrowseController.AdvanceBrowseStreamGeneration();
-        CancelBrowseCategorySearchDebounce();
-        CancelActiveBrowseCategorySearch();
-        CancelActiveBrowseCategoryViewerCountLoad();
-        CancelActiveBrowseStreamSearch();
+        ResetBrowseDirectory();
         SelectedBrowsePlatform = platform;
-        SetBrowseStreamsPageSelected(false);
-        ClearBrowseCategories(clearStatus: false);
-        ClearBrowseStreams(clearSelectedCategory: true);
-        HasBrowseCategorySearchCompleted = false;
         browseCategoryStatus = $"Loading {platform} categories";
         BrowseStatus = $"Loading {platform} categories";
         StatusMessage = BrowseStatus;
@@ -511,9 +473,8 @@ internal sealed class BrowseViewModel : HomeFeatureViewModel
         {
             vodBrowseController.AdvanceBrowseCategoryViewerCountGeneration();
             CancelActiveBrowseCategoryViewerCountLoad();
-            SetBrowseStreamsPageSelected(false);
             // Preserve cards and pagination during refresh; navigation clears old results.
-            ClearBrowseStreams(clearSelectedCategory: true);
+            ShowBrowseCategoriesPage();
             HasBrowseCategorySearchCompleted = false;
         }
 
@@ -586,7 +547,7 @@ internal sealed class BrowseViewModel : HomeFeatureViewModel
             }
             else if (previewDisplayed)
             {
-                ClearBrowseCategories(clearStatus: false);
+                ClearBrowseCategories();
             }
 
             HasBrowseCategorySearchCompleted = true;
@@ -608,7 +569,7 @@ internal sealed class BrowseViewModel : HomeFeatureViewModel
                 return;
             }
 
-            if (previewDisplayed) ClearBrowseCategories(clearStatus: false);
+            if (previewDisplayed) ClearBrowseCategories();
             HasBrowseCategorySearchCompleted = true;
             browseCategoryStatus = ex.Message;
             if (!IsStreamsPageSelected)
@@ -705,33 +666,13 @@ internal sealed class BrowseViewModel : HomeFeatureViewModel
         CancellationTokenSource cancellation)
     {
         var failureReported = 0;
-        using var throttle = new SemaphoreSlim(BrowseCategoryViewerCountConcurrency);
+        using var throttle = new AsyncOperationGate(BrowseCategoryViewerCountConcurrency);
 
         try
         {
-            var batches = new List<IReadOnlyList<string>>();
-            var remainingCategoryIds = categoryIds;
-            if (ShouldPrioritizeFirstBrowseCategoryViewerCount(platform, query) &&
-                remainingCategoryIds.Count > 1)
-            {
-                batches.Add([remainingCategoryIds[0]]);
-                remainingCategoryIds = remainingCategoryIds.Skip(1).ToArray();
-            }
-
-            batches.AddRange(remainingCategoryIds
-                .Chunk(BrowseCategoryViewerCountBatchSize)
-                .Select(batch => (IReadOnlyList<string>)batch.ToArray()));
-
-            var tasks = batches
-                .Select(categoryIdBatch => LoadBrowseCategoryViewerCountBatchAsync(
-                    platform,
-                    query,
-                    viewerCountGeneration,
-                    categoryIdBatch,
-                    throttle,
-                    cancellation,
-                    () => Interlocked.CompareExchange(ref failureReported, 1, 0) == 0))
-                .ToArray();
+            var tasks = categoryIds.Select(categoryId => LoadBrowseCategoryViewerCountAsync(
+                platform, query, viewerCountGeneration, categoryId, throttle, cancellation,
+                () => Interlocked.CompareExchange(ref failureReported, 1, 0) == 0));
             await Task.WhenAll(tasks);
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
@@ -763,30 +704,20 @@ internal sealed class BrowseViewModel : HomeFeatureViewModel
         }
     }
 
-    internal static bool ShouldPrioritizeFirstBrowseCategoryViewerCount(PlatformKind platform, string query)
-    {
-        return platform == PlatformKind.Twitch && string.IsNullOrWhiteSpace(query);
-    }
-
-    internal async Task LoadBrowseCategoryViewerCountBatchAsync(
+    private async Task LoadBrowseCategoryViewerCountAsync(
         PlatformKind platform,
         string query,
         int viewerCountGeneration,
-        IReadOnlyList<string> categoryIds,
-        SemaphoreSlim throttle,
+        string categoryId,
+        AsyncOperationGate throttle,
         CancellationTokenSource cancellation,
         Func<bool> tryReportFailure)
     {
-        await throttle.WaitAsync(cancellation.Token);
         try
         {
-            if (cancellation.IsCancellationRequested)
-            {
-                return;
-            }
-
+            using var slot = await throttle.EnterAsync(cancellation.Token);
             var result = await browseService!.GetCategoryViewerCountsAsync(
-                new BrowseCategoryViewerCountRequest(platform, categoryIds),
+                new BrowseCategoryViewerCountRequest(platform, [categoryId]),
                 Settings,
                 cancellation.Token);
             if (!IsCurrentBrowseCategoryViewerCountLoad(viewerCountGeneration, platform, query))
@@ -807,9 +738,8 @@ internal sealed class BrowseViewModel : HomeFeatureViewModel
                 return;
             }
 
-            var requestedCategoryIds = categoryIds.ToHashSet(StringComparer.Ordinal);
             var viewerCounts = result.Items
-                .Where(count => requestedCategoryIds.Contains(count.CategoryId))
+                .Where(count => count.CategoryId == categoryId)
                 .ToArray();
             if (viewerCounts.Length > 0)
             {
@@ -839,11 +769,7 @@ internal sealed class BrowseViewModel : HomeFeatureViewModel
                 cancellation,
                 tryReportFailure,
                 cancelRemaining: false);
-            logger.Write(AppLogLevel.Error, "Browse", $"{platform} category viewer count failed for {string.Join(", ", categoryIds)}.", ex);
-        }
-        finally
-        {
-            throttle.Release();
+            logger.Write(AppLogLevel.Error, "Browse", $"{platform} category viewer count failed for {categoryId}.", ex);
         }
     }
 
@@ -932,12 +858,9 @@ internal sealed class BrowseViewModel : HomeFeatureViewModel
             IsBrowseCategoriesLoading = false;
         }
         CancelActiveBrowseCategoryViewerCountLoad();
-        vodBrowseController.AdvanceBrowseStreamGeneration();
-        CancelActiveBrowseStreamSearch();
         SelectedBrowseCategory = category;
         SetBrowseStreamsPageSelected(true);
-        ClearBrowseStreams(clearSelectedCategory: false);
-        HasBrowseStreamSearchCompleted = false;
+        ResetBrowseStreamSearch(clearSelectedCategory: false);
         BrowseStatus = $"Loading live streams in {category.Name}";
         StatusMessage = BrowseStatus;
         recordNavigation();
@@ -1086,19 +1009,30 @@ internal sealed class BrowseViewModel : HomeFeatureViewModel
             string.Equals(selectedCategory.Id, categoryId, StringComparison.OrdinalIgnoreCase);
     }
 
-    internal void ClearBrowseCategories(bool clearStatus)
+    private void ResetBrowseDirectory()
+    {
+        vodBrowseController.AdvanceBrowseCategoryGeneration();
+        vodBrowseController.AdvanceBrowseCategoryViewerCountGeneration();
+        CancelBrowseCategorySearchDebounce();
+        CancelActiveBrowseCategorySearch();
+        CancelActiveBrowseCategoryViewerCountLoad();
+        IsBrowseCategoriesLoading = false;
+        ShowBrowseCategoriesPage();
+        ClearBrowseCategories();
+        HasBrowseCategorySearchCompleted = false;
+    }
+
+    private void ClearBrowseCategories()
     {
         BrowseCategories.Clear();
         BrowseCategoryNextCursor = "";
-        if (clearStatus)
-        {
-            BrowseStatus = "Browse Twitch or Kick categories.";
-            browseCategoryStatus = BrowseStatus;
-        }
     }
 
-    internal void ClearBrowseStreams(bool clearSelectedCategory)
+    private void ResetBrowseStreamSearch(bool clearSelectedCategory)
     {
+        vodBrowseController.AdvanceBrowseStreamGeneration();
+        CancelActiveBrowseStreamSearch();
+        IsBrowseStreamsLoading = false;
         BrowseStreams.Clear();
         BrowseStreamNextCursor = "";
         HasBrowseStreamSearchCompleted = false;
@@ -1118,16 +1052,11 @@ internal sealed class BrowseViewModel : HomeFeatureViewModel
         var query = BrowseCategorySearchText.Trim();
         var platform = SelectedBrowsePlatform;
         var searchGeneration = vodBrowseController.CurrentBrowseCategoryGeneration;
-        if (browseCategorySearchDebounceInterval <= TimeSpan.Zero)
-        {
-            dispatch(() => _ = RunAutomaticBrowseCategorySearchAsync(query, platform, searchGeneration));
-            return;
-        }
-
         vodBrowseController.ScheduleBrowseCategory(
             browseCategorySearchDebounceInterval,
-            () => dispatch(() => _ = RunAutomaticBrowseCategorySearchAsync(query, platform, searchGeneration)),
-            ReportDebouncedCallbackFailure);
+            () => _ = RunAutomaticBrowseCategorySearchAsync(query, platform, searchGeneration),
+            ReportDebouncedCallbackFailure,
+            dispatch);
     }
 
     internal async Task RunAutomaticBrowseCategorySearchAsync(

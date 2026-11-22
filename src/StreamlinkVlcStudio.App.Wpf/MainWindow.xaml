@@ -4,6 +4,7 @@
         xmlns:controls="clr-namespace:StreamlinkVlcStudio.App.Wpf.Controls"
         xmlns:converters="clr-namespace:StreamlinkVlcStudio.App.Wpf.Converters"
         xmlns:models="clr-namespace:StreamlinkVlcStudio.Core.Models;assembly=StreamlinkVlcStudio.Core"
+        xmlns:primitives="clr-namespace:System.Windows.Controls.Primitives;assembly=PresentationFramework"
         xmlns:settings="clr-namespace:StreamlinkVlcStudio.Core.Settings;assembly=StreamlinkVlcStudio.Core"
         xmlns:vm="clr-namespace:StreamlinkVlcStudio.Workspace.ViewModels;assembly=StreamlinkVlcStudio.Workspace"
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
@@ -589,45 +590,12 @@
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
-        </Style>
-
-        <Style x:Key="FollowedHomeSegmentButton" TargetType="Button" BasedOn="{StaticResource HomeSegmentButton}">
             <Style.Triggers>
-                <DataTrigger Binding="{Binding IsFollowedHomePageSelected}" Value="True">
+                <Trigger Property="primitives:Selector.IsSelected" Value="True">
                     <Setter Property="Background" Value="{DynamicResource StudioAccentPressedBrush}" />
                     <Setter Property="BorderBrush" Value="{DynamicResource StudioAccentBrush}" />
                     <Setter Property="Foreground" Value="{DynamicResource StudioAccentTextBrush}" />
-                </DataTrigger>
-            </Style.Triggers>
-        </Style>
-
-        <Style x:Key="TwitchVodsHomeSegmentButton" TargetType="Button" BasedOn="{StaticResource HomeSegmentButton}">
-            <Style.Triggers>
-                <DataTrigger Binding="{Binding IsTwitchVodsHomePageSelected}" Value="True">
-                    <Setter Property="Background" Value="{DynamicResource StudioAccentPressedBrush}" />
-                    <Setter Property="BorderBrush" Value="{DynamicResource StudioAccentBrush}" />
-                    <Setter Property="Foreground" Value="{DynamicResource StudioAccentTextBrush}" />
-                </DataTrigger>
-            </Style.Triggers>
-        </Style>
-
-        <Style x:Key="RecentHomeSegmentButton" TargetType="Button" BasedOn="{StaticResource HomeSegmentButton}">
-            <Style.Triggers>
-                <DataTrigger Binding="{Binding IsRecentHomePageSelected}" Value="True">
-                    <Setter Property="Background" Value="{DynamicResource StudioAccentPressedBrush}" />
-                    <Setter Property="BorderBrush" Value="{DynamicResource StudioAccentBrush}" />
-                    <Setter Property="Foreground" Value="{DynamicResource StudioAccentTextBrush}" />
-                </DataTrigger>
-            </Style.Triggers>
-        </Style>
-
-        <Style x:Key="BrowseHomeSegmentButton" TargetType="Button" BasedOn="{StaticResource HomeSegmentButton}">
-            <Style.Triggers>
-                <DataTrigger Binding="{Binding IsBrowseHomePageSelected}" Value="True">
-                    <Setter Property="Background" Value="{DynamicResource StudioAccentPressedBrush}" />
-                    <Setter Property="BorderBrush" Value="{DynamicResource StudioAccentBrush}" />
-                    <Setter Property="Foreground" Value="{DynamicResource StudioAccentTextBrush}" />
-                </DataTrigger>
+                </Trigger>
             </Style.Triggers>
         </Style>
 
@@ -635,45 +603,10 @@
             <Setter Property="Padding" Value="11,6" />
             <Setter Property="Margin" Value="0,0,8,0" />
             <Setter Property="FontSize" Value="12" />
-        </Style>
-
-        <Style x:Key="PastBroadcastsVodFilterButton" TargetType="Button" BasedOn="{StaticResource VodFilterButton}">
             <Style.Triggers>
-                <DataTrigger Binding="{Binding IsPastBroadcastsVodFilterSelected}" Value="True">
-                    <Setter Property="Background" Value="{DynamicResource StudioAccentPressedBrush}" />
-                    <Setter Property="BorderBrush" Value="{DynamicResource StudioAccentBrush}" />
+                <Trigger Property="primitives:Selector.IsSelected" Value="True">
                     <Setter Property="Foreground" Value="{DynamicResource StudioTextBrush}" />
-                </DataTrigger>
-            </Style.Triggers>
-        </Style>
-
-        <Style x:Key="HighlightsVodFilterButton" TargetType="Button" BasedOn="{StaticResource VodFilterButton}">
-            <Style.Triggers>
-                <DataTrigger Binding="{Binding IsHighlightsVodFilterSelected}" Value="True">
-                    <Setter Property="Background" Value="{DynamicResource StudioAccentPressedBrush}" />
-                    <Setter Property="BorderBrush" Value="{DynamicResource StudioAccentBrush}" />
-                    <Setter Property="Foreground" Value="{DynamicResource StudioTextBrush}" />
-                </DataTrigger>
-            </Style.Triggers>
-        </Style>
-
-        <Style x:Key="UploadsVodFilterButton" TargetType="Button" BasedOn="{StaticResource VodFilterButton}">
-            <Style.Triggers>
-                <DataTrigger Binding="{Binding IsUploadsVodFilterSelected}" Value="True">
-                    <Setter Property="Background" Value="{DynamicResource StudioAccentPressedBrush}" />
-                    <Setter Property="BorderBrush" Value="{DynamicResource StudioAccentBrush}" />
-                    <Setter Property="Foreground" Value="{DynamicResource StudioTextBrush}" />
-                </DataTrigger>
-            </Style.Triggers>
-        </Style>
-
-        <Style x:Key="AllVodFilterButton" TargetType="Button" BasedOn="{StaticResource VodFilterButton}">
-            <Style.Triggers>
-                <DataTrigger Binding="{Binding IsAllVodFilterSelected}" Value="True">
-                    <Setter Property="Background" Value="{DynamicResource StudioAccentPressedBrush}" />
-                    <Setter Property="BorderBrush" Value="{DynamicResource StudioAccentBrush}" />
-                    <Setter Property="Foreground" Value="{DynamicResource StudioTextBrush}" />
-                </DataTrigger>
+                </Trigger>
             </Style.Triggers>
         </Style>
 
@@ -951,7 +884,8 @@
                             <Grid>
                                 <Path x:Name="ProfileAvatarPlaceholder" Style="{StaticResource StudioLineIcon}" Data="{StaticResource StudioIconAccount}"
                                       Width="14" Height="14" HorizontalAlignment="Center" Stroke="{DynamicResource StudioTextMutedBrush}" Visibility="Collapsed" />
-                                <controls:AnimatedEmoteImage x:Name="ProfileAvatarImage" ImageUrl="{Binding ProfileImageUrl}" MaxImageBytes="8388608" Stretch="UniformToFill" />
+                                <controls:AnimatedEmoteImage x:Name="ProfileAvatarImage" CacheHomeArtwork="True"
+                                    ImageUrl="{Binding ProfileImageUrl}" MaxImageBytes="8388608" Stretch="UniformToFill" />
                             </Grid>
                         </controls:RoundedClipBorder>
                         <StackPanel Grid.Column="1">
@@ -1001,7 +935,7 @@
                                         </LinearGradientBrush>
                                     </Border.Background>
                                 </Border>
-                                <controls:AnimatedEmoteImage x:Name="OfflineBannerImage" ImageUrl="{Binding BannerImageUrl}"
+                                <controls:AnimatedEmoteImage x:Name="OfflineBannerImage" CacheHomeArtwork="True" ImageUrl="{Binding BannerImageUrl}"
                                     Stretch="UniformToFill" DecodePixelWidth="640"
                                     IsRefreshRunning="{Binding DataContext.IsFollowedChannelsRefreshing, RelativeSource={RelativeSource AncestorType=Window}}" />
                                 <Border Background="#28000000" />
@@ -1022,7 +956,8 @@
                                 <Grid>
                                     <TextBlock x:Name="ProfileAvatarPlaceholder" Text="&#xE77B;" FontFamily="Segoe MDL2 Assets" FontSize="22" Visibility="Collapsed"
                                                Foreground="{DynamicResource StudioTextDimBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
-                                    <controls:AnimatedEmoteImage x:Name="ProfileAvatarImage" ImageUrl="{Binding ProfileImageUrl}" Stretch="UniformToFill" />
+                                    <controls:AnimatedEmoteImage x:Name="ProfileAvatarImage" CacheHomeArtwork="True"
+                                        ImageUrl="{Binding ProfileImageUrl}" Stretch="UniformToFill" />
                                 </Grid>
                             </controls:RoundedClipBorder>
                             <StackPanel Grid.Column="1" Margin="10,0,8,0" VerticalAlignment="Center">
@@ -2829,16 +2764,20 @@
                                     <WrapPanel Orientation="Horizontal"
                                                 Margin="0,0,0,16"
                                                 Visibility="{Binding IsTwitchVodFilterVisible, Converter={StaticResource BoolToVisibility}}">
-                                        <Button Style="{StaticResource PastBroadcastsVodFilterButton}"
+                                        <Button Style="{StaticResource VodFilterButton}"
+                                                primitives:Selector.IsSelected="{Binding IsPastBroadcastsVodFilterSelected, Mode=OneWay}"
                                                 Content="Past broadcasts"
                                                 Command="{Binding ShowPastBroadcastsVodFilterCommand}" />
-                                        <Button Style="{StaticResource HighlightsVodFilterButton}"
+                                        <Button Style="{StaticResource VodFilterButton}"
+                                                primitives:Selector.IsSelected="{Binding IsHighlightsVodFilterSelected, Mode=OneWay}"
                                                 Content="Highlights"
                                                 Command="{Binding ShowHighlightsVodFilterCommand}" />
-                                        <Button Style="{StaticResource UploadsVodFilterButton}"
+                                        <Button Style="{StaticResource VodFilterButton}"
+                                                primitives:Selector.IsSelected="{Binding IsUploadsVodFilterSelected, Mode=OneWay}"
                                                 Content="Uploads"
                                                 Command="{Binding ShowUploadsVodFilterCommand}" />
-                                        <Button Style="{StaticResource AllVodFilterButton}"
+                                        <Button Style="{StaticResource VodFilterButton}"
+                                                primitives:Selector.IsSelected="{Binding IsAllVodFilterSelected, Mode=OneWay}"
                                                 Content="All"
                                                 Command="{Binding ShowAllVodFilterCommand}" />
                                     </WrapPanel>
@@ -3872,13 +3811,16 @@
                             </Style.Triggers>
                         </Style>
                     </ToolBar.Style>
-                    <Button Style="{StaticResource FollowedHomeSegmentButton}"
+                    <Button x:Name="FollowingHomeButton" Style="{StaticResource HomeSegmentButton}"
+                            primitives:Selector.IsSelected="{Binding IsFollowedHomePageSelected, Mode=OneWay}"
                             Content="Following"
                             Command="{Binding ShowFollowedHomePageCommand}" />
-                    <Button Style="{StaticResource BrowseHomeSegmentButton}"
+                    <Button Style="{StaticResource HomeSegmentButton}"
+                            primitives:Selector.IsSelected="{Binding IsBrowseHomePageSelected, Mode=OneWay}"
                             Content="Discover"
                             Command="{Binding ShowBrowseHomePageCommand}" />
-                    <Button Style="{StaticResource TwitchVodsHomeSegmentButton}"
+                    <Button Style="{StaticResource HomeSegmentButton}"
+                            primitives:Selector.IsSelected="{Binding IsTwitchVodsHomePageSelected, Mode=OneWay}"
                             Content="VODs"
                             AutomationProperties.Name="Past broadcasts"
                             Command="{Binding ShowTwitchVodsHomePageCommand}" />
@@ -3895,7 +3837,8 @@
                             </Style>
                         </Button.Style>
                     </Button>
-                    <Button Style="{StaticResource RecentHomeSegmentButton}"
+                    <Button Style="{StaticResource HomeSegmentButton}"
+                            primitives:Selector.IsSelected="{Binding IsRecentHomePageSelected, Mode=OneWay}"
                             Content="Recent"
                             AutomationProperties.Name="Recently watched"
                             Command="{Binding ShowRecentHomePageCommand}" />

@@ -315,7 +315,7 @@ internal static partial class ApplicationTestCatalog
     {
         private readonly FakePlaybackEngineFactory playback;
         private readonly FakePlaybackEngineFactory otherPlayback;
-        private readonly SkipHotkeyPresentationSource source;
+        private readonly SyntheticKeyboardInput source;
 
         internal SkipHotkeyFixture(bool live = false, Task? seekCompletion = null, ISettingsService? settingsService = null,
             Task? pauseCompletion = null)
@@ -352,7 +352,7 @@ internal static partial class ApplicationTestCatalog
             Window = new MainWindow { DataContext = Main };
             RemoveMainWindowAutomaticStartup(Window);
             SetMainWindowViewModel(Window, Main);
-            source = new SkipHotkeyPresentationSource { RootVisual = Window };
+            source = new SyntheticKeyboardInput(Window);
             Flush();
         }
 
@@ -381,8 +381,7 @@ internal static partial class ApplicationTestCatalog
             await First.SeekReplayAsync(TimeSpan.FromSeconds(seconds));
         }
 
-        internal KeyEventArgs KeyEvent(Key key) => new(Keyboard.PrimaryDevice, source, Environment.TickCount, key)
-        { RoutedEvent = Keyboard.PreviewKeyDownEvent };
+        internal KeyEventArgs KeyEvent(Key key) => source.CreateEvent(key);
 
         internal KeyEventArgs Press(Key key)
         {
@@ -422,12 +421,5 @@ internal static partial class ApplicationTestCatalog
             Window.Close();
             await Main.DisposeAsync();
         }
-    }
-
-    private sealed class SkipHotkeyPresentationSource : PresentationSource
-    {
-        public override Visual RootVisual { get; set; } = null!;
-        public override bool IsDisposed => false;
-        protected override CompositionTarget GetCompositionTargetCore() => null!;
     }
 }

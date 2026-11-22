@@ -95,8 +95,22 @@ function Get-ArtifactRecord([string]$Path, [string]$ExpectedName) {
     [ordered]@{
         name = $file.Name
         length = $file.Length
-        sha256 = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+        sha256 = Get-FileSha256 $file.FullName
     }
+}
+
+function Get-ReleaseMetadataArtifacts($Contract, [Collections.IDictionary]$Paths) {
+    $artifacts = [ordered]@{}
+    foreach ($entry in @(
+            @{ Field = 'setup'; Output = 'bootstrapper'; Parameter = 'SetupPath' },
+            @{ Field = 'zip'; Output = 'releaseZip'; Parameter = 'ZipPath' },
+            @{ Field = 'sbom'; Output = 'sbom'; Parameter = 'SbomPath' },
+            @{ Field = 'updateManifest'; Output = 'updateManifest'; Parameter = 'UpdateManifestPath' },
+            @{ Field = 'updateSignature'; Output = 'updateSignature'; Parameter = 'UpdateSignaturePath' })) {
+        $name = [IO.Path]::GetFileName($Contract.outputs.($entry.Output))
+        $artifacts[$entry.Field] = Get-ArtifactRecord $Paths[$entry.Parameter] $name
+    }
+    $artifacts
 }
 
 function Get-ReleasePublicKeyId {
@@ -413,7 +427,7 @@ function Assert-ReleaseChecksums {
         }
         $asset = @($covered | Where-Object { $_.Entry.name -ceq $Matches.name })
         if ($asset.Count -ne 1 -or
-            (Get-FileHash -LiteralPath $asset[0].File.FullName -Algorithm SHA256).Hash.ToLowerInvariant() -cne $Matches.hash) {
+            (Get-FileSha256 $asset[0].File.FullName) -cne $Matches.hash) {
             throw "Release checksum mismatch: $($Matches.name)"
         }
     }
@@ -461,7 +475,7 @@ function New-VerifiedReleaseSet {
             $target = Join-Path $stage ([string]$entry.name)
             Copy-Item -LiteralPath $source -Destination $target
             $checksumLines.Add(('{0} *{1}' -f
-                (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash.ToLowerInvariant(),
+                (Get-FileSha256 $target),
                 [string]$entry.name))
         }
 

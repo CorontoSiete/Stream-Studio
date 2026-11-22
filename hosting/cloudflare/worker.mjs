@@ -7,6 +7,8 @@ export const contract = Object.freeze({
   scopes: ['user:read', 'channel:read', 'chat:write'],
 });
 const allowedFields = new Set(['client_id', 'grant_type', 'code', 'code_verifier', 'redirect_uri', 'refresh_token']);
+const maxRequestBytes = 16_384;
+const maxResponseBytes = 65_536;
 const headers = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Pragma': 'no-cache', 'X-Content-Type-Options': 'nosniff' };
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers });
 const error = (name, status) => json({ error: name }, status);
@@ -27,6 +29,8 @@ async function checkRateLimit(limiter, key, signal) {
   }
 }
 
+class BodyTooLargeError extends Error {}
+
 async function boundedText(body, limit, signal) {
   if (!body) return '';
   const reader = body.getReader();
@@ -42,7 +46,7 @@ async function boundedText(body, limit, signal) {
       signal.throwIfAborted();
       if (done) break;
       size += value.byteLength;
-      if (size > limit) throw new RangeError('Body too large');
+      if (size > limit) throw new BodyTooLargeError('Body too large');
       text += decoder.decode(value, { stream: true });
     }
     return text + decoder.decode();
@@ -56,8 +60,9 @@ async function boundedText(body, limit, signal) {
 }
 
 function tokenForm(body) {
-  // URLSearchParams tolerates malformed escapes, so authenticate only strict form data.
-  if (/%(?![0-9a-f]{2})/i.test(body)) return null;
+  // URLSearchParams replaces malformed percent-encoded UTF-8 with replacement characters.
+  // Validate the encoding before interpreting the form fields.
+  decodeURIComponent(body);
   const form = new URLSearchParams(body);
   const seen = new Set();
   for (const [name, value] of form) {
@@ -108,10 +113,13 @@ export async function handle(request, env, upstream = fetch, timeoutMs = 20_000)
     if (!limit.success) return error('rate_limited', 429);
     if (request.headers.get('Content-Type')?.split(';')[0].trim().toLowerCase() !== 'application/x-www-form-urlencoded')
       return error('invalid_request', 415);
-    if (Number(request.headers.get('Content-Length') ?? '0') > 16_384) return error('invalid_request', 413);
+    if (Number(request.headers.get('Content-Length') ?? '0') > maxRequestBytes) return error('invalid_request', 413);
     let form;
-    try { form = tokenForm(await boundedText(request.body, 16_384, controller.signal)); }
-    catch { return error('invalid_request', controller.signal.aborted ? 408 : 400); }
+    try { form = tokenForm(await boundedText(request.body, maxRequestBytes, controller.signal)); }
+    catch (cause) {
+      if (controller.signal.aborted) return error('invalid_request', 408);
+      return error('invalid_request', cause instanceof BodyTooLargeError ? 413 : 400);
+    }
     if (!form) return error('invalid_request', 400);
 
     form.set('client_secret', env.KICK_CLIENT_SECRET);
@@ -123,7 +131,7 @@ export async function handle(request, env, upstream = fetch, timeoutMs = 20_000)
       void response.body?.cancel().catch(() => {});
       return error('authorization_failed', [400, 401].includes(response.status) ? 400 : 502);
     }
-    const result = readToken(JSON.parse(await boundedText(response.body, 65_536, controller.signal)));
+    const result = readToken(JSON.parse(await boundedText(response.body, maxResponseBytes, controller.signal)));
     return result ? json(result) : error('invalid_provider_response', 502);
   } catch {
     return error('connection_service_unavailable', 502);

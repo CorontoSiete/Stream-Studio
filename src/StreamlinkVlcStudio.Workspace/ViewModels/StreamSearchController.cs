@@ -34,9 +34,10 @@ internal sealed class StreamSearchController : IDisposable
     public bool Schedule(
         TimeSpan delay,
         Action callback,
-        Action<Exception>? callbackErrorHandler = null)
+        Action<Exception> callbackErrorHandler,
+        Action<Action> dispatch)
     {
-        return coordinator.Schedule(delay, callback, callbackErrorHandler);
+        return coordinator.Schedule(delay, callback, callbackErrorHandler, dispatch);
     }
 
     public void CancelScheduled()

@@ -125,7 +125,7 @@ const server = http.createServer(async (request, response) => {
     const input = JSON.parse(raw || '{}');
     const action = url.pathname.slice(5);
     response.setHeader('Content-Type', 'application/json');
-    if (loadingMode) {
+    if (loadingMode || (discoveryLanguageMode && action === 'categories')) {
       loadingFixture.requests.push(action);
       if (loadingFixture.hold.has(action)) {
         response.once('close', () => { if (!response.writableEnded) loadingFixture.canceled++; });
@@ -352,7 +352,9 @@ async function main() {
       return;
     }
     if (discoveryLanguageMode) {
-      await require('./helpers/web-discovery-language-browser.cjs')({ cdp, evaluate, wait, capture, viewport, requests: discoveryRequests });
+      await require('./helpers/web-discovery-language-browser.cjs')({
+        cdp, evaluate, wait, capture, viewport, requests: discoveryRequests, loading: loadingFixture
+      });
       return;
     }
     if (mobileControlsMode) {

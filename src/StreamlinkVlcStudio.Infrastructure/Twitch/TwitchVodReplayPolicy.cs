@@ -27,6 +27,7 @@ internal static class TwitchVodReplayPolicy
         var segments = 0;
         var ended = false;
         var targetDuration = 0;
+        long? sequence = null;
         decimal maximumDuration = 0;
         foreach (var line in lines)
         {
@@ -37,9 +38,9 @@ internal static class TwitchVodReplayPolicy
                 if (targetDuration != 0 || !int.TryParse(line[22..], NumberStyles.None, CultureInfo.InvariantCulture,
                         out targetDuration) || targetDuration is <= 0 or > 30) return TimeSpan.Zero;
             }
-            else if (line.StartsWith("#EXT-X-MEDIA-SEQUENCE:", StringComparison.Ordinal))
+            else if (HlsPlaylistPolicy.TryGetTagValue(line, HlsPlaylistPolicy.MediaSequenceTag, out var sequenceValue))
             {
-                if (!long.TryParse(line[22..], NumberStyles.None, CultureInfo.InvariantCulture, out _)) return TimeSpan.Zero;
+                if (!HlsPlaylistPolicy.TryReadSequence(sequenceValue, segments > 0, ref sequence)) return TimeSpan.Zero;
             }
             else if (line.StartsWith("#EXTINF:", StringComparison.Ordinal))
             {

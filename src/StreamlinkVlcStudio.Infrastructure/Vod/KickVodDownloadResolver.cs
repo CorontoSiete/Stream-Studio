@@ -15,7 +15,7 @@ namespace StreamlinkVlcStudio.Infrastructure.Vod;
 
 internal sealed class KickVodDownloadResolver
 {
-    private static readonly HttpClient SharedClient = HttpClientFactory.Create(TimeSpan.FromSeconds(20), allowAutoRedirect: false);
+    private static readonly HttpClient SharedClient = HttpClientFactory.CreateForText(TimeSpan.FromSeconds(20), allowAutoRedirect: false);
     private static readonly Regex ScriptPattern = new(@"<script\b[^>]*>(.*?)</script\s*>",
         RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.CultureInvariant, TimeSpan.FromSeconds(2));
     private const string PushMarker = "self.__next_f.push(";

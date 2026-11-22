@@ -69,6 +69,10 @@ public sealed class AnimatedEmoteImage : Image
         nameof(DecodePixelWidth), typeof(int), typeof(AnimatedEmoteImage),
         new PropertyMetadata(0, OnImageSourceChanged));
 
+    public static readonly DependencyProperty CacheHomeArtworkProperty = DependencyProperty.Register(
+        nameof(CacheHomeArtwork), typeof(bool), typeof(AnimatedEmoteImage),
+        new PropertyMetadata(false, OnImageSourceChanged));
+
     private static readonly DependencyPropertyKey HasImageLoadFailedPropertyKey = DependencyProperty.RegisterReadOnly(
         nameof(HasImageLoadFailed),
         typeof(bool),
@@ -111,6 +115,12 @@ public sealed class AnimatedEmoteImage : Image
     }
 
     public bool HasImageLoadFailed => (bool)GetValue(HasImageLoadFailedProperty);
+
+    public bool CacheHomeArtwork
+    {
+        get => (bool)GetValue(CacheHomeArtworkProperty);
+        set => SetValue(CacheHomeArtworkProperty, value);
+    }
 
     /// <summary>Limits retained bitmap width for large artwork; zero preserves original pixels.</summary>
     public int DecodePixelWidth
@@ -324,10 +334,11 @@ public sealed class AnimatedEmoteImage : Image
         return completion;
     }
 
-    internal static async Task<bool> LoadImageForTestAsync(string imageUrl, HttpClient httpClient)
+    internal static async Task<bool> LoadImageForTestAsync(string imageUrl, HttpClient httpClient,
+        HomeArtworkCache? artworkCache = null)
     {
         var key = CreateCacheKey(new Uri(imageUrl), DefaultMaxImageBytes, cacheVersion: 0);
-        return await GetOrLoadImageAsync(key, out _, httpClient).ConfigureAwait(false) is { Frames.Count: > 0 };
+        return await GetOrLoadImageAsync(key, out _, httpClient, artworkCache).ConfigureAwait(false) is { Frames.Count: > 0 };
     }
 
     private static void OnImageSourceChanged(DependencyObject dependencyObject, DependencyPropertyChangedEventArgs e)
@@ -382,7 +393,8 @@ public sealed class AnimatedEmoteImage : Image
         AnimatedEmoteImageCacheEntry? cacheEntry = null;
         try
         {
-            var loadTask = GetOrLoadImageAsync(key, out cacheEntry);
+            var loadTask = GetOrLoadImageAsync(key, out cacheEntry,
+                artworkCache: CacheHomeArtwork ? HomeArtworkCache.Shared : null);
             image = await loadTask.ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
@@ -479,7 +491,8 @@ public sealed class AnimatedEmoteImage : Image
     private static Task<DecodedEmoteImage?> GetOrLoadImageAsync(
         AnimatedEmoteImageCacheKey key,
         out AnimatedEmoteImageCacheEntry entry,
-        HttpClient? httpClient = null)
+        HttpClient? httpClient = null,
+        HomeArtworkCache? artworkCache = null)
     {
         AnimatedEmoteImageCacheEntry? cachedEntry;
         lock (ImageCacheGate)
@@ -494,7 +507,7 @@ public sealed class AnimatedEmoteImage : Image
             {
                 AnimatedEmoteImageCacheEntry? newEntry = null;
                 newEntry = new AnimatedEmoteImageCacheEntry(new Lazy<Task<DecodedEmoteImage?>>(
-                    () => LoadAndDecodeImageAndNotifyAsync(key, newEntry!, httpClient),
+                    () => LoadAndDecodeImageAndNotifyAsync(key, newEntry!, httpClient, artworkCache),
                     LazyThreadSafetyMode.ExecutionAndPublication));
                 cachedEntry = newEntry;
                 ImageCache.Add(key, cachedEntry);
@@ -512,12 +525,14 @@ public sealed class AnimatedEmoteImage : Image
     private static async Task<DecodedEmoteImage?> LoadAndDecodeImageAndNotifyAsync(
         AnimatedEmoteImageCacheKey key,
         AnimatedEmoteImageCacheEntry entry,
-        HttpClient? httpClient)
+        HttpClient? httpClient,
+        HomeArtworkCache? artworkCache)
     {
         DecodedEmoteImage? image = null;
         try
         {
-            image = await LoadAndDecodeImageAsync(key.Url, key.MaxImageBytes, httpClient, key.DecodePixelWidth).ConfigureAwait(false);
+            image = await LoadAndDecodeImageAsync(key.Url, key.MaxImageBytes, httpClient, key.DecodePixelWidth, artworkCache)
+                .ConfigureAwait(false);
             return image;
         }
         finally
@@ -723,7 +738,7 @@ public sealed class AnimatedEmoteImage : Image
     }
 
     private static Task<DecodedEmoteImage?> LoadAndDecodeImageAsync(string url, int maxImageBytes, HttpClient? httpClient,
-        int decodePixelWidth)
+        int decodePixelWidth, HomeArtworkCache? artworkCache)
     {
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || !ImageUriPolicy.IsSupported(uri))
         {
@@ -732,16 +747,18 @@ public sealed class AnimatedEmoteImage : Image
 
         return uri.IsFile
             ? ReadAndDecodeFileAsync(uri.LocalPath, maxImageBytes, decodePixelWidth)
-            : DownloadAndDecodeImageAsync(url, maxImageBytes, httpClient ?? SharedHttpClient, decodePixelWidth);
+            : DownloadAndDecodeImageAsync(url, maxImageBytes, httpClient ?? SharedHttpClient, decodePixelWidth, artworkCache);
     }
 
     private static async Task<DecodedEmoteImage?> DownloadAndDecodeImageAsync(string url, int maxImageBytes, HttpClient httpClient,
-        int decodePixelWidth)
+        int decodePixelWidth, HomeArtworkCache? artworkCache)
     {
         using var deadline = new CancellationTokenSource(ImageLoadDeadline);
         try
         {
-            await ImageWorkGate.WaitAsync(deadline.Token).ConfigureAwait(false);
+            // Opening a cache file must stay off the dispatcher even when the gate is free.
+            await ImageWorkGate.WaitAsync(deadline.Token).ConfigureAwait(
+                artworkCache is null ? ConfigureAwaitOptions.None : ConfigureAwaitOptions.ForceYielding);
         }
         catch (OperationCanceledException) when (deadline.IsCancellationRequested)
         {
@@ -758,6 +775,13 @@ public sealed class AnimatedEmoteImage : Image
             {
                 try
                 {
+                    if (artworkCache is not null &&
+                        await artworkCache.ReadAsync(candidate, maxImageBytes, deadline.Token).ConfigureAwait(false) is { } cached &&
+                        await Task.Run(() => DecodeImage(cached, decodePixelWidth), deadline.Token).ConfigureAwait(false) is { } cachedImage)
+                    {
+                        return cachedImage;
+                    }
+
                     using var request = new HttpRequestMessage(HttpMethod.Get, candidate);
                     if (KickHttpHeaders.IsKickHost(candidate))
                     {
@@ -768,6 +792,7 @@ public sealed class AnimatedEmoteImage : Image
                         request,
                         HttpCompletionOption.ResponseHeadersRead,
                         deadline.Token).ConfigureAwait(false);
+                    var receivedAt = artworkCache?.UtcNow;
                     // Twitch's missing-cover redirect ends at a valid HTTP 200 JPEG.
                     // Keep it in the expiring failure cache instead of caching it as artwork.
                     if (!response.IsSuccessStatusCode ||
@@ -789,6 +814,8 @@ public sealed class AnimatedEmoteImage : Image
                     var image = await Task.Run(() => DecodeImage(bytes, decodePixelWidth), deadline.Token).ConfigureAwait(false);
                     if (image is not null)
                     {
+                        if (artworkCache is not null && receivedAt is { } received)
+                            _ = artworkCache.StoreAsync(candidate, response, bytes, received);
                         return image;
                     }
                 }
@@ -818,13 +845,7 @@ public sealed class AnimatedEmoteImage : Image
         await ImageWorkGate.WaitAsync().ConfigureAwait(false);
         try
         {
-            var file = new FileInfo(path);
-            if (!file.Exists || file.Length <= 0 || file.Length > maxImageBytes)
-            {
-                return null;
-            }
-
-            var bytes = await BoundedByteReader.ReadFileAsync(file.FullName, maxImageBytes).ConfigureAwait(false);
+            var bytes = await BoundedByteReader.ReadFileAsync(path, maxImageBytes).ConfigureAwait(false);
             if (bytes is null)
             {
                 return null;

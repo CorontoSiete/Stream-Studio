@@ -7,6 +7,7 @@ internal static class HlsReplayTimelineTestCatalog
         ("long VOD timeline preserves discontinuities and muted segment URLs", () => Run(Discontinuities)),
         ("long VOD timeline leaves growing encrypted ranged and master playlists untouched", () => Run(Unsupported)),
         ("long VOD timeline rejects malformed segments and unsafe media URLs", () => Run(Invalid)),
+        ("long VOD timeline rejects invalid, repeated, late and overflowing sequence tags", () => Run(InvalidSequences)),
         ("long VOD timeline owns and releases its temporary playlist and upstream lease", LeaseAsync),
         ("long VOD timeline bounds stalled local playlist reads", LocalPlaylistTimeoutAsync),
         ("long VOD timeline rejects partial playlist responses", PartialPlaylistAsync),
@@ -60,6 +61,19 @@ internal static class HlsReplayTimelineTestCatalog
             try { HlsReplayTimeline.Rebase(Header + body, PlaylistUri, TimeSpan.FromHours(14)); throw new Exception("Expected malformed playlist rejection."); }
             catch (InvalidDataException) { }
         }
+    }
+
+    private static void InvalidSequences()
+    {
+        foreach (var content in new[]
+        {
+            Header.Replace("SEQUENCE:10", "SEQUENCE:-1", StringComparison.Ordinal) + Body,
+            Header.Replace("SEQUENCE:10", "SEQUENCE:9223372036854775807", StringComparison.Ordinal) + Body,
+            Header + "#EXT-X-MEDIA-SEQUENCE:10\n" + Body,
+            Header + "#EXT-X-DISCONTINUITY\n#EXT-X-DISCONTINUITY-SEQUENCE:2\n" + Body,
+            Header + Body.Replace("3.ts\n", "3.ts\n#EXT-X-DISCONTINUITY-SEQUENCE:2\n", StringComparison.Ordinal)
+        })
+            Assert.Throws<InvalidDataException>(() => HlsReplayTimeline.Rebase(content, PlaylistUri, TimeSpan.FromSeconds(35)));
     }
     private static async Task LeaseAsync()
     {

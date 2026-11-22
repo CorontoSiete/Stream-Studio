@@ -1,4 +1,5 @@
 using StreamlinkVlcStudio.Infrastructure.Http;
+using StreamlinkVlcStudio.Infrastructure.Io;
 using StreamlinkVlcStudio.Infrastructure.Limits;
 using StreamlinkVlcStudio.Infrastructure.Logging;
 using StreamlinkVlcStudio.Infrastructure.Text;
@@ -8,6 +9,7 @@ internal static class InfrastructureRuntimeTestCatalog
     internal static IReadOnlyList<(string Name, Func<Task> Run)> All { get; } =
     [
         ("infrastructure runtime: bounded HTTP sender does not prebuffer response bodies", BoundedHttpSenderUsesHeadersOnlyAsync),
+        ("infrastructure runtime: VLC replay preserves and repairs verified plugin files", ReplayPluginCacheRepairsAsync),
         ("infrastructure runtime: Kick website JSON shares bounded curl fallback", KickWebsiteJsonFallbackIsSharedAsync),
         ("infrastructure runtime: GraphQL errors share batched and response message parsing", GraphQlErrorsAreShared),
         ("infrastructure runtime: failed file logger completes flushes and stops admission", FileLoggerFaultedFlushAsync),
@@ -18,6 +20,32 @@ internal static class InfrastructureRuntimeTestCatalog
         ("infrastructure runtime: replay chat rejects overflowing offsets", ReplayChatRejectsOverflowingOffsets),
         ("infrastructure runtime: external input and lifecycle boundaries are enforced", ExternalInputAndLifecycleBoundariesAreEnforcedAsync)
     ];
+
+    private static async Task ReplayPluginCacheRepairsAsync()
+    {
+        var directory = Directory.CreateTempSubdirectory("stream-studio-replay-plugins-");
+        try
+        {
+            var root = VlcReplayPausePlugin.Prepare(directory.FullName);
+            var demux = Path.Combine(root, "demux");
+            var pause = Path.Combine(demux, "libstudio_replay_pause_plugin.dll");
+            var adaptive = Path.Combine(demux, "libstudio_adaptive_plugin.dll");
+            var pauseHash = FileHash.GetSha256(pause);
+            var adaptiveHash = FileHash.GetSha256(adaptive);
+            File.Delete(pause);
+            var corrupt = await File.ReadAllBytesAsync(adaptive);
+            corrupt[^1] ^= 1;
+            await File.WriteAllBytesAsync(adaptive, corrupt);
+
+            var repairs = await Task.WhenAll(Enumerable.Range(0, 4)
+                .Select(_ => Task.Run(() => VlcReplayPausePlugin.Prepare(directory.FullName))));
+            Assert.True(repairs.All(path => path == root));
+            Assert.True(FileHash.MatchesSha256(pause, pauseHash));
+            Assert.True(FileHash.MatchesSha256(adaptive, adaptiveHash));
+            Assert.Equal(2, Directory.GetFiles(demux).Length);
+        }
+        finally { directory.Delete(recursive: true); }
+    }
 
     private static async Task BoundedHttpSenderUsesHeadersOnlyAsync()
     {
@@ -272,7 +300,7 @@ internal static class InfrastructureRuntimeTestCatalog
 
     private static async Task BoundedStreamLinesDrainOversizedRecordsAsync()
     {
-        var bytes = Encoding.UTF8.GetBytes($"{new string('a', 64)}\nnext\n");
+        var bytes = Encoding.UTF8.GetBytes($"{new string('a', 64)}\n0123456789abcdef\r\n0123456789abcde\rsuffix\r\n0123456789abcde🎬\nnext\n");
         await using var stream = new MemoryStream(bytes);
         using var reader = new BoundedStreamLineReader(stream, new UTF8Encoding(false, true), 16);
 
@@ -280,6 +308,9 @@ internal static class InfrastructureRuntimeTestCatalog
         Assert.NotNull(oversized);
         Assert.True(oversized!.Value.WasTruncated);
         Assert.Equal(16, oversized.Value.Text.Length);
+        Assert.Equal(new BoundedTextLine("0123456789abcdef", false), (await reader.ReadLineAsync())!.Value);
+        Assert.Equal(new BoundedTextLine("0123456789abcde\r", true), (await reader.ReadLineAsync())!.Value);
+        Assert.Equal(new BoundedTextLine("0123456789abcde", true), (await reader.ReadLineAsync())!.Value);
         Assert.Equal("next", (await reader.ReadLineAsync())!.Value.Text);
     }
 

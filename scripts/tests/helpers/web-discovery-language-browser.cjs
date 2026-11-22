@@ -1,7 +1,7 @@
 'use strict';
 const assert = require('node:assert/strict');
 
-module.exports = async ({ cdp, evaluate, wait, capture, viewport, requests }) => {
+module.exports = async ({ cdp, evaluate, wait, capture, viewport, requests, loading }) => {
   const settled = "document.querySelector('#cards').getAttribute('aria-busy')==='false'";
   const click = selector => evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`);
   const choose = (selector, value) => evaluate(`(()=>{const input=document.querySelector(${JSON.stringify(selector)});input.value=${JSON.stringify(value)};input.dispatchEvent(new Event('change'))})()`);
@@ -10,6 +10,11 @@ module.exports = async ({ cdp, evaluate, wait, capture, viewport, requests }) =>
   assert.ok(await evaluate("!document.querySelector('#discover-language-label').hidden"));
   assert.equal(await evaluate("document.querySelector('#discover-language').options.length"), 3);
   await choose('#discover-language', 'en');
+  await cdp('Page.reload');
+  await wait("document.querySelector('#studio')?.dataset.page==='following' && " + settled + " && document.querySelectorAll('#cards .card').length===6");
+  await click('[data-page=discover]');
+  await wait(settled + " && document.querySelector('#cards').classList.contains('categories')");
+  assert.equal(await evaluate("document.querySelector('#discover-language').value"), 'en', 'the directory language is restored even before visiting a category');
   await click('#cards .card-main');
   await wait(settled + " && !document.querySelector('#more').hidden");
   assert.equal(requests.at(-1).language, 'en');
@@ -51,7 +56,6 @@ module.exports = async ({ cdp, evaluate, wait, capture, viewport, requests }) =>
   await wait("document.querySelector('#studio')?.dataset.page==='following' && " + settled + " && document.querySelectorAll('#cards .card').length===6");
   await click('[data-page=discover]');
   await wait(settled + " && document.querySelector('#cards').classList.contains('categories')");
-  await choose('#discover-language', 'en');
   await click('#cards .card:nth-child(2) .card-main');
   await wait(settled);
   assert.equal(requests.at(-1).language, '', 'saved All languages overrides a nonempty directory choice after reload');
@@ -68,6 +72,19 @@ module.exports = async ({ cdp, evaluate, wait, capture, viewport, requests }) =>
   await click('[data-page=following]');
   await wait(settled + " && document.querySelector('#studio').dataset.page==='following'");
   assert.ok(await evaluate("document.querySelector('#discover-language-label').hidden"));
+  loading.hold.add('categories');
+  await click('[data-page=discover]');
+  for (let attempt = 0; attempt < 100 && loading.held.length === 0; attempt++)
+    await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(loading.held.length, 1, 'the provider request is still pending when the directory choice changes');
+  await choose('#discover-language', '');
+  await wait("document.querySelector('#save-status').textContent==='All changes saved to your account.' && !(" + settled + ")");
+  loading.hold.delete('categories');
+  await cdp('Page.reload');
+  await wait("document.querySelector('#studio')?.dataset.page==='following' && " + settled + " && document.querySelectorAll('#cards .card').length===6");
+  await click('[data-page=discover]');
+  await wait(settled + " && document.querySelector('#cards').classList.contains('categories')");
+  assert.equal(await evaluate("document.querySelector('#discover-language').value"), '', 'the All languages choice survives reloading during a category request');
   assert.deepEqual(await evaluate('window.visualErrors'), []);
-  console.log('PASS discovery language: category persistence across reloads, platform isolation, pagination, filter reset, mobile layout');
+  console.log('PASS discovery language: directory and category persistence across reloads, platform isolation, pagination, filter reset, mobile layout');
 };

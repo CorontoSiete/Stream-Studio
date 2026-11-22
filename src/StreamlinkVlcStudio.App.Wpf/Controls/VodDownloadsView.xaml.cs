@@ -11,7 +11,7 @@ public partial class VodDownloadsView : UserControl
 
     private void DownloadUrl_KeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key != Key.Enter || Keyboard.Modifiers != ModifierKeys.None ||
+        if (e.Key != Key.Enter || e.KeyboardDevice.Modifiers != ModifierKeys.None ||
             DataContext is not MainViewModel main || !main.DownloadVodUrlCommand.CanExecute(null)) return;
         e.Handled = true;
         if (!e.IsRepeat) main.DownloadVodUrlCommand.Execute(null);

@@ -9,13 +9,15 @@ internal static partial class LocalWebTestCatalog
     internal static IReadOnlyList<(string Name, Func<Task> Run)> All { get; } =
     [
         ("discovery language: web settings share choices and stream requests validate language", DiscoveryLanguagesAsync),
-        ("discovery language: web categories persist by platform and account across server restarts", DiscoveryLanguagePersistenceAsync),
+        ("discovery language: web directory and category choices persist by account across server restarts", DiscoveryLanguagePersistenceAsync),
+        ("discovery language: web settings can save while a provider request is pending", DiscoveryLanguageSaveWhileBusyAsync),
         ("discovery language: overlapping saves preserve the latest choice and skip unchanged writes", DiscoveryLanguageConcurrentSavesAsync),
         ("local web: LAN policy rejects public, other-subnet, mapped and special addresses", NetworkAsync),
         ("local web: startup only selects the saved LAN interface, address and subnet", SavedNetworkAsync),
         ("local web: password attempts have per-device and global budgets", LoginBudgetAsync),
         ("local web: device sessions expire and cannot move to another IP", SessionsAsync),
         ("local web: account storage persists hashes and isolates preferences", UserAccountsAsync),
+        ("local web: unchanged stream preferences skip disk writes after reopening", UnchangedStreamPreferencesAsync),
         ("local web: Unicode shortcuts persist and malformed shortcut keys are rejected", UnicodeShortcutsAsync),
         ("local web: desktop shortcuts stay current and legacy web choices migrate", DesktopShortcutsAsync),
         ("local web: login pipeline enforces origin, host, peer, cookies and CSRF", LoginPipelineAsync),
@@ -23,6 +25,10 @@ internal static partial class LocalWebTestCatalog
         ("local web: server window follows every app theme while open", ServerWindowThemeAsync),
         ("local web: LAN CA signs an IP certificate trusted over real HTTPS", CertificateChainAsync),
         ("local web: replacement client assets preserve the protected API and media routes", ReplacementClientAsync),
+        ("local web: bandwidth savings from compressed and revalidated public assets over HTTPS", CompressAndRevalidateAssetsAsync),
+        ("local web: bandwidth savings from compressed HLS playlists preserve media ranges and API responses", CompressPlaylistsAsync),
+        ("local web: bandwidth savings from negotiated provider text compression", ProviderTextCompressionAsync),
+        ("local web: unchanged archives revalidate without downloading another provider playlist", RevalidateArchivePlaylistAsync),
         ("local web: real HTTPS rejects unauthenticated media and hostile origins", HttpsAsync),
         ("local web: disconnect all revokes media and commands", DisconnectAsync),
         ("local web: concurrent disposal waits for the same session and server cleanup", SharedDisposalAsync),
@@ -33,6 +39,8 @@ internal static partial class LocalWebTestCatalog
         ("local web: Kick prefetch segments stay proxied across live playlist refreshes", KickPrefetchAsync),
         ("local web: prefetch references reject unsafe endpoints and malformed values", PrefetchSecurityAsync),
         ("local web: Kick prefetch playlist plays decoded video in the browser", BrowserKickPrefetchAsync),
+        ("local web: live card hover previews play, switch, cancel and keep full playback separate", BrowserCardPreviewAsync),
+        ("local web: a card preview serves its first playlist once and refreshes from the provider", CardPreviewPlaylistHandoffAsync),
         ("local web: media refuses private destinations and unsafe redirects", MediaSecurityAsync),
         ("local web: media proxy rewrites remote manifests and preserves byte ranges without upstream cookies", MediaProxyAsync),
         ("local web: native HLS range probe never turns an extensionless playlist into a partial manifest", MediaPartialPlaylistAsync),
@@ -47,6 +55,7 @@ internal static partial class LocalWebTestCatalog
         ("local web: offline pins use refreshed desktop channel status in an existing session", FollowingPinStatusChangesAsync),
         ("local web: offline last-live and pins update browser cards without losing focus", BrowserFollowingLastLiveAsync),
         ("local web: category viewer totals are validated, bounded, cancellable and independent of commands", CategoryViewersAsync),
+        ("local web: paginated responses distinguish provider failures from empty results", PageAvailabilityAsync),
         ("local web: category artwork rejects Twitch missing covers and recovers after refresh", CategoryArtworkAsync),
         ("local web: category artwork validates bytes when Twitch mislabels content types", CategoryArtworkFormatsAsync),
         ("local web: category artwork bounds caching and cancels queued downloads", CategoryArtworkResourcesAsync),
@@ -491,14 +500,16 @@ internal static partial class LocalWebTestCatalog
     private static async Task MediaPartialPlaylistAsync()
     {
         var ranges = new List<string>();
+        var alwaysPartial = false;
         using var http = new HttpClient(new AsyncHttpMessageHandler((request, _) =>
         {
             var range = request.Headers.Range?.ToString() ?? "";
             ranges.Add(range);
-            var response = new HttpResponseMessage(range.Length == 0 ? HttpStatusCode.OK : HttpStatusCode.PartialContent)
+            var complete = range.Length == 0 && !alwaysPartial;
+            var response = new HttpResponseMessage(complete ? HttpStatusCode.OK : HttpStatusCode.PartialContent)
             {
                 RequestMessage = request,
-                Content = new StringContent(range.Length == 0 ? "#EXTM3U\n#EXTINF:6,\nsegment.ts\n" : "#E")
+                Content = new StringContent(complete ? "#EXTM3U\n#EXTINF:6,\nsegment.ts\n" : "#E")
             };
             response.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/vnd.apple.mpegurl");
             return Task.FromResult(response);
@@ -515,6 +526,11 @@ internal static partial class LocalWebTestCatalog
         context.Response.Body.Position = 0;
         var playlist = await new StreamReader(context.Response.Body).ReadToEndAsync();
         Assert.Contains("/media/id/", playlist);
+
+        ranges.Clear();
+        alwaysPartial = true;
+        await Assert.ThrowsAsync<InvalidDataException>(() => media.ServeAsync(new DefaultHttpContext(), media.Root));
+        Assert.SequenceEqual(new[] { "" }, ranges);
     }
 
     private static async Task MediaExtensionlessMasterAsync()
@@ -556,11 +572,12 @@ internal static partial class LocalWebTestCatalog
         }
     }
 
-    private sealed class TestWorkspace : ILocalWebWorkspace
+    private sealed class TestWorkspace(LocalWebMedia? media = null) : ILocalWebWorkspace
     {
         internal bool Disposed { get; private set; }
         public Task<object?> InvokeAsync(string action, JsonElement input, CancellationToken cancellationToken) => Task.FromResult<object?>(new { ok = true });
-        public Task ServeMediaAsync(HttpContext context, string playbackId, string resourceId) => context.Response.WriteAsync("protected-media", context.RequestAborted);
+        public Task ServeMediaAsync(HttpContext context, string playbackId, string resourceId) =>
+            media?.ServeAsync(context, resourceId) ?? context.Response.WriteAsync("protected-media", context.RequestAborted);
         public ValueTask DisposeAsync() { Disposed = true; return ValueTask.CompletedTask; }
     }
 }

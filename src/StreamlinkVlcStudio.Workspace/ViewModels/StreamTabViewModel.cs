@@ -2812,8 +2812,10 @@ public sealed partial class StreamTabViewModel : ObservableObject, IAsyncDisposa
         }
 
         var draftRevision = outgoingChatRevision;
-        var message = NormalizeOutgoingMessage(OutgoingChatText);
-        if (string.IsNullOrWhiteSpace(message))
+        var message = ChatTextNormalizer.NormalizeOutgoingMessage(OutgoingChatText);
+        if (Target.Platform == PlatformKind.Twitch)
+            message = TwitchIrcProtocol.TruncateChatMessage(Target.Channel, message);
+        if (message.Length == 0)
         {
             return;
         }
@@ -6109,13 +6111,13 @@ public sealed partial class StreamTabViewModel : ObservableObject, IAsyncDisposa
             message.Platform,
             message.Channel,
             message.Username,
-            NormalizeDockedLocalEchoBody(message.Message),
+            ChatTextNormalizer.NormalizeSingleLine(message.Message),
             DateTimeOffset.Now));
     }
 
     private void ForgetDockedLocalEcho(ChatMessage message)
     {
-        var normalizedMessage = NormalizeDockedLocalEchoBody(message.Message);
+        var normalizedMessage = ChatTextNormalizer.NormalizeSingleLine(message.Message);
         for (var index = pendingDockedLocalEchoes.Count - 1; index >= 0; index--)
         {
             var pending = pendingDockedLocalEchoes[index];
@@ -6136,7 +6138,7 @@ public sealed partial class StreamTabViewModel : ObservableObject, IAsyncDisposa
     {
         var now = DateTimeOffset.Now;
         PruneExpiredDockedLocalEchoes(now);
-        var normalizedMessage = NormalizeDockedLocalEchoBody(message.Message);
+        var normalizedMessage = ChatTextNormalizer.NormalizeSingleLine(message.Message);
 
         for (var index = pendingDockedLocalEchoes.Count - 1; index >= 0; index--)
         {
@@ -6179,11 +6181,6 @@ public sealed partial class StreamTabViewModel : ObservableObject, IAsyncDisposa
     {
         return string.Equals(username, "me", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(username, "bot", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static string NormalizeDockedLocalEchoBody(string message)
-    {
-        return message.Replace('\r', ' ').Replace('\n', ' ').Trim();
     }
 
     private Task<bool> StartNativeOverlayChatTrackedAsync(AppSettings settings, CancellationToken cancellationToken, bool startCaptureChatClient = false) => nativeOverlay?.StartNativeOverlayChatTrackedAsync(settings, cancellationToken, startCaptureChatClient) ?? Task.FromResult(false);
@@ -6237,11 +6234,6 @@ public sealed partial class StreamTabViewModel : ObservableObject, IAsyncDisposa
         IsReplayMode, IsBehindLive, IsChatVisible, IsDockedChatOverrideActive, replaySession,
         replayChatStatusMessage, chatSettings is null ? null :
             new NativeOverlayChatOptions(chatSettings.Layout, chatSettings.DockWidth, chatSettings.VlcOverlayFontSize));
-
-    private static string NormalizeOutgoingMessage(string message)
-    {
-        return ChatTextNormalizer.NormalizeSingleLine(message, 500);
-    }
 
     private void QueueNativeChatOverlayUpdateAfterReplayWindowApply() => nativeOverlay?.QueueNativeChatOverlayUpdateAfterReplayWindowApply();
 

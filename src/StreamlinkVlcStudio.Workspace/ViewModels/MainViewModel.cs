@@ -553,7 +553,7 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
 
     public bool IsAllVodFilterSelected { get => vodLibrary.IsAllVodFilterSelected; }
 
-    public PlatformKind SelectedVodPlatform { get => vodLibrary.SelectedVodPlatform; private set => vodLibrary.SelectedVodPlatform = value; }
+    public PlatformKind SelectedVodPlatform => vodLibrary.SelectedVodPlatform;
 
     public bool IsTwitchVodPlatformSelected { get => vodLibrary.IsTwitchVodPlatformSelected; }
 
@@ -563,11 +563,11 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
 
     public bool IsTwitchVodFilterVisible { get => vodLibrary.IsTwitchVodFilterVisible; }
 
-    public string TwitchVodStatus { get => vodLibrary.TwitchVodStatus; private set => vodLibrary.TwitchVodStatus = value; }
+    public string TwitchVodStatus => vodLibrary.TwitchVodStatus;
 
-    public bool IsTwitchVodSearchRunning { get => vodLibrary.IsTwitchVodSearchRunning; private set => vodLibrary.IsTwitchVodSearchRunning = value; }
+    public bool IsTwitchVodSearchRunning => vodLibrary.IsTwitchVodSearchRunning;
 
-    public bool HasTwitchVodSearchCompleted { get => vodLibrary.HasTwitchVodSearchCompleted; private set => vodLibrary.HasTwitchVodSearchCompleted = value; }
+    public bool HasTwitchVodSearchCompleted => vodLibrary.HasTwitchVodSearchCompleted;
 
     public bool HasTwitchVods { get => vodLibrary.HasTwitchVods; }
 
@@ -585,27 +585,23 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
 
     public bool IsBrowseCategorySearchPlaceholderVisible { get => browse.IsBrowseCategorySearchPlaceholderVisible; }
 
-    public PlatformKind SelectedBrowsePlatform { get => browse.SelectedBrowsePlatform; private set => browse.SelectedBrowsePlatform = value; }
+    public PlatformKind SelectedBrowsePlatform => browse.SelectedBrowsePlatform;
 
     public bool IsTwitchBrowsePlatformSelected { get => browse.IsTwitchBrowsePlatformSelected; }
 
     public bool IsKickBrowsePlatformSelected { get => browse.IsKickBrowsePlatformSelected; }
 
-    public string BrowsePlatformText { get => browse.BrowsePlatformText; }
+    public string BrowseStatus => browse.BrowseStatus;
 
-    public string BrowseStatus { get => browse.BrowseStatus; private set => browse.BrowseStatus = value; }
-
-    public BrowseCategoryViewModel? SelectedBrowseCategory { get => browse.SelectedBrowseCategory; private set => browse.SelectedBrowseCategory = value; }
-
-    public bool HasSelectedBrowseCategory { get => browse.HasSelectedBrowseCategory; }
+    public BrowseCategoryViewModel? SelectedBrowseCategory => browse.SelectedBrowseCategory;
 
     public string SelectedBrowseCategoryName { get => browse.SelectedBrowseCategoryName; }
 
     public bool IsBrowseCategoriesLoading { get => browse.IsBrowseCategoriesLoading; private set => browse.IsBrowseCategoriesLoading = value; }
 
-    public bool HasBrowseCategorySearchCompleted { get => browse.HasBrowseCategorySearchCompleted; private set => browse.HasBrowseCategorySearchCompleted = value; }
+    public bool HasBrowseCategorySearchCompleted => browse.HasBrowseCategorySearchCompleted;
 
-    public bool IsBrowseStreamsLoading { get => browse.IsBrowseStreamsLoading; private set => browse.IsBrowseStreamsLoading = value; }
+    public bool IsBrowseStreamsLoading => browse.IsBrowseStreamsLoading;
 
     public bool HasBrowseCategories { get => browse.HasBrowseCategories; }
 
@@ -637,9 +633,9 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
 
     public string StreamSearchResultsTitle { get => streamSearch.StreamSearchResultsTitle; }
 
-    public string StreamSearchStatus { get => streamSearch.StreamSearchStatus; private set => streamSearch.StreamSearchStatus = value; }
+    public string StreamSearchStatus => streamSearch.StreamSearchStatus;
 
-    public bool IsStreamSearchRunning { get => streamSearch.IsStreamSearchRunning; private set => streamSearch.IsStreamSearchRunning = value; }
+    public bool IsStreamSearchRunning => streamSearch.IsStreamSearchRunning;
 
     public void ShowStreamSearchDropdown() => streamSearch.ShowStreamSearchDropdown();
 
@@ -785,9 +781,9 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
 
     public bool IsBrowseStreamsPageVisible { get => browse.IsBrowseStreamsPageVisible; }
 
-    public string FollowedChannelsStatus { get => followed.FollowedChannelsStatus; private set => followed.FollowedChannelsStatus = value; }
+    public string FollowedChannelsStatus => followed.FollowedChannelsStatus;
 
-    public bool IsFollowedChannelsRefreshing { get => followed.IsFollowedChannelsRefreshing; private set => followed.IsFollowedChannelsRefreshing = value; }
+    public bool IsFollowedChannelsRefreshing => followed.IsFollowedChannelsRefreshing;
 
     public bool HasLiveFollowedChannels { get => followed.HasLiveFollowedChannels; }
 
@@ -811,7 +807,7 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
 
     public string KickFollowedChannelsText { get => followed.KickFollowedChannelsText; set => followed.KickFollowedChannelsText = value; }
 
-    public string KickFollowImportStatus { get => followed.KickFollowImportStatus; private set => followed.KickFollowImportStatus = value; }
+    public string KickFollowImportStatus => followed.KickFollowImportStatus;
 
     public string KickImportedFollowsSummary { get => followed.KickImportedFollowsSummary; }
 

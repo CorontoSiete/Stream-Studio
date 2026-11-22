@@ -49,7 +49,8 @@ test('invalid clients, injected secrets, grant types, duplicates, escapes and ca
     new URLSearchParams({ ...Object.fromEntries(form('authorization_code')), redirect_uri: 'https://attacker.example' }),
     new URLSearchParams({ ...Object.fromEntries(form('authorization_code')), redirect_uri: 'http://localhost:39177/' }),
     `${form()}&refresh_token=duplicate`,
-    `${form()}&invalid=%QZ`,
+    form().toString().replace('private-refresh', '%QZ'),
+    form().toString().replace('private-refresh', '%C3'),
   ];
   for (const body of invalid) {
     const response = await handle(request(body), env(), () => { throw new Error('Unexpected upstream call'); });
@@ -58,7 +59,7 @@ test('invalid clients, injected secrets, grant types, duplicates, escapes and ca
 });
 test('request size is enforced on the stream without trusting Content-Length', async () => {
   const response = await handle(request('x'.repeat(16_385)), env(), () => { throw new Error('Unexpected upstream call'); });
-  assert.equal(response.status, 400);
+  assert.equal(response.status, 413);
 });
 test('unsupported content and methods are rejected', async () => {
   assert.equal((await handle(request('{}', { headers: { 'Content-Type': 'application/json' } }), env())).status, 415);

@@ -11,10 +11,10 @@ internal static class KickCategoryLoadingTestCatalog
         ("Kick category loading: partial details preserve merged discovery metadata", () => MergeAsync(invalidDetail: false)),
         ("Kick category loading: failed details preserve merged discovery metadata", () => MergeAsync(invalidDetail: true)),
         ("Kick category loading: cancellation drains sources and bounded details", CancellationAsync),
-        ("Kick category loading: failed list cancels and drains speculative details", () => SourceFailureAsync(malformed: false, failList: true)),
-        ("Kick category loading: malformed list cancels and drains speculative details", () => SourceFailureAsync(malformed: true, failList: true)),
-        ("Kick category loading: malformed discovery cancels and drains speculative details", () => SourceFailureAsync(malformed: true, failList: false)),
-        ("Kick category loading: discovery HTTP failure retains enriched list", DiscoveryFailureAsync),
+        ("Kick category loading: failed list cancels and drains speculative details", () => ListFailureAsync(malformed: false)),
+        ("Kick category loading: malformed list cancels and drains speculative details", () => ListFailureAsync(malformed: true)),
+        ("Kick category loading: malformed discovery retains enriched list", () => DiscoveryFailureAsync(malformed: true)),
+        ("Kick category loading: discovery HTTP failure retains enriched list", () => DiscoveryFailureAsync(malformed: false)),
         ("Kick category loading: detail authorization failures remain unauthorized", DetailAuthorizationAsync),
         ("Kick category loading: supplied totals skip redundant detail requests", SuppliedTotalsAsync),
         ("Kick category loading: measured list-first latency", () => MeasureAsync(listFirst: true)),
@@ -168,7 +168,7 @@ internal static class KickCategoryLoadingTestCatalog
         }
     }
 
-    private static async Task SourceFailureAsync(bool malformed, bool failList)
+    private static async Task ListFailureAsync(bool malformed)
     {
         var fourStarted = Signal();
         var started = 0;
@@ -177,9 +177,9 @@ internal static class KickCategoryLoadingTestCatalog
         using var http = new HttpClient(new AsyncHttpMessageHandler(async (request, token) =>
         {
             var path = request.RequestUri!.AbsolutePath;
-            if (path is ListPath or LivePath)
+            if (path == LivePath) return Source(path, Enumerable.Range(1, 8));
+            if (path == ListPath)
             {
-                if ((path == ListPath) != failList) return Source(path, Enumerable.Range(1, 8));
                 await fourStarted.Task.WaitAsync(token);
                 return malformed ? Json("{") : Json("{\"message\":\"Denied\"}", HttpStatusCode.Unauthorized);
             }
@@ -205,16 +205,17 @@ internal static class KickCategoryLoadingTestCatalog
         }
     }
 
-    private static async Task DiscoveryFailureAsync()
+    private static async Task DiscoveryFailureAsync(bool malformed)
     {
         using var http = new HttpClient(new FakeHttpMessageHandler(request => request.RequestUri!.AbsolutePath switch
         {
             ListPath => Source(ListPath, [1, 2]),
-            LivePath => Json("{}", HttpStatusCode.ServiceUnavailable),
+            LivePath => malformed ? Json("{") : Json("{}", HttpStatusCode.ServiceUnavailable),
             var path => Detail(path)
         }));
         var result = await LoadAsync(http);
         Assert.True(result.IsAvailable);
+        Assert.Equal("next-page", result.NextCursor);
         Assert.SequenceEqual(new[] { "2", "1" }, result.Items.Select(category => category.Id));
         Assert.True(result.Items.All(category => category.ViewerCount is > 0));
     }

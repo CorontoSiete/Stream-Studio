@@ -11,7 +11,8 @@ internal static class ChatSendLifetimeTestCatalog
         ("chat send lifetime: pending connection rechecks replay state", () => PendingConnectionAsync(seek: true)),
         ("chat send lifetime: replay transition prevents credential retry", RetryAfterSeekAsync),
         ("chat send lifetime: credential retry rechecks replay after connecting", SeekDuringRetryAsync),
-        ("chat send lifetime: late send failures do not reconnect a disposed tab", LateFailureAsync)
+        ("chat send lifetime: late send failures do not reconnect a disposed tab", LateFailureAsync),
+        ("chat send lifetime: Twitch echoes the exact message that fits the wire limit", TwitchMessageEchoAsync)
     ];
 
     private static async Task PreserveDraftAsync(bool retry, bool retype)
@@ -195,6 +196,26 @@ internal static class ChatSendLifetimeTestCatalog
             release.TrySetCanceled();
             await sending;
         }
+    }
+
+    private static async Task TwitchMessageEchoAsync()
+    {
+        var factory = new FakeChatClientFactory();
+        factory.Client.EchoSentMessages = true;
+        await using var tab = CreateTab(factory);
+        await tab.RestartChatAsync(CreateSettings());
+
+        const string grapheme = "👨‍👩‍👧‍👦";
+        const string prefix = "hello world ";
+        var chatBudget = 512 - Encoding.UTF8.GetByteCount("PRIVMSG #streamer :\r\n");
+        var graphemesThatFit = (chatBudget - Encoding.UTF8.GetByteCount(prefix)) / Encoding.UTF8.GetByteCount(grapheme);
+        var expected = prefix + string.Concat(Enumerable.Repeat(grapheme, graphemesThatFit));
+        tab.OutgoingChatText = "hello\u2028world " + string.Concat(Enumerable.Repeat(grapheme, graphemesThatFit + 1));
+        await tab.SendChatMessageAsync();
+
+        Assert.SequenceEqual([expected], factory.Client.SentMessages);
+        Assert.Equal(1, tab.DockedChatMessages.Count(message => message.Message == expected));
+        Assert.Equal("", tab.OutgoingChatText);
     }
 
     private static StreamTabViewModel CreateTab(FakeChatClientFactory factory) => TestViewModels.CreateTab(

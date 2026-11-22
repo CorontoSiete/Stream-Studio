@@ -19,13 +19,15 @@ internal static class BoundedHttpContentReader
 
     internal static Task<string> ReadPlaylistAsync(
         HttpResponseMessage response,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        int maxBytes = PayloadLimits.PlaylistBytes,
+        Encoding? encoding = null)
     {
         response.EnsureSuccessStatusCode();
         if (response.StatusCode == HttpStatusCode.PartialContent)
             throw new InvalidDataException("The media playlist is incomplete.");
 
-        return ReadStringAsync(response.Content, PayloadLimits.PlaylistBytes, cancellationToken);
+        return ReadStringAsync(response.Content, maxBytes, cancellationToken, encoding);
     }
 
     internal static Task<string> ReadRangeProbeAsync(
@@ -36,13 +38,14 @@ internal static class BoundedHttpContentReader
     internal static async Task<string> ReadStringAsync(
         HttpContent content,
         int maxBytes,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Encoding? encoding = null)
     {
         ArgumentNullException.ThrowIfNull(content);
         var bytes = await BoundedByteReader
             .ReadOrThrowAsync(content, maxBytes, cancellationToken)
             .ConfigureAwait(false);
-        var encoding = ResolveEncoding(content);
+        encoding ??= ResolveEncoding(content);
         var offset = EncodingPreamble.GetLength(bytes, encoding);
         return encoding.GetString(bytes, offset, bytes.Length - offset);
     }

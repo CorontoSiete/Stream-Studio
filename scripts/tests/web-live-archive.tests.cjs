@@ -6,6 +6,51 @@ const response = value => ({ ok: true, text: async () => JSON.stringify(value) }
 const settle = async f => { await f.flush(); await new Promise(resolve => setImmediate(resolve)); await f.flush(); };
 const refresh = p => p.video.dispatchEvent(new Event('progress'));
 
+test('broadcast histories refresh for visible players and catch up on return', async () => {
+  let now = Date.now();
+  const f = fixture({ now: () => now, onRequest: (url, input) => url === '/api/live/archive'
+    ? response({ available: true, key: input.player, duration: 120 }) : null });
+  try {
+    const first = await f.open();
+    await settle(f);
+    f.target({ channel: 'second' });
+    const second = await f.open();
+    await settle(f);
+    const archiveCalls = () => f.requests.filter(r => r.url === '/api/live/archive').map(r => r.input.player);
+    assert.deepEqual(archiveCalls(), [first.id, second.id]);
+
+    now += 31000;
+    await f.tick(250); await settle(f);
+    assert.deepEqual(archiveCalls().slice(2), [second.id]);
+    assert.equal(first.archive.duration, 120);
+    f.selectPlayer(first.id);
+    await settle(f);
+    assert.deepEqual(archiveCalls().slice(2), [second.id, first.id]);
+
+    await f.showPage('settings');
+    now += 31000;
+    await f.tick(250); await settle(f);
+    assert.equal(archiveCalls().length, 4);
+    f.selectPlayer(first.id);
+    await settle(f);
+    const grid = first.element.querySelector('.multistream-toggle');
+    grid.checked = true;
+    grid.dispatchEvent(new Event('change'));
+    await settle(f);
+    assert.deepEqual(archiveCalls().slice(4), [first.id, second.id]);
+
+    f.document.hidden = true;
+    f.document.dispatchEvent(new Event('visibilitychange'));
+    now += 31000;
+    await f.tick(250); await settle(f);
+    assert.equal(archiveCalls().length, 6);
+    f.document.hidden = false;
+    f.document.dispatchEvent(new Event('visibilitychange'));
+    await settle(f);
+    assert.deepEqual(archiveCalls().slice(6), [first.id, second.id]);
+  } finally { f.disconnect(); }
+});
+
 test('growing replay chat retries the published tail and finished VOD chat stops', async () => {
   for (const isLiveArchive of [true, false]) {
     let page = { outcome: 'Completed', messages: [], through: 60 };

@@ -13,7 +13,8 @@ internal static partial class TwitchVodVariantPlaylist
 
     // Twitch and Kick both publish these IVS variant names. Preview selection uses
     // the same parser, its ordered quality fallbacks, and its own provider URL policy.
-    internal static Uri Select(string content, Uri baseUri, IReadOnlyList<string> qualities, Func<Uri, bool> isAllowedUri)
+    internal static Uri Select(string content, Uri baseUri, IReadOnlyList<string> qualities, Func<Uri, bool> isAllowedUri,
+        bool videoPreview = false)
     {
         var lines = HlsPlaylistPolicy.SplitLines(content);
         if (lines.Length == 0 || lines[0] != "#EXTM3U") throw Unsupported();
@@ -21,9 +22,13 @@ internal static partial class TwitchVodVariantPlaylist
         foreach (var line in lines.Where(line => line.StartsWith("#EXT-X-MEDIA:", StringComparison.Ordinal)))
         {
             if (!HlsAttributeList.TryParse(line.AsSpan(line.IndexOf(':') + 1), out var attributes)) throw Unsupported();
+            attributes.TryGetValue("TYPE", out var type);
+            // Muted card previews use only the selected video playlist. Kick can
+            // advertise separate captions even when all video variants are muxed.
+            if (videoPreview && type.Value == "SUBTITLES") continue;
             // External audio requires Streamlink's muxing and language selection.
             if (attributes.ContainsKey("URI")) throw Unsupported();
-            if (attributes.TryGetValue("TYPE", out var type) && type.Value == "VIDEO" &&
+            if (type.Value == "VIDEO" &&
                 attributes.TryGetValue("GROUP-ID", out var group) && attributes.TryGetValue("NAME", out var name))
                 if (!groups.TryAdd(group.Value, name.Value)) throw Unsupported();
         }
@@ -39,6 +44,7 @@ internal static partial class TwitchVodVariantPlaylist
                 ? groupName : attributes.TryGetValue("IVS-NAME", out var identifier) ? identifier.Value : null;
             if (name is null) throw Unsupported();
             name = name.ToLowerInvariant();
+            if (videoPreview && QualityOption.IsAudioOnly(name)) continue;
             var match = ResolutionName().Match(name);
             var weight = name == "source" ? int.MaxValue : 0;
             if (match.Success)

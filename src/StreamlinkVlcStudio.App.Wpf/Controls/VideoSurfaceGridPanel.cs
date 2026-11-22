@@ -68,10 +68,7 @@ public sealed class VideoSurfaceGridPanel : Panel
 
         foreach (UIElement child in InternalChildren)
         {
-            var column = Math.Clamp(Grid.GetColumn(child), 0, columns - 1);
-            var row = Math.Clamp(Grid.GetRow(child), 0, rows - 1);
-            var columnSpan = Math.Clamp(Grid.GetColumnSpan(child), 1, columns - column);
-            var rowSpan = Math.Clamp(Grid.GetRowSpan(child), 1, rows - row);
+            var (_, _, rowSpan, columnSpan) = GetCellPlacement(child, rows, columns);
             child.Measure(new Size(childWidth * columnSpan, childHeight * rowSpan));
             desiredWidth = Math.Max(
                 desiredWidth,
@@ -97,10 +94,7 @@ public sealed class VideoSurfaceGridPanel : Panel
 
         foreach (UIElement child in InternalChildren)
         {
-            var column = Math.Clamp(Grid.GetColumn(child), 0, columns - 1);
-            var row = Math.Clamp(Grid.GetRow(child), 0, rows - 1);
-            var columnSpan = Math.Clamp(Grid.GetColumnSpan(child), 1, columns - column);
-            var rowSpan = Math.Clamp(Grid.GetRowSpan(child), 1, rows - row);
+            var (row, column, rowSpan, columnSpan) = GetCellPlacement(child, rows, columns);
 
             var leftPixels = gridBounds.Left + GetPartitionBoundary(gridBounds.Width, column, columns);
             var rightPixels = gridBounds.Left + GetPartitionBoundary(gridBounds.Width, column + columnSpan, columns);
@@ -180,10 +174,7 @@ public sealed class VideoSurfaceGridPanel : Panel
                 continue;
             }
 
-            var column = Math.Clamp(Grid.GetColumn(child), 0, columns - 1);
-            var row = Math.Clamp(Grid.GetRow(child), 0, rows - 1);
-            var columnSpan = Math.Clamp(Grid.GetColumnSpan(child), 1, columns - column);
-            var rowSpan = Math.Clamp(Grid.GetRowSpan(child), 1, rows - row);
+            var (_, _, rowSpan, columnSpan) = GetCellPlacement(child, rows, columns);
             ratios.Add(aspectRatio * rowSpan / columnSpan);
         }
 
@@ -197,6 +188,15 @@ public sealed class VideoSurfaceGridPanel : Panel
         return ratios.Count % 2 == 1
             ? ratios[middle]
             : (ratios[middle - 1] + ratios[middle]) / 2;
+    }
+
+    private static (int Row, int Column, int RowSpan, int ColumnSpan) GetCellPlacement(UIElement child, int rows, int columns)
+    {
+        var row = Math.Clamp(Grid.GetRow(child), 0, rows - 1);
+        var column = Math.Clamp(Grid.GetColumn(child), 0, columns - 1);
+        return (row, column,
+            Math.Clamp(Grid.GetRowSpan(child), 1, rows - row),
+            Math.Clamp(Grid.GetColumnSpan(child), 1, columns - column));
     }
 
     protected override void OnVisualChildrenChanged(DependencyObject visualAdded, DependencyObject visualRemoved)

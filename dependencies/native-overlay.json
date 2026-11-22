@@ -16,8 +16,8 @@
     },
     {
       "path": "src/StreamlinkVlcStudio.Infrastructure/Vlc/BundledOverlay/build/vlc_chat_overlay.exe",
-      "length": 508992,
-      "sha256": "5C72ECAD079F425E4597DB6E43DF413736A20AA2F0D7A830BC79C6A6B89683C7",
+      "length": 507312,
+      "sha256": "A3ED79B5CE6B6F16ECC6DE14D7227A147F60FC03A895B903CF9A91970CC6EA40",
       "authenticode": "NotSigned"
     }
   ]

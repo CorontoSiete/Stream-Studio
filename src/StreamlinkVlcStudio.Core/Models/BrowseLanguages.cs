@@ -44,9 +44,15 @@ public static class BrowseLanguages
 
     public static string Normalize(string? language)
     {
-        var code = (language ?? "").Trim().ToLowerInvariant();
-        if (!Options.Any(option => option.Code == code))
+        if (!TryNormalize(language, out var code))
             throw new ArgumentException("Choose a language from the discovery language list.", nameof(language));
         return code;
+    }
+
+    public static bool TryNormalize(string? language, out string code)
+    {
+        var normalized = (language ?? "").Trim().ToLowerInvariant();
+        code = normalized;
+        return Options.Any(option => option.Code == normalized);
     }
 }

@@ -230,7 +230,7 @@ internal static partial class ApplicationTestCatalog
             }
         });
 
-    private static void LayoutStudioPolishWindow(MainWindow window, Size size)
+    internal static void LayoutStudioPolishWindow(MainWindow window, Size size)
     {
         var root = (FrameworkElement)window.Content;
         root.Measure(size);

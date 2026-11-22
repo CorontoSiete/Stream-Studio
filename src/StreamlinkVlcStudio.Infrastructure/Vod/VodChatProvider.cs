@@ -12,7 +12,7 @@ namespace StreamlinkVlcStudio.Infrastructure.Vod;
 /// </summary>
 public sealed class VodChatProvider : IVodChatProvider
 {
-    private static readonly HttpClient SharedHttpClient = HttpClientFactory.Create(
+    private static readonly HttpClient SharedHttpClient = HttpClientFactory.CreateForText(
         TimeSpan.FromSeconds(20),
         includeUserAgent: true);
 

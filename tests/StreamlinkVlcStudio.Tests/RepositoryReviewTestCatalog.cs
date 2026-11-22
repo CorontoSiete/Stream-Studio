@@ -12,6 +12,7 @@ internal static class RepositoryReviewTestCatalog
         ("repository review: canceled Kick waiters can recover refreshed credentials", KickCanceledRefreshAsync),
         ("repository review: active tab starts can finish after disposal", TabStartDisposalAsync),
         ("repository review: queued tab starts cannot run after disposal", QueuedTabStartDisposalAsync),
+        ("repository review: disposing an operation gate rejects queued callers before active work finishes", DisposedOperationGateAsync),
         ("repository review: cancellation wins a concurrently released operation slot", CanceledOperationSlotAsync),
         ("repository review: optional catalogs tolerate unsupported charsets", OptionalCatalogCharsetAsync),
         ("repository review: updater disposal preserves in-flight errors", UpdaterDisposalAsync),
@@ -219,6 +220,19 @@ internal static class RepositoryReviewTestCatalog
 
         using var next = await gate.EnterAsync(CancellationToken.None).AsTask()
             .WaitAsync(TimeSpan.FromSeconds(2));
+    }
+
+    private static async Task DisposedOperationGateAsync()
+    {
+        using var gate = new AsyncOperationGate();
+        using var active = await gate.EnterAsync(CancellationToken.None);
+        var queued = gate.EnterAsync(CancellationToken.None).AsTask();
+        Assert.True(!queued.IsCompleted);
+
+        gate.Dispose();
+
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => queued.WaitAsync(TimeSpan.FromSeconds(2)));
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => gate.EnterAsync(CancellationToken.None).AsTask());
     }
 
     private static async Task OptionalCatalogCharsetAsync()

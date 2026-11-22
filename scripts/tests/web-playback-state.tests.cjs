@@ -3,6 +3,52 @@ const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const { fixture } = require('./helpers/web-player-fixture.cjs');
 
+test('manual sign-in supersedes a pending session restore without inheriting preferences', async () => {
+  const reply = body => ({ ok: true, text: async () => JSON.stringify(body) });
+  const settings = { defaultQuality: 'best', qualities: ['best'], accounts: {}, preferences: {} };
+  for (const phase of ['session', 'settings']) {
+    const started = Promise.withResolvers(), release = Promise.withResolvers();
+    let restoreSignal;
+    const f = fixture({ onRequest: async (url, input, options) => {
+      if (url === '/api/' + phase && (phase === 'session' || options.headers['X-CSRF-Token'] === 'previous')) {
+        restoreSignal = options.signal;
+        started.resolve();
+        await release.promise;
+        return reply(phase === 'session' ? { csrf: 'previous', username: 'Previous' } : settings);
+      }
+      if (url === '/api/session') return reply({ csrf: 'previous', username: 'Previous' });
+      if (url === '/api/login') {
+        assert.equal(input.username, 'Current');
+        assert.equal(input.password, 'fixture password');
+        return reply({ csrf: 'current', username: 'Current' });
+      }
+      if (url === '/api/settings') return reply(settings);
+    } });
+    f.disconnect();
+    f.setPreferences({ volumes: { 'Twitch:streamer': 0.2 }, size: 29 });
+    const restoring = f.restoreSession();
+    try {
+      await started.promise;
+      f.document.querySelector('#username').value = 'Current';
+      f.document.querySelector('#password').value = 'fixture password';
+      f.document.querySelector('#login-form').dispatchEvent(new Event('submit', { cancelable: true }));
+      await new Promise(setImmediate);
+      await f.flush();
+      assert.equal(restoreSignal?.aborted, true, phase);
+      release.resolve();
+      await restoring;
+      assert.equal(f.state.csrf, 'current', phase);
+      assert.equal(f.document.querySelector('#signed-in-user').textContent, 'Current');
+      assert.equal(f.document.querySelector('#chat-size').value, 16);
+      assert.equal((await f.open()).video.volume, 1);
+    } finally {
+      release.resolve();
+      await restoring;
+      f.disconnect();
+    }
+  }
+});
+
 test('live playback retries recording watch history after a temporary failure', async () => {
   let attempts = 0;
   let time = Date.now();
@@ -667,6 +713,25 @@ test('quality replacement preserves manual pause and playback speed', async () =
   assert.equal(replacement.video.playbackRate, 1.5);
   assert.equal(replacement.element.querySelector('.speed').value, '1.5');
   f.disconnect();
+});
+
+test('theater buttons reflect the shared mode across players, reloads and navigation', async () => {
+  const f = fixture();
+  const pressed = p => p.element.querySelector('[data-action=theater]').getAttribute('aria-pressed');
+  try {
+    const first = await f.open({ key: 'first' }), second = await f.open({ key: 'second' });
+    await f.playerAction(first, 'theater');
+    assert.equal(pressed(first), 'true');
+    assert.equal(pressed(second), 'true');
+
+    const replacement = await f.openPlayer(second.source, second);
+    assert.equal(pressed(replacement), 'true');
+
+    await f.showPage('settings');
+    assert.equal(f.document.querySelector('#studio').classList.contains('theater'), false);
+    assert.equal(pressed(first), 'false');
+    assert.equal(pressed(replacement), 'false');
+  } finally { f.disconnect(); }
 });
 
 test('reloading a player keeps its position in the channel list and grid', async () => {

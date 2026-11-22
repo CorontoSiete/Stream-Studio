@@ -39,6 +39,7 @@ static ULONGLONG resource_clock(void)
     return resource_use_realtime ? GetTickCount64() : resource_clock_ms;
 }
 static bool fail_next_surface = false;
+static bool hide_next_surface_pixels = false;
 static HBITMAP resource_create_dib(HDC dc, const BITMAPINFO *info, UINT usage,
                                    void **pixels, HANDLE section, DWORD offset)
 {
@@ -47,7 +48,12 @@ static HBITMAP resource_create_dib(HDC dc, const BITMAPINFO *info, UINT usage,
         *pixels = NULL;
         return NULL;
     }
-    return CreateDIBSection(dc, info, usage, pixels, section, offset);
+    HBITMAP bitmap = CreateDIBSection(dc, info, usage, pixels, section, offset);
+    if (hide_next_surface_pixels) {
+        hide_next_surface_pixels = false;
+        *pixels = NULL;
+    }
+    return bitmap;
 }
 static bool fail_next_draw = false;
 static void (*after_draw)(void) = NULL;
@@ -417,6 +423,25 @@ static void test_static_frames(void)
     renderer_destroy(&r);
     puts("PASS unchanged frames reuse their pixels; messages, scrolling and resize match fresh rendering");
 }
+
+#ifndef RESOURCE_BASELINE
+static void test_failed_renderer_init(void)
+{
+    renderer_t r;
+    DWORD handles = GetGuiResources(GetCurrentProcess(), GR_GDIOBJECTS);
+    fail_next_surface = true;
+    CHECK(!renderer_init(&r, 340, 292));
+    CHECK(!fail_next_surface && !r.mem_dc);
+    hide_next_surface_pixels = true;
+    CHECK(!renderer_init(&r, 340, 292));
+    CHECK(!hide_next_surface_pixels && !r.mem_dc && !r.dib_bitmap);
+    CHECK(GetGuiResources(GetCurrentProcess(), GR_GDIOBJECTS) == handles);
+    CHECK(renderer_init(&r, 340, 292));
+    renderer_destroy(&r);
+    CHECK(GetGuiResources(GetCurrentProcess(), GR_GDIOBJECTS) == handles);
+    puts("PASS failed renderer initialization releases graphics handles and can retry");
+}
+#endif
 
 static void message_during_draw(void) { push_message(9988, false); }
 
@@ -878,6 +903,7 @@ int main(int argc, char **argv)
         test_pipe_reconnection();
         test_resize_scale_and_cleanup();
 #ifndef RESOURCE_BASELINE
+        test_failed_renderer_init();
         test_obsolete_image_loads();
         test_unicode_size_state();
 #endif

@@ -148,7 +148,7 @@ internal static partial class CodeCleanupTestCatalog
             coordinator.Schedule(TimeSpan.FromMilliseconds(100), () => pending.TrySetResult());
 
             Assert.Throws<ArgumentOutOfRangeException>(() => coordinator.Schedule(delay,
-                () => throw new InvalidOperationException("A rejected replacement must never run.")));
+                () => throw new InvalidOperationException("A rejected replacement must never run."), dispatch: action => action()));
 
             await pending.Task.WaitAsync(TimeSpan.FromSeconds(2));
         }

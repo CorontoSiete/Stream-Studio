@@ -1001,7 +1001,7 @@ internal static partial class ApplicationTestCatalog
         return listBoxItem;
     }
 
-    static IEnumerable<T> FindVisualDescendants<T>(System.Windows.DependencyObject root)
+    internal static IEnumerable<T> FindVisualDescendants<T>(System.Windows.DependencyObject root)
         where T : System.Windows.DependencyObject
     {
         var childCount = VisualTreeHelper.GetChildrenCount(root);

@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const { webcrypto } = require('node:crypto');
 const source = fs.readFileSync(path.resolve(__dirname, '../../../src/StreamlinkVlcStudio.WebClient/Assets/app.js'), 'utf8');
 
 function fixture({ storage = new Map(), volumes = new Map(), layouts = new Map(), media = 'hls', userAgent = 'Desktop', onRequest, now = Date.now, code = source } = {}) {
@@ -11,10 +12,13 @@ function fixture({ storage = new Map(), volumes = new Map(), layouts = new Map()
   class Element extends EventTarget {
     constructor() {
       super();
-      this.elements = new Map(); this.children = []; this.dataset = {}; this.value = ''; this.checked = false;
+      this.elements = new Map(); this.attributes = new Map(); this.children = []; this.dataset = {}; this.value = ''; this.checked = false;
       const classes = new Set();
       this.classList = { add: (...items) => items.forEach(item => classes.add(item)), remove: (...items) => items.forEach(item => classes.delete(item)),
-        contains: item => classes.has(item), toggle: (item, active) => active ? classes.add(item) : classes.delete(item) };
+        contains: item => classes.has(item), toggle: (item, active = !classes.has(item)) => {
+          if (active) classes.add(item); else classes.delete(item);
+          return Boolean(active);
+        } };
       this.style = { setProperty() {} }; this.clientWidth = 1440; this.clientHeight = 810;
     }
     querySelector(selector) {
@@ -41,8 +45,9 @@ function fixture({ storage = new Map(), volumes = new Map(), layouts = new Map()
       }
     }
     cloneNode() { return new Element(); }
-    setAttribute() {}
-    removeAttribute() {}
+    setAttribute(name, value) { this.attributes.set(name, String(value)); }
+    getAttribute(name) { return this.attributes.get(name) ?? null; }
+    removeAttribute(name) { this.attributes.delete(name); }
     focus() { document.activeElement = this; }
     close() {}
     scrollIntoView() {}
@@ -86,6 +91,7 @@ function fixture({ storage = new Map(), volumes = new Map(), layouts = new Map()
   const volumeKey = p => p.platform.trim() + ':' + p.channel.trim().toLowerCase();
   let opened = 0, target = { channel: 'streamer', platform: 'Twitch', isVod: false, isMp4: false };
   const context = vm.createContext({ document, localStorage, Event, URL, URLSearchParams, Option: Element, Hls, AbortController, DOMException, setTimeout, clearTimeout, Date: class extends Date { static now() { return now(); } },
+    crypto: { getRandomValues: bytes => webcrypto.getRandomValues(bytes) },
     navigator: { userAgent, platform: 'Win32', maxTouchPoints: 0 },
     ResizeObserver: class { observe() {} disconnect() {} },
     window: Object.assign(new EventTarget(), { Hls, scrollTo() {} }), location: { hash: '', pathname: '/', search: '' },
@@ -127,11 +133,11 @@ function fixture({ storage = new Map(), volumes = new Map(), layouts = new Map()
   // Only replace startup authentication. All opening, replacement, closing, audio
   // selection, event handlers and persistence run from the actual application.
   assert.ok(code.includes('  restoreSession();'));
-  vm.runInContext(code.replace('  restoreSession();', '  globalThis.playerTest = { state, load, showPage, openPlayer, closePlayer, playerAction, selectPlayer, cyclePlayer, disconnect, flushVolumes, storeChatGeometry, resizeChat, positionChat, chatGeometry, normalizeHotkey, hotkeyFromEvent, loadHotkeys, setPreferences: value => Object.assign(preferences, value), seedVolumes: values => { for (const [key, volume] of values) streamVolumes.set(key, volume); }, flush: () => queue };'), context);
+  vm.runInContext(code.replace('  restoreSession();', '  globalThis.playerTest = { state, load, showPage, openPlayer, closePlayer, playerAction, selectPlayer, cyclePlayer, disconnect, restoreSession, flushVolumes, storeChatGeometry, resizeChat, positionChat, chatGeometry, normalizeHotkey, hotkeyFromEvent, loadHotkeys, bindCardPreview, loadSavedVolumes, setPreferences: value => Object.assign(preferences, value), flush: () => queue };'), context);
   const app = context.playerTest;
   app.state.authenticated = true;
   app.state.settings = { defaultQuality: 'best', qualities: ['best', '720p'], lowLatency: true };
-  app.seedVolumes(volumes);
+  app.loadSavedVolumes(Object.fromEntries(volumes));
   return { ...app, storage, volumes, volumeWrites, layouts, layoutWrites, closeCalls, requests, localStorage, document, window: context.window,
     tick: async delay => { for (const interval of intervals) if (interval.delay === delay) await interval.callback(); },
     failSave: value => { failLayoutSave = value; },

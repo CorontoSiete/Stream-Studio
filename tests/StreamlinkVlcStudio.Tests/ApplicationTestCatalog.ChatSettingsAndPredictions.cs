@@ -2904,14 +2904,14 @@ internal static partial class ApplicationTestCatalog
         Assert.Equal("tester", tab.ChatMessages.Last().Username);
         Assert.Equal("hello chat", tab.ChatMessages.Last().Message);        await tab.DisposeAsync();
     }),
-    ("sends multilingual chat without splitting Unicode text elements", async () =>
+    ("sends multilingual Kick chat without splitting Unicode text elements", async () =>
     {
         var streamlink = new FakeStreamlinkService();
         var playbackFactory = new FakePlaybackEngineFactory();
         var logger = new MemoryLogger();
         var chatFactory = new FakeChatClientFactory();
         var tab = TestViewModels.CreateTab(
-            StreamInputParser.Parse("albralelie", PlatformKind.Twitch),
+            StreamInputParser.Parse("albralelie", PlatformKind.Kick),
             "best",
             streamlink,
             playbackFactory,

@@ -267,7 +267,7 @@ public sealed class TwitchChatClient : IChatClient, ITwitchPredictionClient
 
     public async Task SendMessageAsync(string message, CancellationToken cancellationToken = default)
     {
-        var sanitized = SanitizeMessage(message);
+        var sanitized = ChatTextNormalizer.NormalizeSingleLine(message);
         if (string.IsNullOrWhiteSpace(sanitized))
         {
             return;
@@ -293,13 +293,14 @@ public sealed class TwitchChatClient : IChatClient, ITwitchPredictionClient
                 throw new InvalidOperationException("Twitch chat is not connected.");
             }
 
-            sanitized = TruncateIrcMessage(channel, sanitized);
+            sanitized = TwitchIrcProtocol.TruncateChatMessage(channel, sanitized);
             if (sanitized.Length == 0)
             {
                 return;
             }
 
-            await WriteIrcLineAsync(connectedWriter, $"PRIVMSG #{channel} :{sanitized}", cancellationToken).ConfigureAwait(false);
+            await WriteIrcLineAsync(connectedWriter, TwitchIrcProtocol.ChatMessagePrefix(channel) + sanitized, cancellationToken)
+                .ConfigureAwait(false);
         }
         finally
         {
@@ -357,7 +358,7 @@ public sealed class TwitchChatClient : IChatClient, ITwitchPredictionClient
             request,
             context.AccessToken,
             context.ClientId,
-            requestToken), cancellationToken, RaisePredictionReceived);
+            requestToken), cancellationToken);
     }
 
     public Task<TwitchPrediction> LockPredictionAsync(string predictionId, CancellationToken cancellationToken = default)
@@ -367,7 +368,7 @@ public sealed class TwitchChatClient : IChatClient, ITwitchPredictionClient
             predictionId,
             context.AccessToken,
             context.ClientId,
-            requestToken), cancellationToken, RaisePredictionReceived);
+            requestToken), cancellationToken);
     }
 
     public Task<TwitchPrediction> CancelPredictionAsync(string predictionId, CancellationToken cancellationToken = default)
@@ -377,7 +378,7 @@ public sealed class TwitchChatClient : IChatClient, ITwitchPredictionClient
             predictionId,
             context.AccessToken,
             context.ClientId,
-            requestToken), cancellationToken, RaisePredictionReceived);
+            requestToken), cancellationToken);
     }
 
     public Task<TwitchPrediction> ResolvePredictionAsync(
@@ -391,13 +392,12 @@ public sealed class TwitchChatClient : IChatClient, ITwitchPredictionClient
             winningOutcomeId,
             context.AccessToken,
             context.ClientId,
-            requestToken), cancellationToken, RaisePredictionReceived);
+            requestToken), cancellationToken);
     }
 
-    private async Task<TPrediction> RunPredictionRequestAsync<TPrediction>(
-        Func<PredictionContext, CancellationToken, Task<TPrediction>> request,
-        CancellationToken cancellationToken,
-        Action<TPrediction>? completed)
+    private async Task<TwitchPrediction> RunPredictionRequestAsync(
+        Func<PredictionContext, CancellationToken, Task<TwitchPrediction>> request,
+        CancellationToken cancellationToken)
     {
         var requestCancellation = BeginPredictionRequest(cancellationToken);
         var lockAcquired = false;
@@ -407,7 +407,7 @@ public sealed class TwitchChatClient : IChatClient, ITwitchPredictionClient
             lockAcquired = true;
             ThrowIfDisposed();
             var prediction = await request(GetPredictionContext(), requestCancellation.Token).ConfigureAwait(false);
-            completed?.Invoke(prediction);
+            RaisePredictionReceived(prediction);
             return prediction;
         }
         finally
@@ -803,38 +803,6 @@ public sealed class TwitchChatClient : IChatClient, ITwitchPredictionClient
         {
             writerLock.Release();
         }
-    }
-
-    private static string SanitizeMessage(string message)
-    {
-        return ChatTextNormalizer.NormalizeSingleLine(message);
-    }
-
-    internal static string TruncateIrcMessage(string channel, string message)
-    {
-        var availableBytes = PayloadLimits.TwitchOutboundIrcBytes -
-            Encoding.UTF8.GetByteCount($"PRIVMSG #{channel} :") -
-            2;
-        if (availableBytes <= 0)
-        {
-            return "";
-        }
-
-        var usedBytes = 0;
-        var enumerator = System.Globalization.StringInfo.GetTextElementEnumerator(message);
-        while (enumerator.MoveNext())
-        {
-            var element = enumerator.GetTextElement();
-            var elementBytes = Encoding.UTF8.GetByteCount(element);
-            if (usedBytes > availableBytes - elementBytes)
-            {
-                return message[..enumerator.ElementIndex];
-            }
-
-            usedBytes += elementBytes;
-        }
-
-        return message;
     }
 
     internal async Task AwaitIrcHandshakeAsync(

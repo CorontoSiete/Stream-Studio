@@ -4,6 +4,7 @@ internal static partial class StreamHoverPreviewSourceTestCatalog
 {
     private static IReadOnlyList<(string Name, Func<Task> Run)> FormatTests =>
     [
+        ("stream hover preview: desktop Kick plays video directly when captions are separate", DesktopKickCaptionsAsync),
         ("stream hover preview: frame-rate quality names keep the selected preview small", FrameRateQualitiesAsync),
         ("stream hover preview: fragmented MP4 maps and segments are validated and refreshed", FragmentedMp4Async),
         ("stream hover preview: malformed unsafe ranged and missing MP4 maps retain fallback", InvalidFragmentedMp4Async),
@@ -25,6 +26,21 @@ internal static partial class StreamHoverPreviewSourceTestCatalog
         #EXTINF:2.0,
         second.m4s
         """;
+
+    private static async Task DesktopKickCaptionsAsync()
+    {
+        using var fixture = new Fixture
+        {
+            MasterText = Master.Replace("IVS-NAME=\"360p\"", "IVS-NAME=\"360p\",SUBTITLES=\"captions\"") + "\n" +
+                "#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID=\"captions\",NAME=\"English\",URI=\"captions.m3u8\""
+        };
+
+        await using var source = (await fixture.Resolver.OpenAsync(Request(PlatformKind.Kick), CancellationToken.None))!;
+        using var client = new HttpClient();
+        Assert.Contains("/360p/first.ts", await client.GetStringAsync(source.PlaybackUri));
+        Assert.Equal(3, fixture.Requests.Count);
+        Assert.True(fixture.Requests[2].AbsolutePath.EndsWith("/360p/index.m3u8", StringComparison.Ordinal));
+    }
 
     private static async Task FrameRateQualitiesAsync()
     {

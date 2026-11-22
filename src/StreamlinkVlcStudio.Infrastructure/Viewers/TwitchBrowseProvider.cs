@@ -18,7 +18,7 @@ internal sealed class TwitchBrowseProvider : BrowseProviderRequests
         categoryViewerCounts = new TwitchCategoryViewerCountClient(httpClient);
     }
     private const int MaxTwitchPages = 100;
-    private readonly TwitchRateLimitCoordinator twitchRateLimits = new();
+    private static readonly TwitchRateLimitCoordinator TwitchRateLimits = new();
     private readonly TwitchCategoryViewerCountClient categoryViewerCounts;
 
     internal async Task<BrowseResult<BrowseCategory>> GetTwitchCategoriesAsync(
@@ -47,7 +47,7 @@ internal sealed class TwitchBrowseProvider : BrowseProviderRequests
                     new("after", request.Cursor.Trim())
                 ]);
 
-        using var response = await twitchRateLimits.SendAsync(httpClient, url, token, clientId, logger, cancellationToken).ConfigureAwait(false);
+        using var response = await TwitchRateLimits.SendAsync(httpClient, url, token, clientId, logger, cancellationToken).ConfigureAwait(false);
         var responseBody = await BoundedHttpContentReader.ReadJsonAsync(response.Content, cancellationToken).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
@@ -92,7 +92,7 @@ internal sealed class TwitchBrowseProvider : BrowseProviderRequests
                 new("after", request.Cursor.Trim())
             ]);
 
-        using var response = await twitchRateLimits.SendAsync(httpClient, url, token, clientId, logger, cancellationToken).ConfigureAwait(false);
+        using var response = await TwitchRateLimits.SendAsync(httpClient, url, token, clientId, logger, cancellationToken).ConfigureAwait(false);
         var responseBody = await BoundedHttpContentReader.ReadJsonAsync(response.Content, cancellationToken).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
@@ -257,7 +257,7 @@ internal sealed class TwitchBrowseProvider : BrowseProviderRequests
                 "https://api.twitch.tv/helix/streams",
                 query);
 
-            using var response = await twitchRateLimits.SendAsync(httpClient, url, token, clientId, logger, cancellationToken).ConfigureAwait(false);
+            using var response = await TwitchRateLimits.SendAsync(httpClient, url, token, clientId, logger, cancellationToken).ConfigureAwait(false);
             var responseBody = await BoundedHttpContentReader.ReadJsonAsync(response.Content, cancellationToken).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
             {

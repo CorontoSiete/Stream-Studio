@@ -49,6 +49,7 @@ async function main() {
     '--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check',
     '--remote-debugging-port=0', `--user-data-dir=${profile}`, pathToFileURL(page).href
   ], { stdio: 'ignore' });
+  const browserClosed = new Promise(resolve => child.once('close', resolve));
   let socket;
   try {
     const portFile = path.join(profile, 'DevToolsActivePort');
@@ -111,8 +112,9 @@ async function main() {
   } finally {
     socket?.close();
     child.kill();
-    await delay(500);
-    fs.rmSync(profile, { recursive: true, force: true });
+    await browserClosed;
+    // Chrome's child processes can hold profile files briefly after it exits.
+    await fs.promises.rm(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 }
 

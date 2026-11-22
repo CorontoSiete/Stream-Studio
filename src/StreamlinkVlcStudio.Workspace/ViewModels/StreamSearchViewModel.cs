@@ -5,6 +5,7 @@ using StreamlinkVlcStudio.Core.Models;
 using StreamlinkVlcStudio.Core.Parsing;
 using StreamlinkVlcStudio.Core.Services;
 using StreamlinkVlcStudio.Core.Text;
+using StreamlinkVlcStudio.Infrastructure.Threading;
 using static StreamlinkVlcStudio.Core.Text.StringValues;
 
 namespace StreamlinkVlcStudio.Workspace.ViewModels;
@@ -61,7 +62,6 @@ internal sealed class StreamSearchViewModel : HomeFeatureViewModel
     private int activeStreamSearchGeneration;
     private string activeStreamSearchQuality = "";
     private bool isStreamSearchDropdownOpen;
-    private long streamSearchScheduleVersion;
     public ObservableCollection<StreamSearchResultViewModel> StreamSearchResults { get; } = [];
 
     public AsyncRelayCommand AddAndPlayCommand { get; }
@@ -315,24 +315,17 @@ internal sealed class StreamSearchViewModel : HomeFeatureViewModel
             return probes;
         }
 
-        using var throttle = new SemaphoreSlim(StreamSearchMetadataConcurrency);
+        using var throttle = new AsyncOperationGate(StreamSearchMetadataConcurrency);
         return await Task.WhenAll(probes.Select(async probe =>
         {
-            await throttle.WaitAsync(cancellationToken);
-            try
+            using var slot = await throttle.EnterAsync(cancellationToken);
+            var updated = await LoadStreamSearchResultMetadataAsync(probe, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (updated != probe)
             {
-                var updated = await LoadStreamSearchResultMetadataAsync(probe, cancellationToken);
-                cancellationToken.ThrowIfCancellationRequested();
-                if (updated != probe)
-                {
-                    onUpdated?.Invoke(updated);
-                }
-                return updated;
+                onUpdated?.Invoke(updated);
             }
-            finally
-            {
-                throttle.Release();
-            }
+            return updated;
         }));
     }
 
@@ -449,7 +442,7 @@ internal sealed class StreamSearchViewModel : HomeFeatureViewModel
             return probes;
         }
 
-        using var throttle = new SemaphoreSlim(StreamSearchViewerCountConcurrency);
+        using var throttle = new AsyncOperationGate(StreamSearchViewerCountConcurrency);
         var updated = probes.ToArray();
         var tasks = probes.Select(async (probe, index) =>
         {
@@ -458,22 +451,15 @@ internal sealed class StreamSearchViewModel : HomeFeatureViewModel
                 return probe;
             }
 
-            await throttle.WaitAsync(cancellationToken);
-            try
+            using var slot = await throttle.EnterAsync(cancellationToken);
+            var result = await LoadStreamSearchResultViewerCountAsync(probe, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (result != probe)
             {
-                var result = await LoadStreamSearchResultViewerCountAsync(probe, cancellationToken);
-                cancellationToken.ThrowIfCancellationRequested();
-                if (result != probe)
-                {
-                    updated[index] = result;
-                    onUpdated?.Invoke(updated);
-                }
-                return result;
+                updated[index] = result;
+                onUpdated?.Invoke(updated);
             }
-            finally
-            {
-                throttle.Release();
-            }
+            return result;
         });
 
         return await Task.WhenAll(tasks);
@@ -577,33 +563,17 @@ internal sealed class StreamSearchViewModel : HomeFeatureViewModel
 
         var query = NewStreamText.Trim();
         var searchGeneration = streamSearchController.CurrentGeneration;
-        var scheduleVersion = Interlocked.Increment(ref streamSearchScheduleVersion);
         if (string.IsNullOrWhiteSpace(query))
         {
             SetStreamSearchDropdownOpen(false);
             return;
         }
 
-        void StartSearchIfCurrent()
-        {
-            // Cancellation can occur after the timer has already posted to the UI.
-            // Recheck there so a dismissed search cannot reopen the popup later.
-            if (scheduleVersion == Volatile.Read(ref streamSearchScheduleVersion))
-            {
-                _ = RunAutomaticStreamSearchAsync(query, searchGeneration);
-            }
-        }
-
-        if (streamSearchDebounceInterval <= TimeSpan.Zero)
-        {
-            dispatch(StartSearchIfCurrent);
-            return;
-        }
-
         streamSearchController.Schedule(
             streamSearchDebounceInterval,
-            () => dispatch(StartSearchIfCurrent),
-            ReportDebouncedCallbackFailure);
+            () => _ = RunAutomaticStreamSearchAsync(query, searchGeneration),
+            ReportDebouncedCallbackFailure,
+            dispatch);
     }
 
     internal async Task RunAutomaticStreamSearchAsync(string query, int searchGeneration)
@@ -616,11 +586,7 @@ internal sealed class StreamSearchViewModel : HomeFeatureViewModel
         await StartStreamSearchAsync(query, searchGeneration);
     }
 
-    internal void CancelStreamSearchDebounce()
-    {
-        Interlocked.Increment(ref streamSearchScheduleVersion);
-        streamSearchController.CancelScheduled();
-    }
+    internal void CancelStreamSearchDebounce() => streamSearchController.CancelScheduled();
 
     internal CancellationTokenSource ReplaceStreamSearchCancellation()
     {

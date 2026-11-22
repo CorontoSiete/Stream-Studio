@@ -58,14 +58,14 @@ public partial class MainWindow
 
     private void HomeSearchPopup_PreviewKeyDown(object sender, KeyEventArgs e)
     {
-        var input = new HotkeyGesture(HotkeyGesture.GetEventKey(e), Keyboard.Modifiers);
+        var input = new HotkeyGesture(HotkeyGesture.GetEventKey(e), e.KeyboardDevice.Modifiers);
         if (TryNavigateHomeSearch(input, Keyboard.FocusedElement))
         {
             e.Handled = true;
             return;
         }
 
-        if (e.Key != Key.Escape || Keyboard.Modifiers != ModifierKeys.None ||
+        if (e.Key != Key.Escape || input.Modifiers != ModifierKeys.None ||
             DataContext is not MainViewModel model) return;
 
         HomeStreamSearchTextBox.Focus();
@@ -162,7 +162,7 @@ public partial class MainWindow
 
     private void VodStreamerSearchTextBox_KeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key != Key.Enter || Keyboard.Modifiers != ModifierKeys.None) return;
+        if (e.Key != Key.Enter || e.KeyboardDevice.Modifiers != ModifierKeys.None) return;
         var command = (DataContext as MainViewModel)?.SearchTwitchVodsCommand;
         if (command?.CanExecute(null) == true) command.Execute(null);
         e.Handled = true;

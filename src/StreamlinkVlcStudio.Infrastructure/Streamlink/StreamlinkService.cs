@@ -5,6 +5,7 @@ using StreamlinkVlcStudio.Core.Models;
 using StreamlinkVlcStudio.Core.Services;
 using StreamlinkVlcStudio.Infrastructure.Limits;
 using StreamlinkVlcStudio.Infrastructure.Logging;
+using StreamlinkVlcStudio.Infrastructure.Previews;
 using StreamlinkVlcStudio.Infrastructure.Processes;
 using StreamlinkVlcStudio.Infrastructure.Text;
 using StreamlinkVlcStudio.Infrastructure.Twitch;
@@ -25,8 +26,9 @@ public sealed partial class StreamlinkService : IStreamlinkService
     private readonly IAppLogger logger;
     private readonly TwitchVodUrlResolver? vodUrlResolver;
     private readonly Func<StreamTransportRequest, bool> canResolveVodDirectly;
-    private readonly Func<StreamTransportRequest, CancellationToken, Task<StreamlinkResolvedUrl>> resolveWithStreamlink;
+    private readonly Func<StreamTransportRequest, string?, CancellationToken, Task<StreamlinkResolvedUrl>> resolveWithStreamlink;
     private readonly Func<CancellationToken, Task<string?>>? twitchPlaybackTokenProvider;
+    private readonly LivePreviewSourceResolver livePreviewSourceResolver;
 
     public StreamlinkService(IAppLogger logger) : this(logger, new TwitchVodUrlResolver()) { }
 
@@ -40,13 +42,16 @@ public sealed partial class StreamlinkService : IStreamlinkService
     internal StreamlinkService(IAppLogger logger, TwitchVodUrlResolver? vodUrlResolver,
         Func<StreamTransportRequest, bool>? canResolveVodDirectly = null,
         Func<StreamTransportRequest, CancellationToken, Task<StreamlinkResolvedUrl>>? resolveWithStreamlink = null,
-        Func<CancellationToken, Task<string?>>? twitchPlaybackTokenProvider = null)
+        Func<CancellationToken, Task<string?>>? twitchPlaybackTokenProvider = null,
+        LivePreviewSourceResolver? livePreviewSourceResolver = null)
     {
         this.logger = logger;
         this.vodUrlResolver = vodUrlResolver;
         this.canResolveVodDirectly = canResolveVodDirectly ?? DirectVodResolutionPolicy.CanUse;
-        this.resolveWithStreamlink = resolveWithStreamlink ?? ResolveWithStreamlinkAsync;
+        this.resolveWithStreamlink = resolveWithStreamlink is null ? ResolveWithStreamlinkAsync :
+            (request, _, token) => resolveWithStreamlink(request, token);
         this.twitchPlaybackTokenProvider = twitchPlaybackTokenProvider;
+        this.livePreviewSourceResolver = livePreviewSourceResolver ?? new();
     }
 
     public async Task<StreamlinkProbeResult> ProbeStreamsAsync(StreamTransportRequest request, CancellationToken cancellationToken = default)
@@ -113,16 +118,17 @@ public sealed partial class StreamlinkService : IStreamlinkService
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-        return await resolveWithStreamlink(request, cancellationToken).ConfigureAwait(false);
+        var playbackToken = await GetTwitchPlaybackTokenAsync(request, cancellationToken).ConfigureAwait(false);
+        return await resolveWithStreamlink(request, playbackToken, cancellationToken).ConfigureAwait(false);
     }
 
-    private async Task<StreamlinkResolvedUrl> ResolveWithStreamlinkAsync(StreamTransportRequest request, CancellationToken cancellationToken)
+    private Task<string?> GetTwitchPlaybackTokenAsync(StreamTransportRequest request, CancellationToken cancellationToken) =>
+        RequiresTwitchVideo(request) && twitchPlaybackTokenProvider is not null && !HasCustomTwitchPlaybackIdentity(request.CustomArguments)
+            ? ReadTwitchPlaybackTokenAsync(cancellationToken) : Task.FromResult<string?>(null);
+
+    private async Task<StreamlinkResolvedUrl> ResolveWithStreamlinkAsync(StreamTransportRequest request, string? playbackToken, CancellationToken cancellationToken)
     {
         var elapsed = Stopwatch.StartNew();
-        // Browser HLS playback needs the same website identity as the desktop HTTP transport.
-        var playbackToken = RequiresTwitchVideo(request) && twitchPlaybackTokenProvider is not null &&
-            !HasCustomTwitchPlaybackIdentity(request.CustomArguments)
-            ? await ReadTwitchPlaybackTokenAsync(cancellationToken).ConfigureAwait(false) : null;
         var psi = CreateRedirectedStartInfo(request.StreamlinkPath, WithTwitchPlaybackToken(BuildStreamUrlArguments(request), playbackToken));
         logger.Write(AppLogLevel.Info, "Streamlink", $"Resolving direct stream URL for {request.Target.Url} ({request.Quality})");
 

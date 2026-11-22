@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Net;
 using StreamlinkVlcStudio.Core.Models;
 using StreamlinkVlcStudio.Core.Security;
 using StreamlinkVlcStudio.Infrastructure.Hls;
@@ -26,9 +27,8 @@ internal sealed class LiveSeekPreviewClient
         DateTimeOffset? startedAt, CancellationToken cancellationToken)
     {
         using var response = await GetAsync(uri, platform, cancellationToken).ConfigureAwait(false);
-        response.EnsureSuccessStatusCode();
-        var text = await BoundedHttpContentReader.ReadStringAsync(response.Content, 2 * 1024 * 1024,
-            cancellationToken).ConfigureAwait(false);
+        var text = await BoundedHttpContentReader.ReadPlaylistAsync(response, cancellationToken,
+            maxBytes: 2 * 1024 * 1024).ConfigureAwait(false);
         return LiveSeekPlaylist.Parse(text, response.RequestMessage?.RequestUri ?? uri, platform, startedAt);
     }
 
@@ -37,9 +37,13 @@ internal sealed class LiveSeekPreviewClient
     {
         using var response = await GetAsync(uri, platform, cancellationToken).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
-        return await BoundedByteReader.ReadOrThrowAsync(response.Content,
+        if (response.StatusCode != HttpStatusCode.OK)
+            throw new InvalidDataException("The seek preview server did not return a complete media segment.");
+        var bytes = await BoundedByteReader.ReadOrThrowAsync(response.Content,
             initialization ? 1024 * 1024 : 16 * 1024 * 1024, cancellationToken)
             .ConfigureAwait(false);
+        if (bytes.Length == 0) throw new InvalidDataException("The seek preview media segment was empty.");
+        return bytes;
     }
 
     private Task<HttpResponseMessage> GetAsync(Uri uri, PlatformKind platform, CancellationToken token) =>
@@ -63,29 +67,30 @@ internal sealed record LiveSeekPlaylist(IReadOnlyList<LiveSeekSegment> Segments)
             !ProviderUriPolicy.IsApprovedReplayUri(uri, platform)) return null;
         var segments = new List<LiveSeekSegment>();
         double? position = null;
+        string? programDateTime = null;
         double? duration = null;
-        var sequence = 0L;
+        long? sequence = null;
+        var hasMediaSegment = false;
         var encrypted = false;
         var gap = false;
         Uri? initializationUri = null;
         var initializationEncrypted = false;
         foreach (var line in lines.Skip(1))
         {
-            if (line.StartsWith("#EXT-X-MEDIA-SEQUENCE:", StringComparison.Ordinal))
+            if (HlsPlaylistPolicy.TryGetTagValue(line, HlsPlaylistPolicy.MediaSequenceTag, out var sequenceValue))
             {
-                if (!long.TryParse(line[22..], NumberStyles.None, CultureInfo.InvariantCulture, out sequence)) return null;
+                if (!HlsPlaylistPolicy.TryReadSequence(sequenceValue, hasMediaSegment, ref sequence)) return null;
             }
-            else if (line.StartsWith("#EXT-X-TWITCH-ELAPSED-SECS:", StringComparison.Ordinal))
+            else if (HlsPlaylistPolicy.TryGetTagValue(line, "#EXT-X-TWITCH-ELAPSED-SECS", out var elapsedValue))
             {
-                if (!TrySeconds(line[27..], out var elapsed)) return null;
+                if (!TrySeconds(elapsedValue, out var elapsed)) return null;
                 position = elapsed;
             }
-            else if (line.StartsWith("#EXT-X-PROGRAM-DATE-TIME:", StringComparison.Ordinal) &&
-                position is null && sequence != 0 && startedAt is { } start)
+            else if (HlsPlaylistPolicy.TryGetTagValue(line, "#EXT-X-PROGRAM-DATE-TIME", out var dateValue) &&
+                position is null && startedAt.HasValue)
             {
-                if (!DateTimeOffset.TryParse(line[25..], CultureInfo.InvariantCulture,
-                    DateTimeStyles.AssumeUniversal, out var time)) return null;
-                position = (time - start).TotalSeconds;
+                // The media sequence can appear after this tag and still apply to the first segment.
+                programDateTime ??= dateValue.ToString();
             }
             else if (line.StartsWith("#EXTINF:", StringComparison.Ordinal))
             {
@@ -111,12 +116,17 @@ internal sealed record LiveSeekPlaylist(IReadOnlyList<LiveSeekSegment> Segments)
             else if (line.StartsWith("#EXT-X-BYTERANGE:", StringComparison.Ordinal) ||
                 line.StartsWith("#EXT-X-STREAM-INF:", StringComparison.Ordinal)) return null;
             else if (line == "#EXT-X-GAP") gap = true;
-            else if (line.Length > 0 && line[0] != '#')
+            else if (line[0] != '#')
             {
                 if (duration is not { } length) return null;
                 // Sequence numbers count segments, not seconds. A sliding playlist needs an
                 // explicit clock; guessing sequence * target-duration shows the wrong frame.
-                if (position is null && sequence != 0) return null;
+                if (position is null && sequence is > 0)
+                {
+                    if (startedAt is not { } start || !DateTimeOffset.TryParse(programDateTime,
+                        CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var time)) return null;
+                    position = (time - start).TotalSeconds;
+                }
                 position ??= 0;
                 if (!ProviderUriPolicy.TryResolveReplayUri(line, uri, platform, out var segmentUri)) return null;
                 var isTransportStream = segmentUri.AbsolutePath.EndsWith(".ts", StringComparison.OrdinalIgnoreCase);
@@ -128,12 +138,13 @@ internal sealed record LiveSeekPlaylist(IReadOnlyList<LiveSeekSegment> Segments)
                 position += length;
                 duration = null;
                 gap = false;
+                hasMediaSegment = true;
             }
         }
         return segments.Count > 0 && duration is null ? new(segments) : null;
     }
 
-    private static bool TrySeconds(string value, out double seconds) =>
+    private static bool TrySeconds(ReadOnlySpan<char> value, out double seconds) =>
         double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out seconds) &&
         double.IsFinite(seconds) && seconds >= 0;
 

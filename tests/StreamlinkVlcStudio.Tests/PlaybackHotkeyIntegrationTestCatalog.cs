@@ -370,7 +370,7 @@ internal static class PlaybackHotkeyIntegrationTestCatalog
             Window = new MainWindow { DataContext = ViewModel };
             typeof(MainWindow).GetField("viewModel", BindingFlags.Instance | BindingFlags.NonPublic)!
                 .SetValue(Window, ViewModel);
-            Source = new HeadlessPresentationSource { RootVisual = Window };
+            Source = new SyntheticKeyboardInput(Window);
         }
 
         public AppSettings Settings { get; }
@@ -378,7 +378,7 @@ internal static class PlaybackHotkeyIntegrationTestCatalog
         public MainWindow Window { get; }
         public StreamTabViewModel First { get; }
         public StreamTabViewModel Second { get; }
-        private HeadlessPresentationSource Source { get; }
+        private SyntheticKeyboardInput Source { get; }
 
         public void FlushBindings()
         {
@@ -387,10 +387,7 @@ internal static class PlaybackHotkeyIntegrationTestCatalog
             Window.Dispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.DataBind);
         }
 
-        public KeyEventArgs CreateKeyEvent(Key key) => new(Keyboard.PrimaryDevice, Source, Environment.TickCount, key)
-        {
-            RoutedEvent = Keyboard.PreviewKeyDownEvent
-        };
+        public KeyEventArgs CreateKeyEvent(Key key) => Source.CreateEvent(key);
 
         public KeyEventArgs Press(Key key)
         {
@@ -407,12 +404,5 @@ internal static class PlaybackHotkeyIntegrationTestCatalog
             Window.Close();
             await ViewModel.DisposeAsync();
         }
-    }
-
-    private sealed class HeadlessPresentationSource : PresentationSource
-    {
-        public override Visual RootVisual { get; set; } = null!;
-        public override bool IsDisposed => false;
-        protected override CompositionTarget GetCompositionTargetCore() => null!;
     }
 }

@@ -35,6 +35,7 @@ if ($Repository -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') {
 }
 
 $authenticode = Get-AuthenticodeSigningConfiguration
+$msiVersion = Get-MsiPropertyValue -Path $InternalMsiPath -Property 'ProductVersion'
 $metadata = [ordered]@{
     schemaVersion = 2
     version = $Version
@@ -46,7 +47,7 @@ $metadata = [ordered]@{
     workflowRunId = $WorkflowRunId
     workflowRunNumber = $WorkflowRunNumber
     workflowRunAttempt = $WorkflowRunAttempt
-    msiProductVersion = (Get-MsiPropertyValue -Path $InternalMsiPath -Property 'ProductVersion')
+    msiProductVersion = $msiVersion
     bundleVersion = $identity.FourPartVersion
     dotnetSdkVersion = [string](Get-Content -LiteralPath (Join-Path $repoRoot 'global.json') -Raw | ConvertFrom-Json).sdk.version
     selfContainedRuntimeVersion = [string](ConvertTo-StableReleaseVersion ([string]$contract.release.dotnetRuntimeVersion))
@@ -61,18 +62,12 @@ $metadata = [ordered]@{
         timestampUrl = if ($authenticode.Enabled) { [string]$authenticode.TimestampUrl } else { $null }
         signerThumbprint = if ($authenticode.Enabled) { [string]$authenticode.CertificateThumbprint } else { $null }
     }
-    artifacts = [ordered]@{
-        setup = (Get-ArtifactRecord $SetupPath 'StreamlinkVlcStudio-Setup.exe')
-        zip = (Get-ArtifactRecord $ZipPath 'StreamlinkVlcStudio-release.zip')
-        sbom = (Get-ArtifactRecord $SbomPath 'StreamStudio.spdx.json')
-        updateManifest = (Get-ArtifactRecord $UpdateManifestPath 'UPDATE-MANIFEST.json')
-        updateSignature = (Get-ArtifactRecord $UpdateSignaturePath 'UPDATE-MANIFEST.sig')
-    }
+    artifacts = (Get-ReleaseMetadataArtifacts $contract $PSBoundParameters)
     internalMsi = [ordered]@{
         public = $false
-        productVersion = (Get-MsiPropertyValue -Path $InternalMsiPath -Property 'ProductVersion')
+        productVersion = $msiVersion
     }
-    nativeInputManifestSha256 = (Get-FileHash -LiteralPath (Join-Path $repoRoot 'dependencies\native-overlay.json') -Algorithm SHA256).Hash.ToLowerInvariant()
+    nativeInputManifestSha256 = Get-FileSha256 (Join-Path $repoRoot 'dependencies\native-overlay.json')
     createdUtc = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
 }
 

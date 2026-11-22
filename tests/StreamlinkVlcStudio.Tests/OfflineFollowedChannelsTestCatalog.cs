@@ -222,6 +222,7 @@ internal static partial class OfflineFollowedChannelsTestCatalog
             {
                 var userIds = QueryValues(uri, "id");
                 profileBatches.Add(userIds.Length);
+                Assert.True(!userIds.Contains("100") && !userIds.Contains("150"));
                 return Response(JsonSerializer.Serialize(new
                 {
                     data = userIds.Select(userId => new { user_id = userId, profile_picture = $"//images.example/{userId}.png" })
@@ -234,6 +235,7 @@ internal static partial class OfflineFollowedChannelsTestCatalog
             {
                 ["slug"] = slug,
                 ["broadcaster_user_id"] = int.Parse(slug[4..], CultureInfo.InvariantCulture) + 100,
+                ["profile_picture"] = slug is "kick00" or "kick50" ? $"https://images.example/{slug}.png" : null,
                 ["stream"] = slug == "kick00" ? new { is_live = true, viewer_count = 42 }
                     : int.Parse(slug[4..], CultureInfo.InvariantCulture) % 2 == 0 ? null : (object)new { is_live = false }
             }).Append(new Dictionary<string, object?> { ["slug"] = "outsider", ["stream"] = null });
@@ -243,8 +245,10 @@ internal static partial class OfflineFollowedChannelsTestCatalog
             new KickTokenProvider((_, _, _) => Task.FromResult<string?>("token")));
         var result = await service.GetLiveFollowedStreamsAsync(settings);
         Assert.SequenceEqual(new[] { 50, 2 }, channelBatches);
-        Assert.SequenceEqual(new[] { 50, 1 }, profileBatches);
+        Assert.SequenceEqual(new[] { 49 }, profileBatches);
         Assert.Equal("kick00", result.Streams.Single().Channel);
+        Assert.Equal("https://images.example/kick00.png", result.Streams.Single().ProfileImageUrl);
+        Assert.Equal("https://images.example/kick50.png", result.OfflineChannels!.Single(channel => channel.Channel == "kick50").ProfileImageUrl);
         Assert.Equal(50, result.OfflineChannels!.Count);
         Assert.Equal(false, result.OfflineChannels.Any(channel => channel.Channel is "missing" or "outsider" or "kick00"));
         Assert.True(result.OfflineChannels.All(channel => channel.ProfileImageUrl.StartsWith("https://images.example/", StringComparison.Ordinal)));

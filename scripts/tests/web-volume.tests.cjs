@@ -84,6 +84,11 @@ test('0%, 100%, native HLS and MP4 restore before media attachment and playback'
   }
 });
 
+test('saved volume keys restore regardless of provider or channel casing', async () => {
+  const f = fixture({ volumes: new Map([['twitch:Streamer', 0.42]]) });
+  await expectVolume(f, 0.42);
+});
+
 test('quality reload, stop/reload and replay replacement preserve the current level', async () => {
   const f = fixture(); let p = await f.open();
   p.video.volume = 0.28; // A replacement must also capture a still-pending volumechange.
@@ -98,6 +103,31 @@ test('quality reload, stop/reload and replay replacement preserve the current le
   p = await f.openPlayer({ key: 'resolved-replay' }, p);
   assert.equal(p.video.firstPlayVolume, 0.28);
   await f.events();
+});
+
+test('a volume edit made during reload is saved by the replacement player', { timeout: 5000 }, async ({ mock }) => {
+  mock.timers.enable({ apis: ['setTimeout'] });
+  const didStart = Promise.withResolvers(), response = Promise.withResolvers();
+  const f = fixture({ onRequest: async (url, input) => {
+    if (url === '/api/open' && input.replacePlayer) {
+      didStart.resolve();
+      await response.promise;
+    }
+  } });
+  try {
+    const first = await f.open();
+    const reloading = f.openPlayer({ ...first.source, quality: '720p' }, first);
+    await didStart.promise;
+    first.video.volume = 0.36;
+    first.video.dispatchEvent(new Event('volumechange'));
+    mock.timers.tick(250);
+    response.resolve();
+    const replacement = await reloading;
+    await f.events();
+    assert.equal(replacement.video.firstPlayVolume, 0.36);
+    assert.deepEqual(f.volumeWrites.map(write => write.player), [replacement.id]);
+    assert.equal(f.volumes.get(volumeKey()), 0.36);
+  } finally { response.resolve(); f.disconnect(); }
 });
 
 test('resolved channel identity is case-insensitive, per platform, and shared with VODs', async () => {
@@ -191,6 +221,46 @@ test('overlapping volume saves preserve a newer change back to the original leve
     await f.closePlayer(p);
     assert.equal(f.volumes.get(volumeKey()), 0.2);
   } finally { response.resolve(); f.disconnect(); }
+});
+
+test('flushing a pending volume write shares the request and preserves the latest adjustment', { timeout: 5000 }, async () => {
+  const started = Promise.withResolvers(), response = Promise.withResolvers();
+  const f = fixture({ onRequest: async (url, input) => {
+    if (url === '/api/volume/save' && input.volume === 0.2) { started.resolve(); await response.promise; }
+  } });
+  try {
+    const live = await f.open();
+    f.target({ isVod: true });
+    const vod = await f.openPlayer({ key: 'same-channel-vod' });
+    live.video.volume = 0.2;
+    const first = f.flushVolumes();
+    await started.promise;
+    vod.video.volume = 0.7;
+    const second = f.flushVolumes();
+    await new Promise(setImmediate);
+    response.resolve();
+    await Promise.all([first, second]);
+    assert.deepEqual(f.volumeWrites.map(write => write.volume), [0.2, 0.7]);
+    assert.equal(f.volumes.get(volumeKey()), 0.7);
+  } finally { response.resolve(); f.disconnect(); }
+});
+
+test('closing a live player does not retry an edit superseded by a VOD for the same channel', async () => {
+  const f = fixture(), live = await f.open();
+  try {
+    live.video.volume = 0.2;
+    f.failVolumeSave(true);
+    await assert.rejects(f.flushVolumes(), /Volume save failed/);
+    f.failVolumeSave(false);
+    f.target({ isVod: true });
+    const vod = await f.openPlayer({ key: 'same-channel-vod' });
+    vod.video.volume = 0.7;
+    vod.video.dispatchEvent(new Event('volumechange'));
+    await f.closePlayer(vod);
+    await f.closePlayer(live);
+    assert.deepEqual(f.volumeWrites.map(write => write.volume), [0.2, 0.7]);
+    assert.equal(f.volumes.get(volumeKey()), 0.7);
+  } finally { f.disconnect(); }
 });
 
 test('failed VOD progress save still stops playback and closes its server session', async () => {

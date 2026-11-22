@@ -4,9 +4,10 @@
   if (new URLSearchParams(location.hash.slice(1)).has('desktop')) history.replaceState(null, '', location.pathname + location.search);
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
-  const state = { csrf: '', sessionVersion: 0, page: 'following', players: [], selected: null, grid: false, settings: null, cursor: '', category: null, vodChannel: null, generation: 0, polling: false, authenticated: false, items: [], followed: [], cardType: 'following', filter: 'all', busy: false };
+  const state = { csrf: '', sessionVersion: 0, page: 'following', players: [], selected: null, grid: false, settings: null, cursor: '', category: null, vodChannel: null, generation: 0, polling: false, authenticated: false, items: [], followed: [], filter: 'all', busy: false };
   const navigationHistory = [];
-  const completedCursors = new Set();
+  let completedPage = null;
+  let cardPreview = null;
   let followingPins = new Set();
   const savingFollowingPins = new Set();
   let followingPinsRefresh = null, lastFollowingPinsRefresh = 0, followingRevision = 0;
@@ -101,7 +102,9 @@
   stackedPlayer?.addEventListener('change', () => state.players.forEach(placeChannelInformation));
   let queue = Promise.resolve();
   const pendingPlayers = new Map();
-  let preferences = { layout: 'docked', size: 16, opacity: 90, keepInactive: true, pauseInactiveVod: true };
+  const defaultPreferences = Object.freeze({ layout: 'docked', size: 16, opacity: 90, keepInactive: true, pauseInactiveVod: true });
+  let preferences = { ...defaultPreferences };
+  let sessionRestore = null;
   const bounded = (value, min, max, fallback) => Number.isFinite(Number(value)) && value !== null ? Math.max(min, Math.min(max, Number(value))) : fallback;
   const hotkeyActions = [
     { id: 'back', label: 'Go back', desktop: 'Mouse4' },
@@ -336,52 +339,77 @@
   }
   const streamVolumes = new Map();
   const volumeSaveTimers = new Map();
+  function loadSavedVolumes(volumes) {
+    for (const [key, value] of Object.entries(volumes || {}))
+      if (Number.isFinite(value) && value >= 0 && value <= 1) streamVolumes.set(key.toLowerCase(), { value });
+  }
   function restoreVolume(p, previous) {
     // Use the resolved channel, so live, replay and downloaded videos share a streamer's level.
-    p.volumeKey = p.platform.trim() + ':' + p.channel.trim().toLowerCase();
-    let volume = streamVolumes.get(p.volumeKey);
-    if (previous?.volumeKey === p.volumeKey) volume = previous.video.volume;
+    p.volumeKey = channelKey(p);
+    const sameChannel = previous?.volumeKey === p.volumeKey;
+    if (sameChannel) rememberVolume(previous);
+    const saved = streamVolumes.get(p.volumeKey);
+    const volume = sameChannel ? previous.video.volume : saved?.value;
     p.volume = volume ?? p.video.volume;
     p.video.volume = p.volume;
-    streamVolumes.set(p.volumeKey, p.volume);
+    if (!saved) streamVolumes.set(p.volumeKey, { value: p.volume });
+    if (sameChannel && saved?.edit && saved.edit === previous.volumeEdit) {
+      p.volumeEdit = saved.edit;
+      previous.volumeEdit = null;
+      scheduleVolumeSave(p);
+    }
   }
   function rememberVolume(p) {
     if (p.closed || p.stopped || p.video.volume === p.volume) return;
     p.volume = p.video.volume;
-    p.volumeDirty = true;
-    p.volumeRevision = (p.volumeRevision || 0) + 1;
-    streamVolumes.set(p.volumeKey, p.volume);
-    clearTimeout(volumeSaveTimers.get(p.id));
+    const edit = p.volumeEdit = { task: null };
+    streamVolumes.set(p.volumeKey, { value: p.volume, edit });
+    scheduleVolumeSave(p);
+  }
+  function scheduleVolumeSave(p) {
+    cancelVolumeSave(p);
     volumeSaveTimers.set(p.id, setTimeout(() => { volumeSaveTimers.delete(p.id); run(() => saveVolume(p)); }, 250));
   }
-  async function saveVolume(p) {
-    if (!state.authenticated || p.closed || p.stopped) return;
-    const volume = p.volume;
-    const revision = p.volumeRevision;
-    await api('volume/save', { player: p.id, volume });
-    // Returning the slider to an earlier level still creates a newer edit.
-    if (p.volumeRevision === revision) p.volumeDirty = false;
+  function saveVolume(p) {
+    if (p.closed || p.stopped || p.resolvingReplacement) return;
+    return savePendingVolume(p, p.id);
+  }
+  async function savePendingVolume(p, playerId) {
+    if (!state.authenticated) return;
+    const edit = p.volumeEdit;
+    if (!edit) return;
+    if (edit.task) return edit.task;
+    // Live and VOD players can share a saved level. Skip retries for edits
+    // superseded by either player. The API queue orders writes already sent.
+    const saved = streamVolumes.get(p.volumeKey);
+    if (saved?.edit !== edit) { p.volumeEdit = null; return; }
+    edit.task = api('volume/save', { player: playerId, volume: saved.value });
+    try {
+      await edit.task;
+      if (p.volumeEdit === edit) p.volumeEdit = null;
+      saved.edit = null;
+    } finally { edit.task = null; }
   }
   function cancelVolumeSave(p) {
     clearTimeout(volumeSaveTimers.get(p.id)); volumeSaveTimers.delete(p.id);
   }
   async function flushVolume(p) {
     cancelVolumeSave(p);
-    if (!p.closed && !p.stopped && p.volumeDirty) await saveVolume(p);
+    await saveVolume(p);
   }
-  async function finishSaves(saves) {
-    const results = await Promise.allSettled(saves);
+  async function finishAll(operations) {
+    const results = await Promise.allSettled(operations);
     const failure = results.find(result => result.status === 'rejected');
     if (failure) throw failure.reason;
   }
   async function flushVolumes() {
-    await finishSaves(state.players.map(p => { rememberVolume(p); return flushVolume(p); }));
+    await finishAll(state.players.map(p => { rememberVolume(p); return flushVolume(p); }));
   }
   async function savePlayerState(p) {
     rememberVolume(p);
     // Capture both values before stop releases the media, and let each save finish
     // even when the other fails. Server disposal must wait for both requests.
-    await finishSaves([flushVolume(p), saveProgress(p)]);
+    await finishAll([flushVolume(p), saveProgress(p)]);
   }
   function cancelVolumeSaves() {
     for (const timer of volumeSaveTimers.values()) clearTimeout(timer);
@@ -469,7 +497,8 @@
     if (signal?.aborted) throw canceledRequest();
     const response = await fetch('/api/' + action, {
       method, credentials: 'same-origin', cache: 'no-store', signal,
-      keepalive: action === 'chat/layout' || action === 'settings/save' || action === 'volume/save' || action === 'progress' || action === 'following/pin',
+      keepalive: action === 'chat/layout' || action === 'settings/save' || action === 'volume/save' ||
+        action === 'progress' || action === 'following/pin' || action === 'preview/close',
       headers: method === 'POST' ? { 'Content-Type': 'application/json', 'X-StreamStudio': '1', 'X-CSRF-Token': state.csrf } : {},
       body: method === 'POST' ? JSON.stringify(input) : undefined
     });
@@ -536,19 +565,20 @@
     return [Math.floor(value / 3600), Math.floor(value / 60) % 60, value % 60].map((n, i) => i ? String(n).padStart(2, '0') : String(n)).join(':');
   }
   function resetSessionWork() {
+    stopCardPreview();
     cancelPageLoad();
     desktopHotkeyRequest?.abort(); desktopHotkeyRequest = null;
     cancelFollowingPinsRefresh();
     followingPins.clear(); savingFollowingPins.clear(); lastFollowingPinsRefresh = 0; followingRevision = 0;
     ++state.sessionVersion; queue = Promise.resolve();
-    state.polling = false; pendingPlayers.clear(); completedCursors.clear(); navigationHistory.length = 0;
-    lastPollingNoticeAt = -Infinity;
+    state.polling = false; pendingPlayers.clear(); resetResults(); navigationHistory.length = 0;
+    lastPollingNoticeAt = -Infinity; lastDownloadRefresh = 0;
     return state.sessionVersion;
   }
   function disconnect() {
     stopLibraryAutoScroll();
     resetSessionWork();
-    clearTimeout(profileSaveTimer); profileSaveTimer = null; profileSaveTask = null; ++profileSaveEpoch;
+    cancelPreferencesSave();
     cancelVolumeSaves();
     closeSearch(); $('#query').value = '';
     ++state.generation;
@@ -561,23 +591,22 @@
     updateActiveStreamButton();
     $('#studio').hidden = true; $('#login').hidden = false; $('#watch').hidden = true;
     state.followed = []; $('#followed-channels').replaceChildren(); $('#sidebar-live-count').textContent = '';
-    state.items = []; $('#cards').replaceChildren(); notice(''); $('#open-dialog').close(); closeChannels();
+    $('#cards').replaceChildren(); notice(''); $('#open-dialog').close(); closeChannels();
     $('#password').value = ''; setLoginPasswordVisible(false); $('#username').focus();
   }
-  async function connected(session) {
+  async function connected(session, signal) {
     const version = resetSessionWork();
     state.csrf = session.csrf;
     state.settings = null;
     state.authenticated = true;
     $('#password').value = ''; setLoginPasswordVisible(false);
-    try { state.settings = await api('settings'); }
+    try { state.settings = await api('settings', {}, signal); }
     catch (error) { if (version === state.sessionVersion) disconnect(); throw error; }
     const savedPreferences = state.settings.preferences || {};
-    preferences = { ...preferences, ...savedPreferences };
-    for (const { setting } of Object.values(hotkeyAmounts)) preferences[setting] = savedPreferences[setting] ?? null;
+    preferences = { ...defaultPreferences, ...savedPreferences };
     categoryLanguages.clear();
-    for (const [key, language] of Object.entries(state.settings.preferences?.categoryLanguages || {})) categoryLanguages.set(key, language);
-    browseDirectoryLanguage = '';
+    for (const [key, language] of Object.entries(savedPreferences.categoryLanguages || {})) categoryLanguages.set(key.toLowerCase(), language);
+    browseDirectoryLanguage = savedPreferences.browseDirectoryLanguage ?? '';
     hotkeyOverrides = state.settings.preferences?.hotkeys || {};
     desktopShortcuts = state.settings.desktopHotkeys || {};
     lastDesktopHotkeysRefresh = Date.now();
@@ -585,8 +614,7 @@
     updateHotkeys();
     $('#hotkey-status').textContent = '';
     cancelVolumeSaves();
-    for (const [key, volume] of Object.entries(preferences.volumes || {}))
-      if (typeof volume === 'number' && Number.isFinite(volume) && volume >= 0 && volume <= 1) streamVolumes.set(key, volume);
+    loadSavedVolumes(preferences.volumes);
     $('#login').hidden = true; $('#studio').hidden = false;
     $('#signed-in-user').textContent = session.username;
     $('#default-quality').replaceChildren(...state.settings.qualities.map(q => new Option(q, q)));
@@ -616,8 +644,13 @@
   $('#password-toggle').addEventListener('click', () => setLoginPasswordVisible($('#password').type === 'password'));
   $('#login-form').addEventListener('input', () => { $('#login-error').textContent = ''; });
   bindAsyncSubmit($('#login-form'), async () => {
+    const credentials = { username: $('#username').value.trim(), password: $('#password').value };
+    if (sessionRestore) {
+      sessionRestore.abort();
+      if (state.authenticated && !state.settings) disconnect();
+    }
     $('#login-error').textContent = '';
-    try { await connected(await request('login', { username: $('#username').value.trim(), password: $('#password').value })); $('#login-error').textContent = ''; }
+    try { await connected(await request('login', credentials)); $('#login-error').textContent = ''; }
     catch (error) { $('#login-error').textContent = error.message; }
   }, { label: $('.login-submit-label'), busyText: 'Connecting…' });
   const logout = () => run(async () => {
@@ -680,29 +713,32 @@
     if (state.category) $('#breadcrumbs').append(button('All categories', () => browseCategory(null, '')), node('span', '/ ' + state.category.name));
   }
   function categoryLanguageKey() {
-    return (discoverPlatform() === 'kick' ? 'Kick' : 'Twitch') + ':' + state.category.id;
+    return (discoverPlatform() + ':' + state.category.id).toLowerCase();
   }
   function restoreDiscoveryLanguage() {
     $('#discover-language').value = state.category ? categoryLanguages.get(categoryLanguageKey()) ?? browseDirectoryLanguage : browseDirectoryLanguage;
   }
   async function browseCategory(category, query = $('#query').value) {
     if (state.category?.id !== category?.id) rememberNavigation();
-    state.category = category; state.items = []; $('#query').value = query; restoreDiscoveryLanguage(); renderBreadcrumbs(); await load();
+    state.category = category; $('#query').value = query; restoreDiscoveryLanguage(); renderBreadcrumbs(); await loadNewResults();
   }
   async function showPage(page, view = null, record = true) {
     if (!pages[page]) return;
     // Selecting the current directory keeps its query, filters, cards and scroll.
     // Refresh remains the explicit way to request new data for this view.
     if (record && !view && $('#studio').dataset.page === page && !state.category &&
-      !$('#studio').classList.contains('watching') && (state.items.length || state.busy)) return;
+      !$('#studio').classList.contains('watching') && (completedPage || state.items.length || state.busy)) return;
     if (record && (page !== state.page || state.category || $('#studio').classList.contains('watching') ||
       view?.query !== undefined && view.query !== $('#query').value || view?.platform !== undefined && view.platform !== discoverPlatform() ||
       view?.vodChannel && (view.vodChannel.channel !== state.vodChannel?.channel || view.vodChannel.platform !== state.vodChannel?.platform))) rememberNavigation();
     stopLibraryAutoScroll();
+    stopCardPreview();
     closeSearch();
-    $('#studio').classList.remove('watching', 'theater');
+    $('#studio').classList.remove('watching');
+    setTheaterMode(false);
     renderFollowedChannels();
-    state.page = page; state.category = view?.category || null; state.cursor = ''; state.items = []; state.filter = view?.filter || 'all';
+    resetResults();
+    state.page = page; state.category = view?.category || null; state.filter = view?.filter || 'all';
     state.vodChannel = view?.vodChannel || null;
     if (view?.platform) $('#discover-platform').value = view.platform;
     restoreDiscoveryLanguage();
@@ -745,6 +781,7 @@
     $('#refresh').disabled = busy; $('#more').disabled = busy;
   }
   function skeletons() {
+    stopCardPreview();
     $('#live-heading').hidden = true;
     $('#cards').classList.remove('categories');
     $('#cards').replaceChildren(...Array.from({ length: 6 }, () => {
@@ -762,15 +799,37 @@
   function cancelPageLoad() {
     pageLoadAbort?.abort(); pageLoadAbort = null;
   }
+  function resetResults() {
+    completedPage = null;
+    state.items = [];
+    state.cursor = '';
+  }
+  function loadNewResults() {
+    resetResults();
+    return load();
+  }
+  function pageRequest(page) {
+    if (page === 'vods') return ['vods', { ...state.vodChannel, type: $('#vod-type').value }];
+    if (page !== 'discover') return [page];
+    const platform = discoverPlatform();
+    if (!state.category) return ['categories', { platform, query: $('#query').value.trim() }];
+    const language = $('#discover-language').value;
+    categoryLanguages.set(categoryLanguageKey(), language);
+    return ['streams', { platform, categoryId: state.category.id, categoryName: state.category.name, language }];
+  }
+  function ensureResultsAvailable(result) {
+    if (result.available === false) throw new Error(result.message || 'Couldn’t load results. Try again.');
+  }
   async function load(append = false) {
+    if (append && (!completedPage || !state.cursor)) return;
     const generation = ++state.generation;
     cancelPageLoad();
     cancelCategoryViewerCounts();
     cancelFollowingHistory();
     cancelFollowingPinsRefresh();
     const page = state.page;
-    if (!append) state.cursor = '';
-    const cursor = state.cursor;
+    const cursor = append ? state.cursor : '';
+    const hasResults = completedPage !== null || state.items.length > 0;
     $('#more').hidden = true; $('#empty-state').hidden = true; notice('');
     if (page === 'settings') { setBusy(false); $('#cards').replaceChildren(); return; }
     if (page === 'vods' && !state.vodChannel) {
@@ -779,39 +838,28 @@
       setBusy(false); return;
     }
     setBusy(true); $('#result-count').textContent = 'Loading…';
-    if (!state.items.length) skeletons();
+    if (!hasResults) skeletons();
     const controller = new AbortController(); pageLoadAbort = controller;
-    const read = (action, input = {}) => api(action, input, controller.signal);
     try {
-      let result;
-      if (page === 'following') result = await read('following');
-      else if (page === 'recent') result = await read('recent');
-      else if (page === 'downloads') result = await read('downloads');
-      else if (page === 'discover') {
-        if (state.category) categoryLanguages.set(categoryLanguageKey(), $('#discover-language').value);
-        result = state.category
-          ? await read('streams', { platform: discoverPlatform(), categoryId: state.category.id, categoryName: state.category.name, cursor, language: $('#discover-language').value })
-          : await read('categories', { platform: discoverPlatform(), query: $('#query').value.trim(), cursor });
-      } else if (page === 'vods') {
-        result = await read('vods', { ...state.vodChannel, type: $('#vod-type').value, cursor });
-      }
+      const pageRead = append ? completedPage.read : pageRequest(page);
+      const [action, input] = pageRead;
+      const result = await api(action, input ? { ...input, cursor } : {}, controller.signal);
       if (controller.signal.aborted || generation !== state.generation || !state.authenticated) return;
+      ensureResultsAvailable(result);
       const items = collectPageItems(result, append ? state.items : []);
       if (page === 'following') storeFollowing(result, items);
-      const type = page === 'discover' && !state.category ? 'categories' : page;
       state.items = append ? [...state.items, ...items] : items;
-      state.cardType = type;
-      if (!append) completedCursors.clear();
-      completedCursors.add(cursor);
+      if (!append) completedPage = { read: pageRead, cursors: new Set() };
+      completedPage.cursors.add(cursor);
       const nextCursor = (result.nextCursor || '').trim();
-      state.cursor = completedCursors.has(nextCursor) ? '' : nextCursor;
+      state.cursor = completedPage.cursors.has(nextCursor) ? '' : nextCursor;
       renderResults();
       if (result.message) notice(result.message);
-      if (type === 'categories' && discoverPlatform() === 'twitch') loadCategoryViewerCounts(generation);
-      if (page === 'following' && !followingRevision && result.offline?.length) loadFollowingHistory(generation);
     } catch (error) {
       if (controller.signal.aborted || error.name === 'AbortError' || generation !== state.generation || !state.authenticated) return;
-      if (!state.items.length) {
+      if (hasResults) renderResults();
+      else {
+        $('#result-count').textContent = '';
         $('#cards').replaceChildren();
         empty('Couldn’t load this page', error.message, 'refresh', 'Try again', () => load());
       }
@@ -819,6 +867,14 @@
     } finally {
       if (pageLoadAbort === controller) pageLoadAbort = null;
       if (generation === state.generation) { setBusy(false); $('#more').hidden = !state.cursor; }
+    }
+    // A failed refresh keeps the previous results. Resume optional requests using
+    // the completed page, whose requests were canceled when this load began.
+    if (completedPage && generation === state.generation && state.authenticated) {
+      const [action, input] = completedPage.read;
+      if (action === 'categories' && input.platform === 'twitch') loadCategoryViewerCounts(generation);
+      if (action === 'following' && !followingRevision && state.items.some(item => item.state === 'Offline'))
+        loadFollowingHistory(generation);
     }
   }
   function collectPageItems(result, previous = []) {
@@ -828,6 +884,24 @@
       if (seen.has(key)) return false;
       seen.add(key); return true;
     });
+  }
+  async function refreshDownloads() {
+    if (state.page !== 'downloads' || pageLoadAbort || state.busy || document.hidden ||
+      document.activeElement?.closest('#cards') || Date.now() - lastDownloadRefresh < 8000) return;
+    const controller = new AbortController();
+    pageLoadAbort = controller;
+    lastDownloadRefresh = Date.now();
+    try {
+      const result = await api('downloads', {}, controller.signal);
+      if (controller.signal.aborted || document.hidden || document.activeElement?.closest('#cards')) return;
+      ensureResultsAvailable(result);
+      const items = collectPageItems(result);
+      if (JSON.stringify(state.items) === JSON.stringify(items)) return;
+      state.items = items;
+      renderResults();
+    } finally {
+      if (pageLoadAbort === controller) pageLoadAbort = null;
+    }
   }
   function storeFollowing(result, items) {
     followingRevision = result.revision || 0;
@@ -908,7 +982,7 @@
           renderLastLive(element, item);
           const card = element.closest('.card');
           const followed = card && followedByKey.get(element.dataset.channelKey);
-          if (followed) cardContent.get(card).signature = cardSignature(followed, state.cardType);
+          if (followed) cardContent.get(card).signature = cardSignature(followed, 'following');
         }
       }
     } catch { /* Cached times remain visible when optional history is unavailable. */ }
@@ -961,7 +1035,7 @@
         const media = card && $('.card-media', card);
         if (media) {
           renderMediaMeta(media, count == null ? 'Viewers unavailable' : count.toLocaleString() + ' viewers', count != null);
-          cardContent.get(card).signature = cardSignature(item, state.cardType);
+          cardContent.get(card).signature = cardSignature(item, 'categories');
         }
       }
     };
@@ -1055,7 +1129,8 @@
   function initials(text) { return (text || 'SS').replace(/[^\p{L}\p{N} ]/gu, '').trim().slice(0, 2).toUpperCase() || 'SS'; }
   function renderResults() {
     let items = state.items;
-    const following = state.page === 'following';
+    const type = state.page === 'discover' && !state.category ? 'categories' : state.page;
+    const following = type === 'following';
     if (following) {
       const live = state.items.filter(i => i.state === 'Live').length;
       $('#following-count').textContent = live; $('#following-count').hidden = live === 0;
@@ -1077,7 +1152,7 @@
         return 0;
       });
     }
-    if (state.cardType === 'vods' || state.cardType === 'downloads') {
+    if (type === 'vods' || type === 'downloads') {
       const timestamp = item => { const value = Date.parse(item.published); return Number.isFinite(value) ? value : -Infinity; };
       items = [...items].sort((a, b) => timestamp(b) - timestamp(a));
     }
@@ -1085,14 +1160,14 @@
     $('#live-heading').hidden = !following || !live;
     const unit = following ? 'channel' : 'result';
     $('#result-count').textContent = items.length + ' ' + unit + (items.length === 1 ? '' : 's');
-    renderCards(items, state.cardType); $('#empty-state').hidden = items.length > 0;
+    renderCards(items, type); $('#empty-state').hidden = items.length > 0;
     if (items.length) return;
     if (following && state.items.length) empty('No channels match these filters', 'Try another platform or turn off Live only to see your offline channels.', 'sliders', 'Reset filters', () => { state.filter = 'all'; $('#live-filter').checked = false; updateFilterButtons(); renderResults(); });
     else if (state.page === 'following') empty('No followed channels yet', 'Find a live stream, then follow the channel to add it here.', 'compass', 'Discover channels', () => showPage('discover'));
     else if (state.page === 'recent') empty('No watch history yet', 'Channels you watch will appear here.', 'history', 'Discover channels', () => showPage('discover'));
     else if (state.page === 'downloads') empty('No downloaded videos yet', 'Browse a channel’s videos and choose Download, or paste a video URL above.', 'download', 'Browse videos', () => showPage('vods'));
     else if (state.page === 'vods') empty('No videos found for this channel', 'Check the channel name, try another video type, or come back after the next broadcast.', 'video', 'Try another channel', () => $('#query').focus());
-    else if (state.page === 'discover' && state.category && $('#discover-language').value) empty('No streams in this language', 'Try another language or browse all languages in this category.', 'compass', 'Show all languages', () => { $('#discover-language').value = ''; return load(); });
+    else if (state.page === 'discover' && state.category && $('#discover-language').value) empty('No streams in this language', 'Try another language or browse all languages in this category.', 'compass', 'Show all languages', () => { $('#discover-language').value = ''; return loadNewResults(); });
     else empty(state.category ? 'No live streams in this category' : 'No categories found', 'Try another category or a different search.', 'compass', 'Browse all categories', () => browseCategory(null, ''));
   }
   const cardContent = new WeakMap();
@@ -1119,6 +1194,7 @@
       if (firstOffline >= 0) next.splice(firstOffline, 0, offlineHeading);
     }
     const retained = new Set(next);
+    if (cardPreview && !retained.has(cardPreview.card)) stopCardPreview();
     for (const card of [...cards.children]) if (!retained.has(card)) card.remove();
     // Appending a page leaves existing controls and decoded artwork attached.
     // Sorting moves only the cards whose positions actually changed.
@@ -1126,6 +1202,104 @@
       if (cards.children[index] !== card) cards.insertBefore(card, cards.children[index] || null);
     });
     if (focused && cards.contains(focused) && document.activeElement !== focused) focused.focus({ preventScroll: true });
+  }
+  function resetVideoSource(video) {
+    video.pause();
+    video.removeAttribute('src');
+    video.load();
+  }
+  function hlsPlaybackMode(video) {
+    const native = video.canPlayType('application/vnd.apple.mpegurl');
+    // Apple mobile browsers can report both native HLS and ManagedMediaSource support.
+    const appleMobile = /iPhone|iPad|iPod/.test(navigator.userAgent) || navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1;
+    if (native && appleMobile) return 'native';
+    if (window.Hls && Hls.isSupported()) return 'hls.js';
+    return native ? 'native' : null;
+  }
+  function createHls(options) {
+    return new Hls({ enableWorker: true, xhrSetup: xhr => { xhr.withCredentials = true; }, ...options });
+  }
+  function newCardPreviewId() {
+    if (typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+    // Older browsers can provide random bytes without the randomUUID helper.
+    const bytes = crypto.getRandomValues(new Uint8Array(16));
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    const hex = Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+    return [hex.slice(0, 8), hex.slice(8, 12), hex.slice(12, 16), hex.slice(16, 20), hex.slice(20)].join('-');
+  }
+  function stopCardPreview(preview = cardPreview) {
+    if (!preview || cardPreview !== preview) return;
+    cardPreview = null;
+    clearTimeout(preview.delay);
+    clearTimeout(preview.deadline);
+    preview.controller?.abort();
+    preview.hls?.destroy();
+    if (preview.video) {
+      resetVideoSource(preview.video);
+      preview.video.remove();
+    }
+    preview.media.classList.remove('is-previewing');
+    if (preview.id) request('preview/close', { id: preview.id }).catch(() => {});
+  }
+  async function loadCardPreview(preview, key) {
+    if (cardPreview !== preview || document.hidden || !preview.card.isConnected) {
+      stopCardPreview(preview);
+      return;
+    }
+    const video = node('video', undefined, 'card-preview');
+    const playbackMode = hlsPlaybackMode(video);
+    if (!playbackMode) {
+      stopCardPreview(preview);
+      return;
+    }
+    const stop = () => stopCardPreview(preview);
+    try {
+      preview.controller = new AbortController();
+      preview.id = newCardPreviewId();
+      preview.deadline = setTimeout(stop, 16000);
+      const { url } = await request('preview/open', { key, id: preview.id }, 'POST', preview.controller.signal);
+      if (cardPreview !== preview) return;
+      if (typeof url !== 'string' || !url.startsWith('/media/')) { stop(); return; }
+
+      preview.video = video;
+      video.defaultMuted = video.muted = video.autoplay = video.playsInline = true;
+      video.disablePictureInPicture = true;
+      video.disableRemotePlayback = true;
+      video.setAttribute('aria-hidden', 'true');
+      video.addEventListener('playing', () => {
+        if (cardPreview !== preview || !video.videoWidth) return;
+        clearTimeout(preview.deadline);
+        preview.deadline = null;
+        preview.media.classList.add('is-previewing');
+      });
+      video.addEventListener('waiting', () => {
+        if (cardPreview === preview && preview.deadline == null) preview.deadline = setTimeout(stop, 8000);
+      });
+      video.addEventListener('error', stop);
+      video.addEventListener('ended', stop);
+      preview.media.insertBefore(video, $('.media-badge', preview.media));
+      if (playbackMode === 'hls.js') {
+        const hls = preview.hls = createHls({
+          lowLatencyMode: false, maxBufferLength: 6, maxMaxBufferLength: 12, backBufferLength: 0
+        });
+        hls.on(Hls.Events.ERROR, (_, data) => { if (data.fatal) stop(); });
+        hls.loadSource(url);
+        hls.attachMedia(video);
+      } else video.src = url;
+    } catch { stop(); }
+  }
+  function bindCardPreview(card, media, key) {
+    card.addEventListener('pointerenter', event => {
+      if (event.pointerType === 'touch' || event.buttons || !state.authenticated || document.hidden) return;
+      stopCardPreview();
+      const preview = cardPreview = { card, media };
+      preview.delay = setTimeout(() => loadCardPreview(preview, key), 100);
+    });
+    const stop = () => { if (cardPreview?.card === card) stopCardPreview(); };
+    card.addEventListener('pointerleave', stop);
+    card.addEventListener('pointercancel', stop);
+    card.addEventListener('click', stop, { capture: true });
   }
   function createCard(item, type, signature) {
     const card = node('article', undefined, 'card');
@@ -1231,6 +1405,8 @@
       const remove = button('Delete', async () => { if (confirm('Permanently delete “' + item.title + '” and its downloaded media on the desktop?')) { await api('downloads/remove', { id: item.id }); await load(); } }); remove.className = 'danger'; actions.append(remove);
     }
     if (actions.childElementCount) card.append(actions);
+    if ((type === 'following' || type === 'discover') && item.state === 'Live' && item.key &&
+        (card.dataset.provider === 'twitch' || card.dataset.provider === 'kick')) bindCardPreview(card, media, item.key);
     return card;
   }
   async function browseVideos(item) {
@@ -1346,7 +1522,8 @@
     const query = $('#query').value.trim(), mode = searchMode(query), categoryPlatform = mode === 'categories' ? discoverPlatform() : null;
     const signature = JSON.stringify([query, categoryPlatform, state.page]);
     if (!state.authenticated || !query || !mode) { closeSearch(); return; }
-    if (signature === search.signature && search.status !== 'error' && !$('#search-dropdown').hidden) return;
+    const flushDebounce = immediate && search.timer !== null;
+    if (!flushDebounce && signature === search.signature && search.status !== 'error' && !$('#search-dropdown').hidden) return;
     closeSearch(); search.signature = signature; search.mode = mode;
     $('#search-dropdown').hidden = false; $('#query').setAttribute('aria-expanded', 'true');
     if (mode === 'url' || mode === 'download') { search.status = 'ready'; search.items = [{}]; renderSearch(query); return; }
@@ -1358,6 +1535,7 @@
           ? await api('categories', { query, platform: categoryPlatform }, controller.signal)
           : await api('search', { query }, controller.signal);
         if (version !== search.version || !state.authenticated) return;
+        ensureResultsAvailable(result);
         search.status = 'ready'; search.items = [...(result.items || [])];
         if (mode === 'channels') search.items.sort((a, b) => {
           const liveFirst = Number(b.state === 'Live') - Number(a.state === 'Live');
@@ -1408,7 +1586,7 @@
       closeSearch();
       if (state.category) rememberNavigation();
       state.category = null; restoreDiscoveryLanguage(); $('#breadcrumbs').replaceChildren();
-      state.items = []; await load();
+      await loadNewResults();
     });
   });
   $('#download-input').addEventListener('click', () => run(async () => {
@@ -1421,17 +1599,20 @@
   $('#discover-language').addEventListener('change', () => run(() => {
     closeSearch();
     if (state.page !== 'discover') return;
-    if (!state.category) { browseDirectoryLanguage = $('#discover-language').value; return; }
-    state.items = []; return load();
+    if (!state.category) {
+      browseDirectoryLanguage = $('#discover-language').value;
+      return queuePreferencesSave('browseDirectoryLanguage', 0);
+    }
+    return loadNewResults();
   }));
   $('#discover-platform').addEventListener('change', () => run(() => {
     closeSearch();
-    state.category = null; state.items = []; restoreDiscoveryLanguage(); renderBreadcrumbs(); return load();
+    state.category = null; restoreDiscoveryLanguage(); renderBreadcrumbs(); return loadNewResults();
   }));
   $('#query').addEventListener('search', () => {
     updateSearch();
   });
-  $('#vod-type').addEventListener('change', () => run(() => { state.items = []; return load(); }));
+  $('#vod-type').addEventListener('change', () => run(loadNewResults));
   $$('[data-filter]').forEach(b => b.addEventListener('click', () => { state.filter = b.dataset.filter; updateFilterButtons(); renderResults(); }));
   $('#live-filter').addEventListener('change', renderResults);
   $('#channel-sort').addEventListener('change', renderResults);
@@ -1682,7 +1863,7 @@
     const video = preview.video;
     preview.video = null;
     preview.hls?.destroy(); preview.hls = null;
-    if (video) { video.pause(); video.removeAttribute('src'); video.load(); }
+    if (video) resetVideoSource(video);
   }
   function hideSeekPreview(p) {
     const preview = p.seekPreview;
@@ -1790,7 +1971,7 @@
     for (const event of ['loadeddata', 'seeked', 'canplay']) video.addEventListener(event, () => { if (preview.video === video) { seekFrame(); drawFrame(); } });
     video.addEventListener('error', () => { if (preview.video === video) fail(); });
     if (p.hls && window.Hls && Hls.isSupported()) {
-      const hls = preview.hls = new Hls({ enableWorker: true, autoStartLoad: false, startLevel: 0, maxBufferLength: 2, maxMaxBufferLength: 4, backBufferLength: 0, lowLatencyMode: false, xhrSetup: xhr => { xhr.withCredentials = true; } });
+      const hls = preview.hls = createHls({ autoStartLoad: false, startLevel: 0, maxBufferLength: 2, maxMaxBufferLength: 4, backBufferLength: 0, lowLatencyMode: false });
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
         if (preview.video !== video) return;
         const level = Math.max(0, hls.levels.findIndex(level => level.height > 0 || level.videoCodec));
@@ -1831,6 +2012,12 @@
     // between a live playlist and a separately published VOD.
     if (position >= p.archive.duration) { seekToLiveEdge(p); return; }
     await openPlayer({ key: p.archive.key, quality: p.quality, liveArchive: true, startPosition: position }, p);
+  }
+  function refreshVisibleArchives() {
+    if (document.hidden || !$('#studio').classList.contains('watching')) return;
+    for (const p of state.players) {
+      if (state.grid || p.id === state.selected) void loadLiveArchive(p);
+    }
   }
   async function loadLiveArchive(p) {
     if (p.isVod || p.closed || p.closing || p.stopped || p.archiveLoading || Date.now() < (p.archiveRetryAt || 0)) return;
@@ -2052,6 +2239,10 @@
     finally {
       if (replace) {
         replace.reloading = false;
+        if (replace.resolvingReplacement) {
+          replace.resolvingReplacement = false;
+          if (!replace.closed && !replace.closing && !replace.stopped && replace.volumeEdit) scheduleVolumeSave(replace);
+        }
         qualitySelector.disabled = false;
         qualitySelector.value = replace.quality;
       } else if (pendingPlayers.get(sourceKey) === pending) pendingPlayers.delete(sourceKey);
@@ -2061,11 +2252,17 @@
     if (replace) {
       await savePlayerState(replace);
       if (replacementCanceled(replace)) return replace;
+      // Once the server swaps players, volume writes must use the new player ID.
+      replace.resolvingReplacement = true;
     }
     notice('Resolving stream…');
     const result = await api('open', { ...source, quality: source.quality || state.settings.defaultQuality, replacePlayer: replace?.id });
     if (replacementCanceled(replace)) {
-      await api('close', { player: result.id });
+      try {
+        if (replace.volumeKey === channelKey(result)) await savePendingVolume(replace, result.id);
+      } finally {
+        await api('close', { player: result.id });
+      }
       return null;
     }
     const element = $('#player-template').content.firstElementChild.cloneNode(true);
@@ -2149,19 +2346,14 @@
       $('.player-status', element).textContent = `${reason} Reload the stream to retry.`;
     });
     $('.player-status', element).textContent = manuallyPaused ? 'Paused' : 'Loading video…';
-    const nativeHls = video.canPlayType('application/vnd.apple.mpegurl');
-    const appleMobile = /iPhone|iPad|iPod/.test(navigator.userAgent) || navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1;
-    if (p.isMp4) video.src = result.url;
-    // iOS can report both native HLS and hls.js ManagedMediaSource support.
-    // Keep its playback on the native HLS media stack.
-    else if (appleMobile && nativeHls) video.src = result.url;
-    else if (window.Hls && Hls.isSupported()) {
-      p.hls = new Hls({ enableWorker: true, lowLatencyMode: p.isLiveArchive ? false : state.settings.lowLatency, liveDurationInfinity: !p.isVod || p.isLiveArchive, startPosition: p.isLiveArchive ? p.resume : -1, backBufferLength: 90, maxBufferLength: 30, xhrSetup: xhr => { xhr.withCredentials = true; } });
+    const playbackMode = p.isMp4 ? 'mp4' : hlsPlaybackMode(video);
+    if (playbackMode === 'mp4' || playbackMode === 'native') video.src = result.url;
+    else if (playbackMode === 'hls.js') {
+      p.hls = createHls({ lowLatencyMode: p.isLiveArchive ? false : state.settings.lowLatency, liveDurationInfinity: !p.isVod || p.isLiveArchive, startPosition: p.isLiveArchive ? p.resume : -1, backBufferLength: 90, maxBufferLength: 30 });
       for (const event of [Hls.Events.LEVEL_UPDATED, Hls.Events.BUFFER_APPENDED, Hls.Events.BUFFER_FLUSHED]) p.hls.on(event, () => updateVideoControls(p));
       p.hls.loadSource(result.url); p.hls.attachMedia(video);
       p.hls.on(Hls.Events.ERROR, (_, data) => { if (data.fatal) $('.player-status', element).textContent = 'Playback stopped. Reload the quality or reopen this stream.'; });
-    } else if (nativeHls) video.src = result.url;
-    else $('.player-status', element).textContent = 'This browser does not support HLS or Media Source Extensions. Use a supported browser.';
+    } else $('.player-status', element).textContent = 'This browser does not support HLS or Media Source Extensions. Use a supported browser.';
     $('#players').insertBefore(element, replace?.element ?? null);
     if (replace) {
       state.players.splice(state.players.indexOf(replace), 1, p);
@@ -2183,13 +2375,12 @@
     loadChannelProfile(p);
     loadFollowStatus(p);
     scheduleChatPoll(p);
-    loadLiveArchive(p);
     return p;
   }
   function releasePlayerMedia(p) {
     resetSeek(p);
     p.hls?.destroy(); p.hls = null;
-    p.video.pause(); p.video.removeAttribute('src'); p.video.load();
+    resetVideoSource(p.video);
   }
   function cancelPlayerRequests(p) {
     p.followStatusAbort?.abort(); p.chatAbort?.abort(); p.archiveAbort?.abort(); p.profileAbort?.abort();
@@ -2220,12 +2411,17 @@
     if (failure) throw failure;
   }
   function selectPlayer(id, record = true) {
+    stopCardPreview();
     stopLibraryAutoScroll();
     if (record && !$('#studio').classList.contains('watching')) rememberNavigation();
     state.selected = id; $('#studio').classList.add('watching'); renderPlayers();
   }
   function updateActiveStreamButton() {
     $('#active-stream').hidden = !state.players.some(p => p.id === state.selected && !p.closed && !p.closing);
+  }
+  function setTheaterMode(enabled) {
+    $('#studio').classList.toggle('theater', enabled);
+    for (const p of state.players) $('[data-action=theater]', p.element).setAttribute('aria-pressed', String(enabled));
   }
   function setKeepAudio(p, enabled) {
     p.neverMute = enabled;
@@ -2343,7 +2539,9 @@
   }
   function renderPlayers() {
     $('#watch').hidden = !state.players.length;
-    if (!state.players.length) $('#studio').classList.remove('watching', 'theater');
+    const studio = $('#studio');
+    if (!state.players.length) studio.classList.remove('watching');
+    setTheaterMode(state.players.length > 0 && studio.classList.contains('theater'));
     updateActiveStreamButton();
     const grid = state.grid;
     $('#open-player-count').textContent = state.players.length ? String(state.players.length) : '';
@@ -2369,6 +2567,7 @@
     }
     applyAudio();
     renderFollowedChannels();
+    refreshVisibleArchives();
   }
   let changingGrid = false;
   async function setGrid(grid) {
@@ -2472,9 +2671,9 @@
         break;
       case 'mute': p.manualMuted = !video.muted; applyAudio(); updateVideoControls(p); break;
       case 'theater': {
-        const enabled = $('#studio').classList.toggle('theater');
-        $('[data-action=theater]', p.element).setAttribute('aria-pressed', String(enabled));
-        sizeChat(p); break;
+        setTheaterMode(!$('#studio').classList.contains('theater'));
+        state.players.forEach(sizeChat);
+        break;
       }
       case 'share':
         if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(p.channelUrl); notice('Channel link copied.'); }
@@ -2731,9 +2930,9 @@
     p.lastSaved = Date.now();
     await api('progress', { player: p.id, position: p.video.currentTime, duration: p.video.duration, ended: p.video.ended });
   }
-  async function savePlayerProgress(players = state.players) { await finishSaves(players.map(saveProgress)); }
+  async function savePlayerProgress(players = state.players) { await finishAll(players.map(saveProgress)); }
   async function flushSessionState() {
-    await finishSaves([flushProfilePreferences(), flushVolumes(), savePlayerProgress()]);
+    await finishAll([flushProfilePreferences(), flushVolumes(), savePlayerProgress()]);
   }
   function updateChatStatus(p, status) {
     const label = $('.chat-status', p.element);
@@ -2887,7 +3086,7 @@
     const amounts = Object.fromEntries(Object.values(hotkeyAmounts).map(({ setting }) => [setting, preferences[setting] ?? null]));
     return { quality: $('#default-quality').value, lowLatency: $('#low-latency').checked,
       layout: $('#chat-layout').value, size: Number($('#chat-size').value), opacity: Number($('#chat-opacity').value),
-      keepInactive: $('#keep-inactive').checked, pauseInactiveVod: $('#pause-inactive-vod').checked,
+      keepInactive: $('#keep-inactive').checked, pauseInactiveVod: $('#pause-inactive-vod').checked, browseDirectoryLanguage,
       hotkeys: { ...hotkeyOverrides }, ...amounts };
   }
   function updatePreferencesStatus() {
@@ -2895,8 +3094,11 @@
     $('#save-status').textContent = profileSaveError ? 'Couldn’t save your preferences. Check the desktop connection and retry.'
       : profileSaveRevision !== profileSavedRevision ? 'Saving your preferences…' : 'All changes saved to your account.';
   }
-  function resetPreferencesSaveState() {
+  function cancelPreferencesSave() {
     clearTimeout(profileSaveTimer); profileSaveTimer = null; profileSaveTask = null; ++profileSaveEpoch;
+  }
+  function resetPreferencesSaveState() {
+    cancelPreferencesSave();
     profileSaveRevision = profileSavedRevision = 0; profileSaveError = ''; profileFailureNotice = false;
     profileDirtyKeys.clear();
     preferenceDraft = preferenceValues();
@@ -2913,8 +3115,10 @@
     } else if (!profileSaveError) return;
     profileSaveError = ''; ++profileSaveRevision;
     clearTimeout(profileSaveTimer);
-    profileSaveTimer = setTimeout(() => { profileSaveTimer = null; run(saveProfilePreferences); }, delay);
+    profileSaveTimer = null;
     updatePreferencesStatus();
+    if (delay === 0) return saveProfilePreferences();
+    profileSaveTimer = setTimeout(() => { profileSaveTimer = null; run(saveProfilePreferences); }, delay);
   }
   async function saveProfilePreferences() {
     if (!state.authenticated || profileSaveRevision === profileSavedRevision) return;
@@ -2924,7 +3128,8 @@
       while (state.authenticated && epoch === profileSaveEpoch && profileSaveRevision !== profileSavedRevision) {
         const revision = profileSaveRevision;
         const patch = Object.fromEntries([...profileDirtyKeys].map(key => [key, preferenceDraft[key]]));
-        try { await api('settings/save', patch); }
+        // Saves are serialized here and can finish while a provider request is pending.
+        try { await request('settings/save', patch); }
         catch (error) {
           if (!state.authenticated || epoch !== profileSaveEpoch) return;
           if (revision !== profileSaveRevision) continue;
@@ -2982,7 +3187,8 @@
     finally { if (desktopHotkeyRequest === controller) desktopHotkeyRequest = null; }
   }
   setInterval(() => {
-    for (const p of state.players) { pumpVodChat(p); scheduleChatPoll(p); loadLiveArchive(p); }
+    for (const p of state.players) { pumpVodChat(p); scheduleChatPoll(p); }
+    refreshVisibleArchives();
   }, 250);
   setInterval(async () => {
     if (!state.authenticated) return;
@@ -2996,17 +3202,11 @@
         updateChannelClock(p);
         if (!document.hidden && !p.closed && !p.stopped && (p.id === state.selected || state.grid) && Date.now() - p.lastProfileLoad >= 60000) loadChannelProfile(p);
       }
-      await finishSaves([
+      await finishAll([
         ...state.players.map(recordRecent),
-        savePlayerProgress(state.players.filter(p => Date.now() - p.lastSaved >= 5000))
+        savePlayerProgress(state.players.filter(p => Date.now() - p.lastSaved >= 5000)),
+        refreshDownloads()
       ]);
-      if (state.page === 'downloads' && !state.busy && !document.hidden && !document.activeElement?.closest('#cards') && Date.now() - lastDownloadRefresh >= 8000) {
-        lastDownloadRefresh = Date.now();
-        const generation = state.generation; const result = await api('downloads');
-        if (state.authenticated && state.page === 'downloads' && generation === state.generation && !document.activeElement?.closest('#cards') && JSON.stringify(state.items) !== JSON.stringify(result.items || [])) {
-          state.items = result.items || []; renderResults();
-        }
-      }
     } catch (error) {
       const now = Date.now();
       if (version === state.sessionVersion && state.authenticated && error.name !== 'AbortError' && now - lastPollingNoticeAt >= 30000) {
@@ -3018,8 +3218,17 @@
   }, 2000);
   // Save before normal tab backgrounding. Session expiry handles abrupt disconnect cleanup.
   setInterval(refreshLastLiveLabels, 60000);
-  document.addEventListener('visibilitychange', () => { if (document.hidden) run(flushSessionState); else refreshLastLiveLabels(); });
-  window.addEventListener('pagehide', () => run(flushSessionState));
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      stopCardPreview();
+      run(flushSessionState);
+    } else {
+      refreshLastLiveLabels();
+      refreshVisibleArchives();
+    }
+  });
+  window.addEventListener('pagehide', () => { stopCardPreview(); run(flushSessionState); });
+  window.addEventListener('blur', () => stopCardPreview());
 
   let libraryAutoScroll = null;
   function stopLibraryAutoScroll() {
@@ -3165,8 +3374,15 @@
     if (best) { event.preventDefault(); best.focus(); best.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }
   });
   async function restoreSession() {
-    try { await connected(await request('session', {}, 'GET')); $('#login-error').textContent = ''; }
+    const controller = sessionRestore = new AbortController();
+    try {
+      const session = await request('session', {}, 'GET', controller.signal);
+      if (controller.signal.aborted) return;
+      await connected(session, controller.signal);
+      if (!controller.signal.aborted) $('#login-error').textContent = '';
+    }
     catch { /* A new or expired session can sign in. */ }
+    finally { if (sessionRestore === controller) sessionRestore = null; }
   }
   restoreSession();
 })();

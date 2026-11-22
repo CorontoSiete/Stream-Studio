@@ -218,8 +218,10 @@ internal static class BrowseStreamResourceTestCatalog
     private static Task ChangePlatformAsync() => RunAsync(async (viewModel, service) =>
     {
         var first = viewModel.BrowseCategories[0].SelectCommand.ExecuteAsync();
+        Assert.True(viewModel.IsBrowseStreamsLoading);
         viewModel.SelectKickBrowsePlatformCommand.Execute(null);
         Assert.True(service.Requests[0].Token.IsCancellationRequested);
+        Assert.Equal(false, viewModel.IsBrowseStreamsLoading);
         var second = viewModel.BrowseCategories[0].SelectCommand.ExecuteAsync();
         service.Requests[1].Complete([Stream("current", PlatformKind.Kick)]);
         await second;

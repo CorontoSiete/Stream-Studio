@@ -6,6 +6,8 @@ namespace StreamlinkVlcStudio.Infrastructure.Hls;
 internal static class HlsPlaylistPolicy
 {
     internal const string VariantTag = "#EXT-X-STREAM-INF:";
+    internal const string MediaSequenceTag = "#EXT-X-MEDIA-SEQUENCE";
+    internal const string DiscontinuitySequenceTag = "#EXT-X-DISCONTINUITY-SEQUENCE";
 
     internal static string[] SplitLines(string content)
     {
@@ -21,6 +23,26 @@ internal static class HlsPlaylistPolicy
         lines.Any(static line => line == "#EXT-X-SKIP" ||
             line.StartsWith("#EXT-X-SKIP:", StringComparison.Ordinal));
 
+    internal static bool TryGetTagValue(string line, string tag, out ReadOnlySpan<char> value)
+    {
+        value = default;
+        if (!line.StartsWith(tag, StringComparison.Ordinal)) return false;
+        if (line.Length == tag.Length) return true;
+        if (line[tag.Length] != ':') return false;
+        value = line.AsSpan(tag.Length + 1);
+        return true;
+    }
+
+    internal static bool TryReadSequence(ReadOnlySpan<char> value, bool afterMedia, ref long? sequence)
+    {
+        if (sequence.HasValue || afterMedia) return false;
+        foreach (var character in value)
+            if (!char.IsAsciiDigit(character)) return false;
+        if (!long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed)) return false;
+        sequence = parsed;
+        return true;
+    }
+
     // A published duration needs every segment from the broadcast's beginning,
     // including growing EVENT playlists that do not have an end marker yet.
     internal static TimeSpan? ReadPublishedDuration(string[] lines)
@@ -30,13 +52,15 @@ internal static class HlsPlaylistPolicy
 
         decimal seconds = 0;
         decimal? pending = null;
+        long? sequence = null;
         var segments = 0;
         foreach (var line in lines)
         {
-            if (line.StartsWith("#EXT-X-MEDIA-SEQUENCE:", StringComparison.Ordinal) &&
-                (!long.TryParse(line.AsSpan(22), NumberStyles.None, CultureInfo.InvariantCulture, out var sequence) || sequence != 0))
-                return null;
-            if (line.StartsWith("#EXTINF:", StringComparison.Ordinal))
+            if (TryGetTagValue(line, MediaSequenceTag, out var sequenceValue))
+            {
+                if (!TryReadSequence(sequenceValue, segments > 0, ref sequence) || sequence is > 0) return null;
+            }
+            else if (line.StartsWith("#EXTINF:", StringComparison.Ordinal))
             {
                 if (pending.HasValue || !TryReadSegmentDuration(line.AsSpan(8), 3600, out var duration)) return null;
                 pending = duration;

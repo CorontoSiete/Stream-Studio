@@ -6,6 +6,9 @@ internal static partial class StreamHoverPreviewSourceTestCatalog
     [
         ("stream hover preview: direct Twitch authorizes and requests only the selected quality", () => SelectedQualityAsync(PlatformKind.Twitch)),
         ("stream hover preview: direct Kick authorizes and requests only the selected quality", () => SelectedQualityAsync(PlatformKind.Kick)),
+        ("web card preview: Kick selects video when the master advertises separate captions", BrowserPreviewKickCaptionsAsync),
+        ("web card preview: Twitch reuses website identity and falls back for unsupported streams", BrowserPreviewTwitchFallbackAsync),
+        ("web card preview: an abandoned lookup cancels without starting Streamlink", BrowserPreviewCancellationAsync),
         ("stream hover preview: preview quality fallbacks preserve their order", QualityFallbackAsync),
         ("stream hover preview: custom arguments configs and plugins retain Streamlink", ConfigurationAsync),
         ("stream hover preview: unsafe redirects DNS and oversized responses never open native playback", InvalidSourcesAsync),
@@ -47,7 +50,7 @@ internal static partial class StreamHoverPreviewSourceTestCatalog
         """;
     private static TaskCompletionSource Signal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
     private static StreamTransportRequest Request(PlatformKind platform = PlatformKind.Twitch) =>
-        new(StreamInputParser.Parse("preview_test", platform), LibVlcLivePreview.QualityPreference, Environment.ProcessPath!, true, [], true);
+        new(StreamInputParser.Parse("preview_test", platform), LivePreviewPolicy.QualityPreference, Environment.ProcessPath!, true, [], true);
 
     private static async Task SelectedQualityAsync(PlatformKind platform)
     {

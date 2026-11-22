@@ -11,10 +11,10 @@ namespace StreamlinkVlcStudio.Infrastructure.Viewers;
 /// </summary>
 internal sealed class TwitchRateLimitCoordinator
 {
-    private static readonly object Gate = new();
     private static readonly TimeSpan RetryFallback = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan MaximumDelay = TimeSpan.FromMinutes(1);
-    private static DateTimeOffset pauseUntilUtc = DateTimeOffset.MinValue;
+    private readonly object gate = new();
+    private DateTimeOffset pauseUntilUtc = DateTimeOffset.MinValue;
 
     internal async Task<HttpResponseMessage> SendAsync(
         HttpClient httpClient,
@@ -34,22 +34,23 @@ internal sealed class TwitchRateLimitCoordinator
                 .ConfigureAwait(false);
             ObserveHeaders(response);
 
-            if (response.StatusCode != HttpStatusCode.TooManyRequests || attempt >= 2)
+            if (response.StatusCode != HttpStatusCode.TooManyRequests)
             {
                 return response;
             }
 
-            var retryDelay = ClampDelay(GetRetryDelay(response) ?? RetryFallback);
+            var retryDelay = GetRetryDelay(response) ?? RetryFallback;
             SetPause(SaturatingAdd(DateTimeOffset.UtcNow, retryDelay));
+            if (attempt >= 2)
+            {
+                return response;
+            }
+
             logger.WriteSafely(
                 AppLogLevel.Warning,
                 "Browse",
                 $"Twitch browse request was rate limited; retrying in {retryDelay.TotalSeconds:0.#}s.");
             response.Dispose();
-            if (retryDelay > TimeSpan.Zero)
-            {
-                await Task.Delay(retryDelay, cancellationToken).ConfigureAwait(false);
-            }
         }
     }
 
@@ -75,12 +76,12 @@ internal sealed class TwitchRateLimitCoordinator
         }
     }
 
-    private static async Task WaitForPauseAsync(CancellationToken cancellationToken)
+    private async Task WaitForPauseAsync(CancellationToken cancellationToken)
     {
         while (true)
         {
             TimeSpan delay;
-            lock (Gate)
+            lock (gate)
             {
                 delay = pauseUntilUtc - DateTimeOffset.UtcNow;
             }
@@ -94,10 +95,10 @@ internal sealed class TwitchRateLimitCoordinator
         }
     }
 
-    private static void ObserveHeaders(HttpResponseMessage response)
+    private void ObserveHeaders(HttpResponseMessage response)
     {
-        if (!TryGetHeaderInt32(response, "Ratelimit-Remaining", out var remaining) ||
-            remaining > 1 ||
+        if (!TryGetHeaderInt64(response, "Ratelimit-Remaining", out var remaining) ||
+            remaining is < 0 or > 1 ||
             !TryGetResetUtc(response, out var resetUtc))
         {
             return;
@@ -142,20 +143,6 @@ internal sealed class TwitchRateLimitCoordinator
         }
     }
 
-    private static bool TryGetHeaderInt32(HttpResponseMessage response, string name, out int value)
-    {
-        value = 0;
-        if (!TryGetHeaderInt64(response, name, out var longValue) ||
-            longValue < int.MinValue ||
-            longValue > int.MaxValue)
-        {
-            return false;
-        }
-
-        value = (int)longValue;
-        return true;
-    }
-
     private static bool TryGetHeaderInt64(HttpResponseMessage response, string name, out long value)
     {
         value = 0;
@@ -171,7 +158,7 @@ internal sealed class TwitchRateLimitCoordinator
             out value);
     }
 
-    private static void SetPause(DateTimeOffset candidate)
+    private void SetPause(DateTimeOffset candidate)
     {
         var now = DateTimeOffset.UtcNow;
         if (candidate <= now)
@@ -185,7 +172,7 @@ internal sealed class TwitchRateLimitCoordinator
             candidate = maximum;
         }
 
-        lock (Gate)
+        lock (gate)
         {
             if (candidate > pauseUntilUtc)
             {

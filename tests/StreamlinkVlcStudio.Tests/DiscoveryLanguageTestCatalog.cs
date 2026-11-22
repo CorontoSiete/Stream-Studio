@@ -3,7 +3,7 @@ internal static class DiscoveryLanguageTestCatalog
     internal static IReadOnlyList<(string Name, Func<Task> Run)> All =>
     [
         ("discovery language: both providers filter every page and omit the all-languages parameter", ProviderRequestsAsync),
-        ("discovery language: desktop saves each category and restores choices after restarting", DesktopPersistenceAsync),
+        ("discovery language: desktop restores the directory and category choices after restarting", DesktopPersistenceAsync),
         ("discovery language: themed dropdown renders language names in its selection and menu", DropdownRenderingAsync)
     ];
 
@@ -69,7 +69,8 @@ internal static class DiscoveryLanguageTestCatalog
             var browse = new FakeBrowseService
             {
                 CategoryResponder = request => new(BrowseResultStatus.Available,
-                    [new(request.Platform, "1", "Just Chatting", "", [], 1), new(request.Platform, "2", "Music", "", [], 1)], "", "")
+                    [new(request.Platform, "1", "Just Chatting", "", [], 1), new(request.Platform, "2", "Music", "", [], 1),
+                        new(request.Platform, "3", "Art", "", [], 1)], "", "")
             };
             MainViewModel Create(AppSettings settings) => TestViewModels.CreateMain(settings, store,
                 new FakeStreamlinkService(), new FakePlaybackEngineFactory(), new FakeChatClientFactory(),
@@ -86,12 +87,13 @@ internal static class DiscoveryLanguageTestCatalog
                 main.SelectedBrowseLanguage = "fr";
                 main.SelectedBrowseLanguage = "";
                 main.ReturnToBrowseCategoriesCommand.Execute(null);
-                main.SelectedBrowseLanguage = "de";
+                WithDirectoryDropdown(main, dropdown => dropdown.SetCurrentValue(ComboBox.SelectedValueProperty, "de"));
+                Assert.Equal("de", main.SelectedBrowseLanguage);
                 await main.BrowseCategories[1].SelectCommand.ExecuteAsync();
                 Assert.Equal("", main.SelectedBrowseLanguage);
                 main.ReturnToBrowseCategoriesCommand.Execute(null);
                 main.SelectKickBrowsePlatformCommand.Execute(null);
-                await main.BrowseCategories[0].SelectCommand.ExecuteAsync();
+                await main.BrowseCategories.Single(category => category.Id == "1").SelectCommand.ExecuteAsync();
                 main.SelectedBrowseLanguage = "es";
                 main.ReturnToBrowseCategoriesCommand.Execute(null);
                 main.SelectTwitchBrowsePlatformCommand.Execute(null);
@@ -102,21 +104,49 @@ internal static class DiscoveryLanguageTestCatalog
             Assert.Equal("en", restoredSettings.BrowseCategoryLanguages["Twitch:1"]);
             Assert.Equal("", restoredSettings.BrowseCategoryLanguages["Twitch:2"]);
             Assert.Equal("es", restoredSettings.BrowseCategoryLanguages["Kick:1"]);
-            await using var restored = Create(restoredSettings);
-            restored.ShowBrowseHomePageCommand.Execute(null);
-            await restored.BrowseCategories[0].SelectCommand.ExecuteAsync();
-            Assert.Equal("en", restored.SelectedBrowseLanguage);
-            Assert.Equal("en", browse.StreamRequests[^1].Language);
-            restored.ReturnToBrowseCategoriesCommand.Execute(null);
-            await restored.BrowseCategories[1].SelectCommand.ExecuteAsync();
-            Assert.Equal("", restored.SelectedBrowseLanguage);
-            restored.ReturnToBrowseCategoriesCommand.Execute(null);
-            restored.SelectKickBrowsePlatformCommand.Execute(null);
-            await restored.BrowseCategories[0].SelectCommand.ExecuteAsync();
-            Assert.Equal("es", restored.SelectedBrowseLanguage);
+            Assert.Equal("de", restoredSettings.BrowseDirectoryLanguage);
+            await using (var restored = Create(restoredSettings))
+            {
+                restored.ShowBrowseHomePageCommand.Execute(null);
+                WithDirectoryDropdown(restored, dropdown => Assert.Equal("de", (string)dropdown.SelectedValue));
+                await restored.BrowseCategories[2].SelectCommand.ExecuteAsync();
+                Assert.Equal("de", restored.SelectedBrowseLanguage);
+                Assert.Equal("de", browse.StreamRequests[^1].Language);
+                restored.ReturnToBrowseCategoriesCommand.Execute(null);
+                await restored.BrowseCategories[0].SelectCommand.ExecuteAsync();
+                Assert.Equal("en", restored.SelectedBrowseLanguage);
+                Assert.Equal("en", browse.StreamRequests[^1].Language);
+                restored.ReturnToBrowseCategoriesCommand.Execute(null);
+                await restored.BrowseCategories[1].SelectCommand.ExecuteAsync();
+                Assert.Equal("", restored.SelectedBrowseLanguage);
+                restored.ReturnToBrowseCategoriesCommand.Execute(null);
+                restored.SelectKickBrowsePlatformCommand.Execute(null);
+                await restored.BrowseCategories.Single(category => category.Id == "1").SelectCommand.ExecuteAsync();
+                Assert.Equal("es", restored.SelectedBrowseLanguage);
+                restored.ReturnToBrowseCategoriesCommand.Execute(null);
+                Assert.Equal("de", restored.SelectedBrowseLanguage);
+                WithDirectoryDropdown(restored, dropdown => dropdown.SetCurrentValue(ComboBox.SelectedValueProperty, ""));
+            }
+            await using var reset = Create(await store.LoadAsync());
+            reset.ShowBrowseHomePageCommand.Execute(null);
+            Assert.Equal("", reset.SelectedBrowseLanguage);
         }
         finally { Directory.Delete(directory, recursive: true); }
     });
+
+    private static void WithDirectoryDropdown(MainViewModel main, Action<ComboBox> check)
+    {
+        var window = new MainWindow { DataContext = main };
+        ApplicationTestCatalog.RemoveMainWindowAutomaticStartup(window);
+        try
+        {
+            ApplicationTestCatalog.LayoutStudioPolishWindow(window, new Size(1320, 820));
+            var dropdown = ApplicationTestCatalog.FindVisualDescendants<ComboBox>((FrameworkElement)window.Content)
+                .Single(control => System.Windows.Automation.AutomationProperties.GetName(control) == "Discovery stream language");
+            check(dropdown);
+        }
+        finally { window.Close(); }
+    }
 
     private static async Task ProviderRequestsAsync()
     {

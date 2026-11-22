@@ -107,18 +107,13 @@ if ($metadata.schemaVersion -ne 2 -or
     throw 'Top-level release metadata does not exactly match the stable release identity.'
 }
 
-foreach ($entry in @(
-        [pscustomobject]@{ Record = $metadata.artifacts.setup; Path = $SetupPath; Name = 'StreamlinkVlcStudio-Setup.exe' },
-        [pscustomobject]@{ Record = $metadata.artifacts.zip; Path = $ZipPath; Name = 'StreamlinkVlcStudio-release.zip' },
-        [pscustomobject]@{ Record = $metadata.artifacts.sbom; Path = $SbomPath; Name = 'StreamStudio.spdx.json' },
-        [pscustomobject]@{ Record = $metadata.artifacts.updateManifest; Path = $UpdateManifestPath; Name = 'UPDATE-MANIFEST.json' },
-        [pscustomobject]@{ Record = $metadata.artifacts.updateSignature; Path = $UpdateSignaturePath; Name = 'UPDATE-MANIFEST.sig' })) {
-    $file = Get-Item -LiteralPath $entry.Path
-    $hash = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-    if ([string]$entry.Record.name -cne $entry.Name -or
-        [long]$entry.Record.length -ne $file.Length -or
-        [string]$entry.Record.sha256 -cne $hash) {
-        throw "Top-level release metadata has stale asset data for $($entry.Name)."
+foreach ($entry in (Get-ReleaseMetadataArtifacts $contract $PSBoundParameters).GetEnumerator()) {
+    $expected = $entry.Value
+    $record = $metadata.artifacts.($entry.Key)
+    if ([string]$record.name -cne $expected.name -or
+        [long]$record.length -ne $expected.length -or
+        [string]$record.sha256 -cne $expected.sha256) {
+        throw "Top-level release metadata has stale asset data for $($expected.name)."
     }
 }
 

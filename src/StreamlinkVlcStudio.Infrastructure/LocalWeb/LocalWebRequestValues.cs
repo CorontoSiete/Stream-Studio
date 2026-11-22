@@ -16,6 +16,8 @@ internal static class LocalWebRequestValues
     internal static Guid Id(JsonElement input, string name = "id") => Guid.TryParse(RequiredText(input, name, 40), out var id)
         ? id : throw new ArgumentException("Invalid download ID.");
 
+    internal static string Cursor(JsonElement input) => Optional(input, "cursor", 2048);
+
     internal static double Seconds(JsonElement input, string name) =>
         TryGetProperty(input, name, out var value) && value.ValueKind == JsonValueKind.Number &&
         value.TryGetDouble(out var number) && double.IsFinite(number) && number is >= 0 and <= 31_536_000

@@ -344,7 +344,7 @@ function Read-VerifiedUpdateManifest(
 
 function Assert-SignedManifestFile([string]$Path, $SignedAsset) {
     $item = Get-Item -LiteralPath $Path
-    $actualHash = (Get-FileHash -LiteralPath $item.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+    $actualHash = Get-FileSha256 $item.FullName
     if ($item.Name -cne [string]$SignedAsset.name -or
         $item.Length -ne [long]$SignedAsset.length -or
         $actualHash -cne [string]$SignedAsset.sha256) {
@@ -475,7 +475,7 @@ function Assert-FileChecksum([string]$Path, [hashtable]$Checksums) {
     if (-not $Checksums.ContainsKey($name)) {
         throw "Release checksum manifest does not contain '$name'."
     }
-    $actual = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+    $actual = Get-FileSha256 $Path
     if (-not [string]::Equals($actual, [string]$Checksums[$name], [StringComparison]::Ordinal)) {
         throw "Release checksum mismatch for '$name'. Expected $($Checksums[$name]), found $actual."
     }

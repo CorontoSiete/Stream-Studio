@@ -33,8 +33,9 @@ internal sealed class VodBrowseController : IDisposable
     public void ScheduleTwitchVod(
         TimeSpan delay,
         Action callback,
-        Action<Exception>? callbackErrorHandler = null) =>
-        twitchVod.Schedule(delay, callback, callbackErrorHandler);
+        Action<Exception> callbackErrorHandler,
+        Action<Action> dispatch) =>
+        twitchVod.Schedule(delay, callback, callbackErrorHandler, dispatch);
     public void CancelScheduledTwitchVod() => twitchVod.CancelScheduled();
     public CancellationTokenSource BeginTwitchVodOperation(CancellationToken lifetimeToken) => twitchVod.BeginOperation(lifetimeToken);
     public void CancelTwitchVodOperation() => twitchVod.CancelActive();
@@ -43,8 +44,9 @@ internal sealed class VodBrowseController : IDisposable
     public void ScheduleBrowseCategory(
         TimeSpan delay,
         Action callback,
-        Action<Exception>? callbackErrorHandler = null) =>
-        browseCategories.Schedule(delay, callback, callbackErrorHandler);
+        Action<Exception> callbackErrorHandler,
+        Action<Action> dispatch) =>
+        browseCategories.Schedule(delay, callback, callbackErrorHandler, dispatch);
     public void CancelScheduledBrowseCategory() => browseCategories.CancelScheduled();
     public CancellationTokenSource BeginBrowseCategoryOperation(CancellationToken lifetimeToken) => browseCategories.BeginOperation(lifetimeToken);
     public void CancelBrowseCategoryOperation() => browseCategories.CancelActive();

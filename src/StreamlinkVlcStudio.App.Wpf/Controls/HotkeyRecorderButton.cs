@@ -136,7 +136,7 @@ public sealed class HotkeyRecorderButton : Button
             return;
         }
 
-        var newGesture = new HotkeyGesture(key, Keyboard.Modifiers).Serialize();
+        var newGesture = new HotkeyGesture(key, e.KeyboardDevice.Modifiers).Serialize();
         suppressedKeyUp = key;
         CompleteCapture(newGesture);
     }

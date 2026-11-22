@@ -5,7 +5,8 @@ function Invoke-NativeTestCommand {
         [Parameter(Mandatory = $true)][string]$FailureMessage
     )
 
-    $command = Get-Command -Name $FilePath -CommandType Application -ErrorAction Stop
+    # An explicit path containing '..' can return both the original and normalized path.
+    $command = Get-Command -Name $FilePath -CommandType Application -TotalCount 1 -ErrorAction Stop
     # Windows PowerShell wraps redirected stderr in error records, even when
     # the executable succeeded. Keep diagnostics and judge native tests by their
     # exit status. These preferences are local to this function.

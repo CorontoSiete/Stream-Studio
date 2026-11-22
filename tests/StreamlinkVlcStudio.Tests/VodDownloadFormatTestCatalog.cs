@@ -44,7 +44,9 @@ internal static partial class VodDownloadFormatTestCatalog
     private static async Task RoundTripAsync(PlatformKind platform)
     {
         RequireFfmpeg();
-        await using var fixture = new DownloadFixture(platform);
+        await using var fixture = platform == PlatformKind.Kick
+            ? new DownloadFixture(platform, "offline VODs 日本語 %06d")
+            : new DownloadFixture(platform);
         await UseRealMediaAsync(fixture);
         var original = await fixture.DownloadAsync();
         await using var playback = await fixture.Service.AcquireOfflinePlaybackAsync(original.Id);
@@ -405,7 +407,7 @@ internal static partial class VodDownloadFormatTestCatalog
         internal TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public async Task<OfflineVodPackage> ConvertAsync(string sourceDirectory, OfflineVodPackage source,
+        public async Task ConvertAsync(string sourceDirectory, OfflineVodPackage source,
             string outputDirectory, VodDownloadFormat format, string streamlinkPath, CancellationToken cancellationToken)
         {
             Calls++;
@@ -418,7 +420,7 @@ internal static partial class VodDownloadFormatTestCatalog
             var header = new byte[64];
             "ftyp"u8.CopyTo(header.AsSpan(4));
             await File.WriteAllBytesAsync(Path.Combine(outputDirectory, OfflineVodPackage.Mp4FileName), header, cancellationToken);
-            return await OfflineVodPackage.CreateMp4Async(outputDirectory, source.Duration, cancellationToken);
+            await OfflineVodPackage.CreateMp4Async(outputDirectory, source.Duration, cancellationToken);
         }
     }
 }

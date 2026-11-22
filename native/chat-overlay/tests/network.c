@@ -437,6 +437,74 @@ static void test_channel_arguments(const char *directory) {
     puts("PASS channel arguments preserve valid Kick names and reject truncation");
 }
 
+static void test_badge_versions(void) {
+    int version = -1;
+    assert(parse_badge_version("0", 0, &version) && version == 0);
+    assert(!parse_badge_version("0", 1, &version));
+    assert(parse_badge_version("42 \t", 1, &version) && version == 42);
+    assert(parse_badge_version("2147483647", 1, &version) && version == INT_MAX);
+    assert(!parse_badge_version("2147483648", 0, &version));
+    assert(!parse_badge_version("99999999999999999999", 1, &version));
+    assert(!parse_badge_version("-1", 0, &version));
+    assert(!parse_badge_version("12months", 1, &version));
+    assert(version == INT_MAX);
+
+    int versions[3] = {0};
+    int count = 0;
+    register_subscriber_badge_version(versions, &count, 3, 12);
+    register_subscriber_badge_version(versions, &count, 3, 0);
+    register_subscriber_badge_version(versions, &count, 3, 12);
+    assert(count == 2);
+    register_subscriber_badge_version(versions, &count, 3, 6);
+    register_subscriber_badge_version(versions, &count, 3, 9);
+    assert(count == 3);
+    assert(find_subscriber_badge_version(versions, count, 0) == 0);
+    assert(find_subscriber_badge_version(versions, count, 9) == 6);
+    assert(find_subscriber_badge_version(versions, count, 12) == 12);
+    puts("PASS badge versions remain sorted, unique and bounded, and select the nearest fallback");
+}
+
+static void test_badge_aliases(void) {
+    char id[MAX_BADGE_ID];
+    char style[MAX_BADGE_ID];
+    normalize_badge_id(" Gifted-Subscription ", id, sizeof(id));
+    normalize_badge_style_id(" Gifted-Subscription/12", style, sizeof(style));
+    assert(strcmp(id, "sub_gifter") == 0 && strcmp(style, id) == 0);
+    normalize_badge_id(" Gifted-Subscription_BADGE ", id, sizeof(id));
+    assert(strcmp(id, "gifted-subscription_badge") == 0);
+    normalize_badge_id("Subscription-GiftS", id, sizeof(id));
+    assert(strcmp(id, "sub_gifter") == 0);
+    normalize_badge_style_id("Channel-Host,other", style, sizeof(style));
+    assert(strcmp(style, "broadcaster") == 0);
+    normalize_badge_id("Artist-Badge", id, sizeof(id));
+    normalize_badge_style_id(id, style, sizeof(style));
+    assert(strcmp(id, "artist-badge") == 0 && strcmp(style, "artist_badge") == 0);
+
+    char candidates[3][MAX_BADGE_ID] = {{0}};
+    assert(candidate_kick_badge_ids("gift-a_b", candidates, 3) == 3);
+    assert(strcmp(candidates[0], "gift-a_b") == 0);
+    assert(strcmp(candidates[1], "gift-a-b") == 0);
+    assert(strcmp(candidates[2], "gift_a_b") == 0);
+    puts("PASS badge catalogs and visuals share aliases and retain distinct provider IDs");
+}
+
+static void test_json_integer_fields(void) {
+    const char *json = "{\"provider\":null,\"overflow\":2147483648,"
+                       "\"fraction\":1.5,\"exponent\":1e2,\"max\":2147483647,"
+                       "\"nested\":{\"width\":32},\"min\":-2147483648}";
+    const char *end = json + strlen(json);
+    assert(json_get_int_default_direct(json, end, "provider", -1) == -1);
+    assert(json_get_int_default_direct(json, end, "overflow", -1) == -1);
+    assert(json_get_int_default_direct(json, end, "fraction", -1) == -1);
+    assert(json_get_int_default_direct(json, end, "exponent", -1) == -1);
+    assert(json_get_int_default_direct(json, end, "max", -1) == INT_MAX);
+    assert(json_get_int_default_direct(json, end, "min", -1) == INT_MIN);
+    assert(json_get_int_default_direct(json, end, "width", -1) == -1);
+    assert(json_get_int_default(json, end, "overflow", -1) == -1);
+    assert(json_get_int_default(json, end, "width", -1) == 32);
+    puts("PASS JSON integer fields honor defaults and numeric bounds");
+}
+
 int main(int argc, char **argv) {
     /* Windows PowerShell 5 treats redirected native stderr as a terminating error.
      * Keep both application diagnostics and assertion failures in the test log. */
@@ -448,6 +516,9 @@ int main(int argc, char **argv) {
     test_text_messages();
     test_invalid_frames();
     test_irc_overflow();
+    test_badge_versions();
+    test_badge_aliases();
+    test_json_integer_fields();
     test_channel_arguments(argc > 1 ? argv[1] : ".");
     return 0;
 }

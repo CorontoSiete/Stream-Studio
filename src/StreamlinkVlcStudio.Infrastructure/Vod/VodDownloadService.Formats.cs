@@ -120,11 +120,11 @@ public sealed partial class VodDownloadService
                 throw;
             }
             var output = ConversionDirectory(job.Id);
-            var package = await converter.ConvertAsync(sourceDirectory, source, output, format,
+            await converter.ConvertAsync(sourceDirectory, source, output, format,
                 job.Options.StreamlinkPath, token).ConfigureAwait(false);
-            if (package.Format != format) throw new InvalidDataException("The converted VOD has an unexpected format.");
             CopyProfileImage(sourceDirectory, output);
-            await OfflineVodPackage.ValidateAsync(output, token).ConfigureAwait(false);
+            var package = await OfflineVodPackage.ValidateAsync(output, token).ConfigureAwait(false);
+            if (package.Format != format) throw new InvalidDataException("The converted VOD has an unexpected format.");
 
             await gate.WaitAsync(token).ConfigureAwait(false);
             try

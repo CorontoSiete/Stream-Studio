@@ -20,7 +20,9 @@ public static class KickTokenEndpoint
 
             IFormCollection form;
             try { form = await context.Request.ReadFormAsync(timeout.Token); }
-            catch (Exception ex) when (ex is InvalidDataException or BadHttpRequestException)
+            catch (BadHttpRequestException ex)
+            { return Error("invalid_request", ex.StatusCode); }
+            catch (InvalidDataException)
             { return Error("invalid_request", StatusCodes.Status400BadRequest); }
             catch (OperationCanceledException)
             { return Error("request_timeout", StatusCodes.Status408RequestTimeout); }

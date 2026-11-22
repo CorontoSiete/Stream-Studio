@@ -20,6 +20,7 @@ internal static class PagedRefreshResourceTestCatalog
         tests.Add(("paged refresh resources: category refresh reloads viewer counts on retained cards", ViewerCountsAsync));
         tests.Add(("paged refresh resources: overlapping category pages retain enriched counts without requerying", OverlapCountsAsync));
         tests.Add(("paged refresh resources: unchanged Kick category refresh preserves sorted cards without moves", KickOrderingAsync));
+        tests.Add(("paged refresh resources: Twitch filters leave an in-flight Kick search intact", KickIgnoresTwitchFiltersAsync));
         return tests;
     }
 
@@ -242,6 +243,19 @@ internal static class PagedRefreshResourceTestCatalog
         Assert.SequenceEqual(cards, scenario.Cards);
         Assert.Equal(0, changes);
     }, kickCategories: true);
+
+    private static Task KickIgnoresTwitchFiltersAsync() => RunAsync(Surface.KickVod, async scenario =>
+    {
+        var pending = scenario.RefreshAsync();
+        var request = scenario.Service.Requests.Single();
+        scenario.ViewModel.ShowHighlightsVodFilterCommand.Execute(null);
+        Assert.True(scenario.IsLoading);
+        Assert.Equal(false, request.Token.IsCancellationRequested);
+        request.Complete([new("1")]);
+        await pending;
+        Assert.Equal(false, scenario.IsLoading);
+        Assert.SequenceEqual(new[] { "1" }, scenario.Ids);
+    });
 
     private static Task RunAsync(Surface surface, Func<Scenario, Task> test, bool kickCategories = false) => TestSta.RunOffscreenAsync(async () =>
     {

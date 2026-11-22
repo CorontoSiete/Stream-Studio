@@ -4,6 +4,30 @@ using StreamlinkVlcStudio.Infrastructure.LocalWeb;
 
 internal static partial class LocalWebTestCatalog
 {
+    private static Task UnchangedStreamPreferencesAsync() => WithWorkspaceAsync(async fixture =>
+    {
+        var path = Path.Combine(fixture.Directory, "web-stream-preferences.json");
+        var users = await LocalWebUserStore.OpenAsync(path);
+        var user = await users.AddAsync("watcher", "Watcher's password 123!");
+        var layout = new WebChatOverlayLayout(200, 100, 0.5, 0.5);
+        await users.SavePreferencesAsync(user.Id, JsonSerializer.SerializeToElement(new { hotkeys = new { } }), default);
+        await users.SaveVolumeAsync(user.Id, "twitch:Streamer", 0.42, default);
+        await users.SaveChatLayoutAsync(user.Id, "twitch:Streamer", layout, default);
+
+        users = await LocalWebUserStore.OpenAsync(path);
+        using (new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            await users.SaveVolumeAsync(user.Id, "Twitch:streamer", 0.42, default);
+            await users.SaveChatLayoutAsync(user.Id, "Twitch:streamer", layout, default);
+        }
+
+        await users.SaveVolumeAsync(user.Id, "Twitch:streamer", 0.31, default);
+        var preferences = (await LocalWebUserStore.OpenAsync(path)).PreferencesFor(user.Id);
+        Assert.Equal(1, preferences.Volumes.Count);
+        Assert.Equal(0.31, preferences.Volumes["Twitch:streamer"]);
+        Assert.Equal(layout, preferences.ChatLayouts["Twitch:streamer"]);
+    });
+
     private static async Task UnicodeShortcutsAsync()
     {
         var directory = Path.Combine(Path.GetTempPath(), "StreamStudioTests", "web-shortcuts-" + Guid.NewGuid().ToString("N"));

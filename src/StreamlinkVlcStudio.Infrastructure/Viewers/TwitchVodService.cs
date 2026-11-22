@@ -36,7 +36,7 @@ public sealed class TwitchVodService : ITwitchVodService
           }
         }
         """;
-    private static readonly HttpClient SharedHttpClient = HttpClientFactory.Create(TimeSpan.FromSeconds(20));
+    private static readonly HttpClient SharedHttpClient = HttpClientFactory.CreateForText(TimeSpan.FromSeconds(20));
     private readonly IAppLogger logger;
     private readonly HttpClient httpClient;
 

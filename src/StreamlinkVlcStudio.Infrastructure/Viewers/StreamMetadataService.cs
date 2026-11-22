@@ -232,27 +232,9 @@ public sealed class StreamMetadataService : IStreamMetadataService
             return metadata;
         }
 
-        try
-        {
-            var profileImages = await ProfileImageLookup.GetTwitchAsync(
-                httpClient,
-                token,
-                clientId,
-                [target.Channel],
-                cancellationToken).ConfigureAwait(false);
-            return profileImages.TryGetValue(target.Channel, out var profileImage)
-                ? metadata with { ProfileImageUrl = profileImage }
-                : metadata;
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            logger.Write(AppLogLevel.Warning, "Recent", $"Twitch profile image lookup failed for {target.DisplayName}.", ex);
-            return metadata;
-        }
+        return await AddProfileImageAsync(target, metadata, target.Channel,
+            () => ProfileImageLookup.GetTwitchAsync(httpClient, token, clientId, [target.Channel], cancellationToken),
+            cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<StreamMetadataResult> GetKickStreamMetadataAsync(
@@ -303,14 +285,22 @@ public sealed class StreamMetadataService : IStreamMetadataService
             return metadata;
         }
 
+        return await AddProfileImageAsync(target, metadata, broadcasterUserId,
+            () => ProfileImageLookup.GetKickAsync(httpClient, accessToken, [broadcasterUserId], cancellationToken),
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<StreamMetadataResult> AddProfileImageAsync(
+        StreamTarget target,
+        StreamMetadataResult metadata,
+        string profileKey,
+        Func<Task<IReadOnlyDictionary<string, string>>> getProfileImages,
+        CancellationToken cancellationToken)
+    {
         try
         {
-            var profileImages = await ProfileImageLookup.GetKickAsync(
-                httpClient,
-                accessToken,
-                [broadcasterUserId],
-                cancellationToken).ConfigureAwait(false);
-            return profileImages.TryGetValue(broadcasterUserId, out var profileImage)
+            var profileImages = await getProfileImages().ConfigureAwait(false);
+            return profileImages.TryGetValue(profileKey, out var profileImage)
                 ? metadata with { ProfileImageUrl = profileImage }
                 : metadata;
         }
@@ -320,7 +310,7 @@ public sealed class StreamMetadataService : IStreamMetadataService
         }
         catch (Exception ex)
         {
-            logger.Write(AppLogLevel.Warning, "Recent", $"Kick profile image lookup failed for {target.DisplayName}.", ex);
+            logger.Write(AppLogLevel.Warning, "Recent", $"{target.Platform} profile image lookup failed for {target.DisplayName}.", ex);
             return metadata;
         }
     }

@@ -276,15 +276,8 @@ internal static class RegressionTestCatalog
                 "press a key or side button",
                 System.Windows.Automation.AutomationProperties.GetName(recorder));
 
-            var source = new HeadlessPresentationSource { RootVisual = recorder };
-            var keyDown = new KeyEventArgs(
-                Keyboard.PrimaryDevice,
-                source,
-                Environment.TickCount,
-                Key.K)
-            {
-                RoutedEvent = Keyboard.PreviewKeyDownEvent
-            };
+            var source = new SyntheticKeyboardInput(recorder);
+            var keyDown = source.CreateEvent(Key.K);
             InvokeHotkeyRecorderMethod(recorder, "OnPreviewKeyDown", keyDown);
 
             Assert.True(keyDown.Handled);
@@ -300,40 +293,19 @@ internal static class RegressionTestCatalog
                 "Previous tab hotkey: K",
                 System.Windows.Automation.AutomationProperties.GetName(recorder));
 
-            var repeatedKeyDown = new KeyEventArgs(
-                Keyboard.PrimaryDevice,
-                source,
-                Environment.TickCount,
-                Key.K)
-            {
-                RoutedEvent = Keyboard.PreviewKeyDownEvent
-            };
+            var repeatedKeyDown = source.CreateEvent(Key.K);
             InvokeHotkeyRecorderMethod(recorder, "OnPreviewKeyDown", repeatedKeyDown);
             Assert.True(repeatedKeyDown.Handled);
             Assert.Equal(1, changingCount);
             Assert.True(recorder.IsCapturingInput);
 
-            var keyUp = new KeyEventArgs(
-                Keyboard.PrimaryDevice,
-                source,
-                Environment.TickCount,
-                Key.K)
-            {
-                RoutedEvent = Keyboard.PreviewKeyUpEvent
-            };
+            var keyUp = source.CreateEvent(Key.K, Keyboard.PreviewKeyUpEvent);
             InvokeHotkeyRecorderMethod(recorder, "OnPreviewKeyUp", keyUp);
             Assert.True(keyUp.Handled);
             Assert.Equal(false, recorder.IsCapturingInput);
 
             InvokeHotkeyRecorderMethod(recorder, "OnClick");
-            var secondKeyDown = new KeyEventArgs(
-                Keyboard.PrimaryDevice,
-                source,
-                Environment.TickCount,
-                Key.L)
-            {
-                RoutedEvent = Keyboard.PreviewKeyDownEvent
-            };
+            var secondKeyDown = source.CreateEvent(Key.L);
             InvokeHotkeyRecorderMethod(recorder, "OnPreviewKeyDown", secondKeyDown);
             Assert.True(recorder.IsCapturingInput);
             var focusLost = new KeyboardFocusChangedEventArgs(
@@ -371,15 +343,8 @@ internal static class RegressionTestCatalog
             viewModelField!.SetValue(window, viewModel);
 
             var initialVisibility = viewModel.IsReplaySeekBarUiVisible;
-            var source = new HeadlessPresentationSource { RootVisual = window };
-            var keyDown = new KeyEventArgs(
-                Keyboard.PrimaryDevice,
-                source,
-                Environment.TickCount,
-                Key.F8)
-            {
-                RoutedEvent = Keyboard.PreviewKeyDownEvent
-            };
+            var source = new SyntheticKeyboardInput(window);
+            var keyDown = source.CreateEvent(Key.F8);
             var handler = typeof(MainWindow).GetMethod(
                 "MainWindowPreviewKeyDown",
                 BindingFlags.Instance | BindingFlags.NonPublic);
@@ -597,21 +562,6 @@ internal static class RegressionTestCatalog
             BindingFlags.Instance | BindingFlags.NonPublic);
         Assert.NotNull(method);
         method!.Invoke(recorder, eventArgs is null ? null : [eventArgs]);
-    }
-
-    private sealed class HeadlessPresentationSource : PresentationSource
-    {
-        private Visual rootVisual = null!;
-
-        public override Visual RootVisual
-        {
-            get => rootVisual;
-            set => rootVisual = value;
-        }
-
-        public override bool IsDisposed => false;
-
-        protected override CompositionTarget GetCompositionTargetCore() => null!;
     }
 
     private static Task VlcAudioRequestsPublishAtomicSnapshots()

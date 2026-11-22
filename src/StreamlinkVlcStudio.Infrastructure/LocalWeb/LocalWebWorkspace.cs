@@ -40,6 +40,7 @@ public sealed record LocalWebDependencies
     public LocalWebChannelProfileClient ChannelProfiles { get; init; } = new();
     public LocalWebCategoryArtwork CategoryArtwork { get; init; } = new();
     internal Func<string, Uri, LocalWebMedia> CreateArchiveMedia { get; init; } = (id, uri) => new(id, uri);
+    internal Func<string, Uri, LocalWebMedia> CreateCardPreviewMedia { get; init; } = (id, uri) => new(id, uri);
     public SemaphoreSlim PlaybackSlots { get; } = new(32, 32);
 }
 
@@ -76,6 +77,13 @@ public sealed partial class LocalWebWorkspace(LocalWebDependencies services) : I
         }
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, lifetime.Token);
         var token = linked.Token;
+        if (action == "preview/open")
+            return await OpenCardPreviewAsync(input, token).ConfigureAwait(false);
+        if (action == "preview/close")
+        {
+            CloseCardPreview(id: CardPreviewId(input));
+            return new { closed = true };
+        }
         if (action == "hotkeys" && services.GetDesktopHotkeysAsync is { } getDesktopHotkeys)
             return await getDesktopHotkeys(token).ConfigureAwait(false);
         var settings = await services.GetSettingsAsync(token).ConfigureAwait(false);
@@ -158,8 +166,9 @@ public sealed partial class LocalWebWorkspace(LocalWebDependencies services) : I
             case "search":
                 return await SearchChannelsAsync(RequiredText(input, "query", 250), settings, token).ConfigureAwait(false);
             case "categories":
-                var categories = await services.Browse.GetCategoriesAsync(new(Platform(input), Optional(input, "query", 100), Optional(input, "cursor", 2048)), settings, token).ConfigureAwait(false);
-                return new { items = categories.Items.Select(c => new { c.Id, c.Name, thumbnailUrl = CategoryArtworkUrl(c), c.ViewerCount }).ToArray(), categories.NextCursor, categories.Message };
+                var categories = await services.Browse.GetCategoriesAsync(new(Platform(input), Optional(input, "query", 100), Cursor(input)), settings, token).ConfigureAwait(false);
+                return PageResult(categories.Items.Select(c => new { c.Id, c.Name, thumbnailUrl = CategoryArtworkUrl(c), c.ViewerCount }),
+                    categories.IsAvailable, categories.NextCursor, categories.Message);
             case "categories/viewers":
                 if (Platform(input) != PlatformKind.Twitch ||
                     !input.TryGetProperty("categoryIds", out var ids) || ids.ValueKind != JsonValueKind.Array ||
@@ -178,8 +187,9 @@ public sealed partial class LocalWebWorkspace(LocalWebDependencies services) : I
                 }
             case "streams":
                 var language = BrowseLanguages.Normalize(Optional(input, "language", 16));
-                var streams = await services.Browse.GetStreamsAsync(new(Platform(input), Optional(input, "categoryId", 128), Optional(input, "categoryName", 100), Optional(input, "cursor", 2048), Language: language), settings, token).ConfigureAwait(false);
-                return new { items = streams.Items.Select(s => Card(s.Target, s.DisplayName, s.Title, s.ThumbnailUrl, "Live", s.ViewerCount)).ToArray(), streams.NextCursor, streams.Message };
+                var streams = await services.Browse.GetStreamsAsync(new(Platform(input), Optional(input, "categoryId", 128), Optional(input, "categoryName", 100), Cursor(input), Language: language), settings, token).ConfigureAwait(false);
+                return PageResult(streams.Items.Select(s => Card(s.Target, s.DisplayName, s.Title, s.ThumbnailUrl, "Live", s.ViewerCount)),
+                    streams.IsAvailable, streams.NextCursor, streams.Message);
             case "vods":
                 return await VodsAsync(input, settings, token).ConfigureAwait(false);
             case "downloads":
@@ -387,28 +397,32 @@ public sealed partial class LocalWebWorkspace(LocalWebDependencies services) : I
     private async Task<object> VodsAsync(JsonElement input, AppSettings settings, CancellationToken token)
     {
         var channel = StreamInputParser.FromChannel(Platform(input), RequiredText(input, "channel", 100));
-        var cursor = Optional(input, "cursor", 2048);
+        var cursor = Cursor(input);
         IEnumerable<(StreamTarget Target, string LegacyId)> videos;
+        bool available;
         string nextCursor, message;
         if (channel.Platform == PlatformKind.Twitch)
         {
             var type = Optional(input, "type", 16) switch { "highlight" => TwitchVodTypeFilter.Highlight, "upload" => TwitchVodTypeFilter.Upload, "all" => TwitchVodTypeFilter.All, _ => TwitchVodTypeFilter.Archive };
             var result = await services.TwitchVods.SearchAsync(new(channel.Channel, type, cursor, 50), settings, token).ConfigureAwait(false);
             videos = result.Videos.Select(video => (video.ToStreamTarget(), ""));
-            (nextCursor, message) = (result.NextCursor, result.Message);
+            (available, nextCursor, message) = (result.IsAvailable, result.NextCursor, result.Message);
         }
         else
         {
             var result = await services.KickVods.SearchAsync(new(channel.Channel, cursor), settings, token).ConfigureAwait(false);
             videos = result.Videos.Select(video => (video.ToStreamTarget(), video.Id));
-            (nextCursor, message) = (result.NextCursor, result.Message);
+            (available, nextCursor, message) = (result.IsAvailable, result.NextCursor, result.Message);
         }
 
         var cards = new List<object>();
         foreach (var (target, legacyId) in videos.OrderByDescending(video => video.Target.MediaPublishedAtUtc))
             cards.Add(await VodCardAsync(target, legacyId, token).ConfigureAwait(false));
-        return new { items = cards, nextCursor, message };
+        return PageResult(cards, available, nextCursor, message);
     }
+
+    private static object PageResult<T>(IEnumerable<T> items, bool available, string nextCursor, string message) =>
+        new { items = items.ToArray(), available, nextCursor, message };
 
     private async Task<object> VodCardAsync(StreamTarget target, string legacyMediaId, CancellationToken token)
     {
@@ -675,13 +689,21 @@ public sealed partial class LocalWebWorkspace(LocalWebDependencies services) : I
 
     public async Task ServeMediaAsync(HttpContext context, string playbackId, string resourceId)
     {
-        if (!players.TryGetValue(playbackId, out var player)) { context.Response.StatusCode = 404; return; }
+        players.TryGetValue(playbackId, out var player);
+        var preview = player is null ? FindCardPreview(playbackId, resourceId) : null;
+        if (player is null && preview is null) { context.Response.StatusCode = 404; return; }
+        var mediaToken = player?.Token ?? preview!.Token;
         var requestAborted = context.RequestAborted;
-        using var linked = CancellationTokenSource.CreateLinkedTokenSource(requestAborted, player.Token);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(requestAborted, mediaToken);
         try
         {
             linked.Token.ThrowIfCancellationRequested();
             context.RequestAborted = linked.Token;
+            if (player is null)
+            {
+                await preview!.Media!.ServeAsync(context, resourceId).ConfigureAwait(false);
+                return;
+            }
             if (resourceId == "profile")
             {
                 await LocalWebProfileImages.ServeCachedAsync(context, player.Target).ConfigureAwait(false);
@@ -692,7 +714,7 @@ public sealed partial class LocalWebWorkspace(LocalWebDependencies services) : I
                 .ServeAsync(context, resourceId).ConfigureAwait(false);
         }
         catch (Exception error) when (error is OperationCanceledException or ObjectDisposedException &&
-            player.Token.IsCancellationRequested && !requestAborted.IsCancellationRequested)
+            mediaToken.IsCancellationRequested && !requestAborted.IsCancellationRequested)
         {
             if (context.Response.HasStarted) context.Abort();
             else context.Response.StatusCode = 404;
@@ -805,6 +827,8 @@ public sealed partial class LocalWebWorkspace(LocalWebDependencies services) : I
         try { await lifetime.CancelAsync().ConfigureAwait(false); }
         finally
         {
+            CloseCardPreview();
+            cardPreviewResolution.Dispose();
             categoryViewerCountSlots.Dispose();
             followingHistorySlot.Dispose();
             var cleanup = new List<Task>();

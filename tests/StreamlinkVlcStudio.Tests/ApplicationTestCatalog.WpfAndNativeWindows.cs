@@ -4738,40 +4738,31 @@ internal static partial class ApplicationTestCatalog
         return TestSta.RunAsync(() =>
         {
             var window = new MainWindow();
-
-            var selected = new System.Windows.Controls.Button
-            {
-                DataContext = new HomeNavigationVisualState { IsFollowedHomePageSelected = true },
-                Style = (System.Windows.Style)window.Resources["FollowedHomeSegmentButton"]
-            };
-            selected.ApplyTemplate();
-            selected.Dispatcher.Invoke(
+            var following = (Button)window.FindName("FollowingHomeButton");
+            following.DataContext = new HomeNavigationVisualState(true);
+            following.ApplyTemplate();
+            following.Dispatcher.Invoke(
                 () => { },
                 System.Windows.Threading.DispatcherPriority.DataBind);
             WpfVisualTest.AssertTemplateBorderColor(
-                selected,
+                following,
                 WpfVisualTest.PaletteColor(window, "StudioAccentPressedColor"),
                 WpfVisualTest.PaletteColor(window, "StudioAccentColor"));
             WpfVisualTest.AssertSolidBrushColor(
                 WpfVisualTest.PaletteColor(window, "StudioAccentTextColor"),
-                selected.Foreground);
+                following.Foreground);
 
-            var idle = new System.Windows.Controls.Button
-            {
-                DataContext = new HomeNavigationVisualState(),
-                Style = (System.Windows.Style)window.Resources["FollowedHomeSegmentButton"]
-            };
-            idle.ApplyTemplate();
-            idle.Dispatcher.Invoke(
+            following.DataContext = new HomeNavigationVisualState(false);
+            following.Dispatcher.Invoke(
                 () => { },
                 System.Windows.Threading.DispatcherPriority.DataBind);
             WpfVisualTest.AssertTemplateBorderColor(
-                idle,
+                following,
                 WpfVisualTest.PaletteColor(window, "StudioSurface0Color"),
-                WpfVisualTest.PaletteColor(window, "StudioBorderColor"));
+                System.Windows.Media.Colors.Transparent.ToString());
             WpfVisualTest.AssertSolidBrushColor(
                 WpfVisualTest.PaletteColor(window, "StudioTextSecondaryColor"),
-                idle.Foreground);
+                following.Foreground);
         });
     }),
     ("stream tab chrome distinguishes selected and idle states", () =>
@@ -4826,14 +4817,16 @@ internal static partial class ApplicationTestCatalog
                 System.Windows.Threading.DispatcherPriority.ApplicationIdle);
             window.UpdateLayout();
 
+            var selectedItem = GetGeneratedTabStripListBoxItem(window, viewModel, selectedTab);
+            var idleItem = GetGeneratedTabStripListBoxItem(window, viewModel, idleTab);
             WpfVisualTest.AssertBorderColor(
                 FindTabStripChrome(window, selectedTab),
                 WpfVisualTest.PaletteColor(window, "StudioAccentPressedColor"),
-                WpfVisualTest.PaletteColor(window, "StudioFocusColor"));
+                WpfVisualTest.PaletteColor(window, selectedItem.IsMouseOver ? "StudioBorderStrongColor" : "StudioBorderColor"));
             WpfVisualTest.AssertBorderColor(
                 FindTabStripChrome(window, idleTab),
-                WpfVisualTest.PaletteColor(window, "StudioSurface1Color"),
-                WpfVisualTest.PaletteColor(window, "StudioBorderColor"));
+                WpfVisualTest.PaletteColor(window, idleItem.IsMouseOver ? "StudioSurface2Color" : "StudioSurface1Color"),
+                WpfVisualTest.PaletteColor(window, idleItem.IsMouseOver ? "StudioBorderStrongColor" : "StudioBorderColor"));
             window.Close();
         });
     }),

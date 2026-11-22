@@ -2,7 +2,7 @@
 
 The desktop Discover page and local web server UI share language choices, defaulting to **All languages**. Each category remembers its selected language separately for Twitch and Kick, including after restarting. For example, Twitch Just Chatting can remember English while Music remembers French. **All languages** is also a saved choice.
 
-The desktop saves choices automatically in `AppSettings.BrowseCategoryLanguages`, keyed by platform and category ID. Web accounts save their own `preferences.categoryLanguages` in the server's account store, so choices survive browser and server restarts without affecting another account or the desktop. Opening a category restores its saved choice before loading streams. The directory's language selector supplies a default for categories without a saved choice.
+The Discover Categories dropdown remembers its selection across restarts and supplies the initial language for categories without a saved choice. Returning from a category restores the directory selection. The desktop saves the directory selection and per-category choices in app settings. The web UI saves both in the signed-in account's preferences.
 
 Changing language clears the displayed streams and starts the category's first page again. Pagination and Refresh carry the selected language. Responses from an older selection cannot replace or append to the current list. The desktop also cancels the previous stream request. The browser offers **Show all languages** when a filtered category is empty.
 

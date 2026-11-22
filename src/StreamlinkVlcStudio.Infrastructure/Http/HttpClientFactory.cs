@@ -1,3 +1,5 @@
+using System.Net;
+
 namespace StreamlinkVlcStudio.Infrastructure.Http;
 
 /// <summary>
@@ -16,14 +18,24 @@ public static class HttpClientFactory
         TimeSpan timeout,
         bool includeUserAgent = false,
         bool acceptJson = false,
-        bool allowAutoRedirect = true)
+        bool allowAutoRedirect = true) =>
+        Create(timeout, includeUserAgent, acceptJson, allowAutoRedirect, decompress: acceptJson);
+
+    internal static HttpClient CreateForText(TimeSpan timeout, bool includeUserAgent = false, bool allowAutoRedirect = true) =>
+        Create(timeout, includeUserAgent, acceptJson: false, allowAutoRedirect, decompress: true);
+
+    private static HttpClient Create(
+        TimeSpan timeout, bool includeUserAgent, bool acceptJson, bool allowAutoRedirect, bool decompress)
     {
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(timeout, TimeSpan.Zero);
 
         var handler = new HttpClientHandler
         {
             AllowAutoRedirect = allowAutoRedirect,
-            CheckCertificateRevocationList = true
+            CheckCertificateRevocationList = true,
+            AutomaticDecompression = decompress
+                ? DecompressionMethods.GZip | DecompressionMethods.Deflate | DecompressionMethods.Brotli
+                : DecompressionMethods.None
         };
         HttpClient client;
         try

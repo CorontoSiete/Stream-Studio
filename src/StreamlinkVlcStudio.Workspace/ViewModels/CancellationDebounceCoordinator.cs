@@ -21,11 +21,14 @@ internal sealed class CancellationDebounceCoordinator : IDisposable
     public bool Schedule(
         TimeSpan delay,
         Action callback,
-        Action<Exception>? callbackErrorHandler = null)
+        Action<Exception>? callbackErrorHandler = null,
+        Action<Action>? dispatch = null)
     {
         ArgumentNullException.ThrowIfNull(callback);
 
         Timer? previousTimer;
+        long scheduledVersion;
+        var runImmediately = dispatch is not null && delay == TimeSpan.Zero;
         lock (gate)
         {
             if (disposed)
@@ -34,9 +37,9 @@ internal sealed class CancellationDebounceCoordinator : IDisposable
             }
 
             previousTimer = timer;
-            var scheduledVersion = scheduleVersion + 1;
-            var nextTimer = new Timer(
-                _ => RunScheduledCallback(scheduledVersion, callback, callbackErrorHandler),
+            scheduledVersion = scheduleVersion + 1;
+            var nextTimer = runImmediately ? null : new Timer(
+                _ => RunScheduledCallback(scheduledVersion, callback, callbackErrorHandler, dispatch),
                 null,
                 delay,
                 Timeout.InfiniteTimeSpan);
@@ -46,6 +49,7 @@ internal sealed class CancellationDebounceCoordinator : IDisposable
         }
 
         previousTimer?.Dispose();
+        if (runImmediately) RunScheduledCallback(scheduledVersion, callback, callbackErrorHandler, dispatch);
         return true;
     }
 
@@ -169,7 +173,8 @@ internal sealed class CancellationDebounceCoordinator : IDisposable
     private void RunScheduledCallback(
         long scheduledVersion,
         Action callback,
-        Action<Exception>? callbackErrorHandler)
+        Action<Exception>? callbackErrorHandler,
+        Action<Action>? dispatch)
     {
         Timer? completedTimer;
         lock (gate)
@@ -184,15 +189,34 @@ internal sealed class CancellationDebounceCoordinator : IDisposable
         }
 
         completedTimer?.Dispose();
+        if (dispatch is null)
+        {
+            InvokeScheduledCallback(callback, callbackErrorHandler);
+            return;
+        }
+
+        InvokeScheduledCallback(() => dispatch(RunIfCurrent), callbackErrorHandler);
+
+        void RunIfCurrent()
+        {
+            // The timer may already have posted to the dispatcher when work is replaced or canceled.
+            lock (gate)
+            {
+                if (disposed || scheduledVersion != scheduleVersion) return;
+            }
+            InvokeScheduledCallback(callback, callbackErrorHandler);
+        }
+    }
+
+    private static void InvokeScheduledCallback(Action callback, Action<Exception>? callbackErrorHandler)
+    {
         try
         {
             callback();
         }
         catch (Exception exception)
         {
-            // Timer callbacks run on a ThreadPool thread. Letting a caller's callback
-            // exception escape here terminates the process instead of reporting the
-            // failed debounced operation through the caller's normal error path.
+            // Report failures from timer and dispatched callbacks through the caller's error path.
             if (callbackErrorHandler is null)
             {
                 System.Diagnostics.Debug.WriteLine($"Debounced callback failed: {exception}");

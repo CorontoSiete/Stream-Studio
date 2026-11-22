@@ -6,7 +6,6 @@ All corresponding VLC sources and the local patch are included with the app.
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import argparse
-import hashlib
 import json
 import os
 import re
@@ -14,31 +13,38 @@ import subprocess
 import tarfile
 import tempfile
 
+from native_build_files import install_binary, sha256
+
 
 def main():
     root = Path(__file__).resolve().parent.parent
+    bundled = root / 'src/StreamlinkVlcStudio.Infrastructure/Vlc/BundledAdaptiveReplay/libstudio_adaptive_plugin.dll'
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--gcc', required=True, type=Path)
     parser.add_argument('--vlc-library-directory', required=True, type=Path)
-    parser.add_argument('--output', type=Path, default=root / 'src/StreamlinkVlcStudio.Infrastructure/Vlc/BundledAdaptiveReplay/libstudio_adaptive_plugin.dll')
+    parser.add_argument('--output', type=Path, default=bundled)
     parser.add_argument('--build-directory', type=Path, default=root / 'artifacts/native/adaptive-replay')
     parser.add_argument('--jobs', type=int, default=min(6, os.cpu_count() or 1))
     args = parser.parse_args()
     compiler = args.gcc.resolve().parent
     sdk = args.vlc_library_directory.resolve()
     output = args.output.resolve()
+    is_bundled_output = output == bundled.resolve()
+    import_library = sdk / 'libvlccore.a'
+    if not import_library.is_file():
+        parser.error('The VLC import library libvlccore.a is missing.')
+    native = root / 'native/adaptive-replay'
+    provenance = json.loads((native / 'provenance.json').read_text(encoding='utf-8'))
+    if is_bundled_output and sha256(import_library) != provenance['libvlccoreImportLibrarySha256']:
+        parser.error('Bundled output requires the pinned libvlccore.a in provenance.json. Use --output for a separate build.')
+    bundle = native / provenance['sourceBundle']
+    if sha256(bundle) != provenance['sourceBundleSha256']:
+        raise RuntimeError('The bundled upstream source does not match its pinned SHA-256.')
     environment = dict(os.environ)
     environment['PATH'] = str(compiler) + os.pathsep + environment['PATH']
     target = subprocess.check_output([str(args.gcc), '-dumpmachine'], env=environment, text=True).strip()
     if target != 'x86_64-w64-mingw32':
         parser.error('Use x64 MinGW-w64 GCC/G++ targeting MSVCRT for VLC 3.0.23.')
-    if not (sdk / 'libvlccore.a').is_file():
-        parser.error('The VLC import library libvlccore.a is missing.')
-    native = root / 'native/adaptive-replay'
-    provenance = json.loads((native / 'provenance.json').read_text(encoding='utf-8'))
-    bundle = native / provenance['sourceBundle']
-    if hashlib.sha256(bundle.read_bytes()).hexdigest() != provenance['sourceBundleSha256']:
-        raise RuntimeError('The bundled upstream source does not match its pinned SHA-256.')
     args.build_directory.mkdir(parents=True, exist_ok=True)
     # Every build has a fresh source/object directory; no stale native header cache.
     build = Path(tempfile.mkdtemp(prefix='build-', dir=args.build_directory.resolve()))
@@ -84,9 +90,11 @@ def main():
     dependencies = {name.lower() for name in re.findall(r'DLL Name:\s+(\S+)', imports)}
     if dependencies != {'kernel32.dll', 'msvcrt.dll', 'ws2_32.dll', 'libvlccore.dll'}:
         raise RuntimeError(f'Unexpected native dependencies: {sorted(dependencies)}')
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_bytes(candidate.read_bytes())
-    print(f'SHA256 {hashlib.sha256(output.read_bytes()).hexdigest()}  {output}')
+    digest = sha256(candidate)
+    if is_bundled_output and digest != provenance['binarySha256']:
+        raise RuntimeError('Bundled output requires the binary SHA-256 in provenance.json. Use --output for a separate build.')
+    install_binary(candidate, output)
+    print(f'SHA256 {digest}  {output}')
 
 
 if __name__ == '__main__':

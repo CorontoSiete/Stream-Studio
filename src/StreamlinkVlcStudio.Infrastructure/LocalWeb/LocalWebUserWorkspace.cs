@@ -33,13 +33,19 @@ internal sealed class LocalWebUserWorkspace(ILocalWebWorkspace inner, LocalWebUs
             case "streams":
                 {
                     var key = CategoryLanguagePreferences.Key(Platform(input), RequiredText(input, "categoryId", 128));
-                    var hasLanguage = input.TryGetProperty("language", out _);
-                    var language = hasLanguage
-                        ? BrowseLanguages.Normalize(Optional(input, "language", 16))
-                        : users.PreferencesFor(userId).CategoryLanguages.GetValueOrDefault(key, "");
-                    if (hasLanguage)
+                    string language;
+                    if (input.TryGetProperty("language", out _))
                     {
-                        await users.SaveCategoryLanguageAsync(userId, key, language, token).ConfigureAwait(false);
+                        language = BrowseLanguages.Normalize(Optional(input, "language", 16));
+                        // A continuation uses the language of its cursor. Only a
+                        // first page can update the account's selection.
+                        if (Cursor(input).Length == 0)
+                            await users.SaveCategoryLanguageAsync(userId, key, language, token).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        var preferences = users.PreferencesFor(userId);
+                        language = preferences.CategoryLanguages.GetValueOrDefault(key, preferences.BrowseDirectoryLanguage);
                     }
 
                     var request = JsonNode.Parse(input.GetRawText())!.AsObject();

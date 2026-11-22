@@ -1,9 +1,12 @@
+using System.Net.Http.Headers;
 using SkiaSharp;
 
 internal static class AnimatedEmoteDecodingTestCatalog
 {
     internal static IReadOnlyList<(string Name, Func<Task> Run)> All { get; } =
     [
+        ("Startup bandwidth: fresh Home artwork is reused byte for byte across launches", ReuseHomeArtworkAsync),
+        ("Startup bandwidth: Home artwork honors HTTP freshness and cache restrictions", HomeArtworkCachePolicyAsync),
         ("Animated emote decoder composes partial GIF frames and both disposal modes", () =>
             VerifyDecodedFramesAsync(CreateGifFixture())),
         ("Animated emote decoder composes partial WebP frames with transparency and background disposal", () =>
@@ -13,6 +16,101 @@ internal static class AnimatedEmoteDecodingTestCatalog
         ("Native Twitch and Kick replay overlays preserve all pixels in decoded WebP emote frames", () =>
             VerifyReplayOverlaysAsync(CreateWebPFixture()))
     ];
+
+    private static async Task ReuseHomeArtworkAsync()
+    {
+        var directory = Directory.CreateTempSubdirectory("stream-studio-artwork-");
+        var uri = new Uri("https://images.example/avatar.gif");
+        var clock = new ManualTimeProvider(DateTimeOffset.UnixEpoch);
+        var original = CreateGifFixture().Bytes;
+        var bytesTransferred = 0;
+        using var client = new HttpClient(new FakeHttpMessageHandler(request =>
+        {
+            bytesTransferred += original.Length;
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                RequestMessage = request,
+                Content = new ByteArrayContent(original)
+            };
+            response.Headers.CacheControl = new CacheControlHeaderValue
+            {
+                MaxAge = TimeSpan.FromSeconds(30),
+                NoStore = bytesTransferred > original.Length
+            };
+            response.Headers.Age = TimeSpan.FromSeconds(5);
+            return response;
+        }));
+        try
+        {
+            var cache = new HomeArtworkCache(directory.FullName, clock);
+            Assert.True(await AnimatedEmoteImage.LoadImageForTestAsync(uri.AbsoluteUri, client, cache));
+            await TestWait.UntilAsync(() => directory.EnumerateFiles().Any(file => file.Extension.Length == 0),
+                TimeSpan.FromSeconds(5), "committed Home artwork");
+            Assert.Equal(original.Length, bytesTransferred);
+
+            clock.Advance(TimeSpan.FromSeconds(24));
+            AnimatedEmoteImage.RemoveCachedImageForTest(uri.AbsoluteUri, AnimatedEmoteImage.DefaultMaxImageBytes);
+            var reopenedCache = new HomeArtworkCache(directory.FullName, clock);
+            Assert.SequenceEqual(original, (await reopenedCache.ReadAsync(uri, original.Length, CancellationToken.None))!);
+            Assert.True(await AnimatedEmoteImage.LoadImageForTestAsync(uri.AbsoluteUri, client, reopenedCache));
+            Assert.Equal(original.Length, bytesTransferred);
+
+            clock.Advance(TimeSpan.FromSeconds(1));
+            AnimatedEmoteImage.RemoveCachedImageForTest(uri.AbsoluteUri, AnimatedEmoteImage.DefaultMaxImageBytes);
+            Assert.True(await AnimatedEmoteImage.LoadImageForTestAsync(uri.AbsoluteUri, client, reopenedCache));
+            Assert.Equal(2 * original.Length, bytesTransferred);
+        }
+        finally
+        {
+            AnimatedEmoteImage.RemoveCachedImageForTest(uri.AbsoluteUri, AnimatedEmoteImage.DefaultMaxImageBytes);
+            directory.Delete(recursive: true);
+        }
+    }
+
+    private static async Task HomeArtworkCachePolicyAsync()
+    {
+        var directory = Directory.CreateTempSubdirectory("stream-studio-artwork-");
+        var clock = new ManualTimeProvider(DateTimeOffset.UnixEpoch);
+        var cache = new HomeArtworkCache(directory.FullName, clock);
+        var uri = new Uri("https://images.example/banner.webp");
+        var bytes = CreateWebPFixture().Bytes;
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, uri);
+            using var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                RequestMessage = request,
+                Content = new ByteArrayContent(bytes)
+            };
+            await cache.StoreAsync(uri, response, bytes, clock.GetUtcNow());
+            Assert.True(await cache.ReadAsync(uri, bytes.Length, CancellationToken.None) is null);
+
+            response.Headers.CacheControl = new CacheControlHeaderValue { MaxAge = TimeSpan.FromHours(1), NoStore = true };
+            await cache.StoreAsync(uri, response, bytes, clock.GetUtcNow());
+            Assert.True(await cache.ReadAsync(uri, bytes.Length, CancellationToken.None) is null);
+
+            response.Headers.CacheControl.NoStore = false;
+            response.Headers.Vary.Add("Cookie");
+            await cache.StoreAsync(uri, response, bytes, clock.GetUtcNow());
+            Assert.True(await cache.ReadAsync(uri, bytes.Length, CancellationToken.None) is null);
+
+            response.Headers.Vary.Clear();
+            response.Headers.Vary.Add("Accept-Encoding");
+            response.Headers.Date = clock.GetUtcNow().AddHours(-1);
+            await cache.StoreAsync(uri, response, bytes, clock.GetUtcNow());
+            Assert.True(await cache.ReadAsync(uri, bytes.Length, CancellationToken.None) is null);
+
+            response.Headers.Date = clock.GetUtcNow();
+            await cache.StoreAsync(uri, response, bytes, clock.GetUtcNow());
+            Assert.SequenceEqual(bytes, (await cache.ReadAsync(uri, bytes.Length, CancellationToken.None))!);
+            Assert.True(await cache.ReadAsync(uri, bytes.Length - 1, CancellationToken.None) is null);
+            Assert.True(await cache.ReadAsync(new Uri(uri, "?v=2"), bytes.Length, CancellationToken.None) is null);
+        }
+        finally
+        {
+            directory.Delete(recursive: true);
+        }
+    }
 
     private static Task VerifyDecodedFramesAsync(AnimationFixture fixture)
     {

@@ -16,6 +16,7 @@ internal sealed record LocalWebHotkey(string Key, bool Ctrl, bool Alt, bool Shif
 
 internal sealed record LocalWebPreferences
 {
+    internal const int MaximumPerStreamEntries = 512;
     private const int MinimumVolumeStep = 1;
     private const int MaximumVolumeStep = 100;
     private static readonly HashSet<string> HotkeyActions = new(
@@ -37,6 +38,7 @@ internal sealed record LocalWebPreferences
     public int? VolumeDownStep { get; init; }
     public Dictionary<string, double> Volumes { get; init; } = new(StringComparer.OrdinalIgnoreCase);
     public Dictionary<string, WebChatOverlayLayout> ChatLayouts { get; init; } = new(StringComparer.OrdinalIgnoreCase);
+    public string BrowseDirectoryLanguage { get; init; } = "";
     public Dictionary<string, string> CategoryLanguages { get; init; } = new(StringComparer.OrdinalIgnoreCase);
 
     internal LocalWebPreferences Copy() => this with
@@ -50,7 +52,7 @@ internal sealed record LocalWebPreferences
     internal static LocalWebPreferences Apply(LocalWebPreferences current, JsonElement patch)
     {
         if (patch.ValueKind != JsonValueKind.Object) throw new ArgumentException("Invalid preferences.");
-        var next = current.Copy();
+        var next = current;
         foreach (var property in patch.EnumerateObject())
         {
             switch (property.Name)
@@ -72,6 +74,10 @@ internal sealed record LocalWebPreferences
                 case "opacity": next = next with { Opacity = Integer(property.Value, 0, 100) }; break;
                 case "keepInactive": next = next with { KeepInactive = Boolean(property.Value) }; break;
                 case "pauseInactiveVod": next = next with { PauseInactiveVod = Boolean(property.Value) }; break;
+                case "browseDirectoryLanguage":
+                    if (property.Value.ValueKind != JsonValueKind.String) throw new ArgumentException("Invalid discovery language.");
+                    next = next with { BrowseDirectoryLanguage = BrowseLanguages.Normalize(property.Value.GetString()) };
+                    break;
                 case "hotkeys": next = next with { Hotkeys = ReadHotkeys(property.Value), HotkeysAreOverrides = true }; break;
                 case "skipBackwardSeconds":
                     next = next with { SkipBackwardSeconds = IntegerOrNull(property.Value, HotkeySettings.MinimumSkipSeconds, HotkeySettings.MaximumSkipSeconds) };
@@ -157,7 +163,7 @@ internal sealed record LocalWebPreferences
     internal LocalWebPreferences MigrateHotkeys()
     {
         if (HotkeysAreOverrides) return this;
-        var upgraded = Copy() with { HotkeysAreOverrides = true };
+        var upgraded = this with { Hotkeys = new(Hotkeys, StringComparer.Ordinal), HotkeysAreOverrides = true };
         // The old browser saved the entire effective map on every edit. Values
         // matching its original defaults are the only ones without evidence of an override.
         var legacyDefaults = new[] { ("back", "Escape"), ("nextTab", "]"), ("previousTab", "["), ("grid", "g"),
@@ -182,7 +188,9 @@ internal sealed record LocalWebPreferences
             preferences.VolumeUpStep is < MinimumVolumeStep or > MaximumVolumeStep ||
             preferences.VolumeDownStep is < MinimumVolumeStep or > MaximumVolumeStep ||
             preferences.Hotkeys is null || preferences.Volumes is null || preferences.ChatLayouts is null || preferences.CategoryLanguages is null ||
-            preferences.Volumes.Count > 512 || preferences.ChatLayouts.Count > 512)
+            preferences.Volumes.Count > MaximumPerStreamEntries || preferences.ChatLayouts.Count > MaximumPerStreamEntries ||
+            !BrowseLanguages.TryNormalize(preferences.BrowseDirectoryLanguage, out var directoryLanguage) ||
+            directoryLanguage != preferences.BrowseDirectoryLanguage)
             throw new InvalidDataException("Saved web preferences are invalid.");
         foreach (var (key, volume) in preferences.Volumes)
             if (!ValidStreamKey(key) || !double.IsFinite(volume) || volume is < 0 or > 1)
@@ -257,7 +265,7 @@ public sealed class LocalWebUserStore
                 throw new InvalidDataException("Saved web accounts are invalid.");
             LocalWebPreferences.Validate(user.Preferences);
         }
-        return new(path, saved.Users.Select(user => user with { Preferences = user.Preferences.MigrateHotkeys() }).ToList());
+        return new(path, saved.Users.Select(user => user with { Preferences = user.Preferences.MigrateHotkeys().Copy() }).ToList());
     }
 
     public IReadOnlyList<LocalWebUserSummary> ListUsers()
@@ -335,12 +343,9 @@ public sealed class LocalWebUserStore
     {
         if (!LocalWebPreferences.ValidStreamKey(key) || !double.IsFinite(volume) || volume is < 0 or > 1)
             throw new ArgumentException("Invalid volume.");
-        return UpdatePreferencesAsync(id, current =>
+        return UpdatePreferencesAsync(id, current => current with
         {
-            var preferences = current.Copy();
-            if (!preferences.Volumes.ContainsKey(key) && preferences.Volumes.Count >= 512) throw new ArgumentException("Volume limit reached.");
-            preferences.Volumes[key] = volume;
-            return preferences;
+            Volumes = UpdateEntry(current.Volumes, key, volume, "Volume limit reached.")
         }, token);
     }
 
@@ -348,27 +353,35 @@ public sealed class LocalWebUserStore
     {
         if (!LocalWebPreferences.ValidStreamKey(key) || !WebChatOverlayLayout.IsValid(layout))
             throw new ArgumentException("Invalid chat layout.");
-        return UpdatePreferencesAsync(id, current =>
+        return UpdatePreferencesAsync(id, current => current with
         {
-            var preferences = current.Copy();
-            if (!preferences.ChatLayouts.ContainsKey(key) && preferences.ChatLayouts.Count >= 512) throw new ArgumentException("Chat layout limit reached.");
-            preferences.ChatLayouts[key] = layout;
-            return preferences;
+            ChatLayouts = UpdateEntry(current.ChatLayouts, key, layout, "Chat layout limit reached.")
         }, token);
     }
 
     internal Task SaveCategoryLanguageAsync(string id, string key, string language, CancellationToken token)
     {
-        return UpdatePreferencesAsync(id, current =>
+        var normalized = BrowseLanguages.Normalize(language);
+        return UpdatePreferencesAsync(id, current => current with
         {
-            // Compare after earlier writes finish. A choice that matches the last
-            // committed value can still supersede a different queued choice.
-            var normalized = BrowseLanguages.Normalize(language);
-            if (current.CategoryLanguages.TryGetValue(key, out var saved) && saved == normalized) return current;
-            var preferences = current.Copy();
-            preferences.CategoryLanguages[key] = normalized;
-            return preferences;
+            CategoryLanguages = UpdateEntry(current.CategoryLanguages, key, normalized)
         }, token);
+    }
+
+    // These updates run under the write gate, so equality is checked against the latest saved value.
+    private static Dictionary<string, T> UpdateEntry<T>(Dictionary<string, T> entries, string key, T value,
+        string? limitMessage = null)
+    {
+        if (entries.TryGetValue(key, out var saved))
+        {
+            if (EqualityComparer<T>.Default.Equals(saved, value)) return entries;
+        }
+        else if (limitMessage is not null && entries.Count >= LocalWebPreferences.MaximumPerStreamEntries)
+        {
+            throw new ArgumentException(limitMessage);
+        }
+
+        return new(entries, entries.Comparer) { [key] = value };
     }
 
     private Task UpdatePreferencesAsync(string id, Func<LocalWebPreferences, LocalWebPreferences> update,

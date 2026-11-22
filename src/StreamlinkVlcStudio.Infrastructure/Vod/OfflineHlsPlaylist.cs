@@ -31,15 +31,16 @@ internal sealed record OfflineHlsPlaylist(string Content, IReadOnlyList<OfflineH
         Uri? previousUri = null;
         long? previousRangeEnd = null;
         var hasTargetDuration = false;
-        var hasMediaSequence = false;
+        long? mediaSequence = null;
+        long? discontinuitySequence = null;
+        var encounteredDiscontinuity = false;
         var hasEndList = false;
         var encrypted = false;
         var hasEncryptionIv = false;
 
-        string AddAsset(string value, long? offset = null, long? length = null, bool segment = false, bool key = false)
+        string AddAsset(string value, Uri address, long? offset = null, long? length = null, bool segment = false, bool key = false)
         {
             if (assets.Count >= MaximumAssets) throw new InvalidDataException("The VOD contains too many media resources.");
-            var address = ResolveUri(playlistUri, value);
             var name = OfflineHlsAssetName.Create(address, assets.Count, key);
             if (requireLocalAssets && !string.Equals(value, name, StringComparison.Ordinal))
                 throw new InvalidDataException("The offline VOD must reference its local media file names directly.");
@@ -63,7 +64,7 @@ internal sealed record OfflineHlsPlaylist(string Content, IReadOnlyList<OfflineH
                     previousRangeEnd = checked(offset.Value + length.Value);
                 }
                 else previousRangeEnd = null;
-                output.AppendLine(AddAsset(line, offset, length, segment: true));
+                output.AppendLine(AddAsset(line, address, offset, length, segment: true));
                 previousUri = address;
                 seconds += pendingDuration.Value;
                 if (seconds > MaximumDurationSeconds)
@@ -106,7 +107,8 @@ internal sealed record OfflineHlsPlaylist(string Content, IReadOnlyList<OfflineH
                         (key.TryGetValue("KEYFORMATVERSIONS", out var versions) && (!versions.IsQuoted || versions.Value != "1")))
                         throw new NotSupportedException("This VOD uses DRM or unsupported encryption. It cannot be downloaded for offline playback.");
                     if (!key.TryGetValue("URI", out var keyUri) || !keyUri.IsQuoted) throw new InvalidDataException("The VOD encryption key URL is missing or invalid.");
-                    var keyLine = $"#EXT-X-KEY:METHOD=AES-128,URI=\"{AddAsset(keyUri.Value, key: true)}\"";
+                    var keyPath = AddAsset(keyUri.Value, ResolveUri(playlistUri, keyUri.Value), key: true);
+                    var keyLine = $"#EXT-X-KEY:METHOD=AES-128,URI=\"{keyPath}\"";
                     if (key.TryGetValue("IV", out var iv))
                     {
                         if (iv.IsQuoted || !iv.Value.StartsWith("0x", StringComparison.OrdinalIgnoreCase) || iv.Value.Length is < 3 or > 34 ||
@@ -126,7 +128,8 @@ internal sealed record OfflineHlsPlaylist(string Content, IReadOnlyList<OfflineH
                         if (!mapRange.IsQuoted) throw new InvalidDataException("The VOD initialization byte range is invalid.");
                         (mapOffset, mapLength) = ParseRange(mapRange.Value, null);
                     }
-                    output.AppendLine($"#EXT-X-MAP:URI=\"{AddAsset(mapUri.Value, mapOffset, mapLength)}\"");
+                    var mapPath = AddAsset(mapUri.Value, ResolveUri(playlistUri, mapUri.Value), mapOffset, mapLength);
+                    output.AppendLine($"#EXT-X-MAP:URI=\"{mapPath}\"");
                     break;
                 case "#EXT-X-TARGETDURATION":
                     if (hasTargetDuration || ReadNumber(value) <= 0)
@@ -134,14 +137,18 @@ internal sealed record OfflineHlsPlaylist(string Content, IReadOnlyList<OfflineH
                     hasTargetDuration = true;
                     output.AppendLine(line);
                     break;
-                case "#EXT-X-MEDIA-SEQUENCE":
-                    if (hasMediaSequence || segments != 0) throw new InvalidDataException("The VOD media sequence is invalid.");
-                    ReadNumber(value);
-                    hasMediaSequence = true;
+                case HlsPlaylistPolicy.MediaSequenceTag:
+                    if (!HlsPlaylistPolicy.TryReadSequence(value, segments > 0, ref mediaSequence))
+                        throw new InvalidDataException("The VOD media sequence is invalid.");
+                    output.AppendLine(line);
+                    break;
+                case HlsPlaylistPolicy.DiscontinuitySequenceTag:
+                    if (!HlsPlaylistPolicy.TryReadSequence(value, segments > 0 || encounteredDiscontinuity,
+                        ref discontinuitySequence))
+                        throw new InvalidDataException("The VOD discontinuity sequence is invalid.");
                     output.AppendLine(line);
                     break;
                 case "#EXT-X-VERSION":
-                case "#EXT-X-DISCONTINUITY-SEQUENCE":
                     ReadNumber(value);
                     output.AppendLine(line);
                     break;
@@ -149,6 +156,9 @@ internal sealed record OfflineHlsPlaylist(string Content, IReadOnlyList<OfflineH
                     if (value is not ("VOD" or "EVENT")) throw new InvalidDataException("The VOD playlist type is invalid.");
                     break;
                 case "#EXT-X-DISCONTINUITY":
+                    encounteredDiscontinuity = true;
+                    output.AppendLine(line);
+                    break;
                 case "#EXT-X-INDEPENDENT-SEGMENTS":
                     output.AppendLine(line);
                     break;

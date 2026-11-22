@@ -16,16 +16,18 @@ internal static partial class LocalWebTestCatalog
     private static Task BrowserCategoryArtworkAsync() => BrowserAsync(false, categoryArtwork: true);
     private static Task BrowserFollowingLastLiveAsync() => BrowserAsync(false, lastLive: true);
     private static Task BrowserAsync(bool experience, bool overlay = false, bool desktopSignIn = false, bool volume = false, bool vodChat = false, bool publicVodChat = false,
-        bool categoryArtwork = false, bool lastLive = false, bool prefetch = false, bool liveSeek = false, bool fullArchive = false) => TestSta.RunOffscreenAsync(async () =>
+        bool categoryArtwork = false, bool lastLive = false, bool prefetch = false, bool liveSeek = false, bool fullArchive = false,
+        Func<ILocalWebWorkspace>? workspaceFactory = null, Func<CoreWebView2, Task>? browserCheck = null) => TestSta.RunOffscreenAsync(async () =>
     {
         using var certificate = Certificate();
         var workspace = new BrowserWorkspace { Experience = experience, Overlay = overlay, CategoryArtwork = categoryArtwork, LastLive = lastLive, Prefetch = prefetch, LiveSeek = liveSeek, FullArchive = fullArchive, PlayerPlatform = prefetch ? "Kick" : "Twitch" };
-        await using var server = await Server(certificate, () => workspace);
+        await using var server = await Server(certificate, workspaceFactory ?? (() => workspace));
         if (volume) await server.Users.AddAsync("otherviewer", "Other viewer password 123!");
         workspace.Address = server.Address;
         var profile = Path.Combine(Path.GetTempPath(), "StreamStudioTests", "localweb-browser-" + Guid.NewGuid().ToString("N"));
         var environment = await CoreWebView2Environment.CreateAsync(userDataFolder: profile,
-            options: new CoreWebView2EnvironmentOptions("--autoplay-policy=no-user-gesture-required --disable-background-media-suspend"));
+            options: new CoreWebView2EnvironmentOptions(browserCheck is null
+                ? "--autoplay-policy=no-user-gesture-required --disable-background-media-suspend" : "--disable-background-media-suspend"));
         // MediaSource needs an active presentation host, even though this test window stays offscreen.
         var window = new Window
         {
@@ -62,6 +64,11 @@ internal static partial class LocalWebTestCatalog
             core.Navigate(server.Address.AbsoluteUri);
             await WaitBrowser(core, "document.readyState==='complete' && !!document.querySelector('#password')");
             await core.ExecuteScriptAsync($"document.querySelector('#username').value={JsonSerializer.Serialize(TestUsername)}");
+            if (browserCheck is not null)
+            {
+                await browserCheck(core);
+                return;
+            }
             if (fullArchive)
             {
                 await CheckBrowserFullArchive(core, controller, workspace);

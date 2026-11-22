@@ -403,11 +403,10 @@ internal static partial class ApplicationTestCatalog
             Assert.Equal(Visibility.Visible, empty.Visibility);
             main.VodDownloadUrl = "https://www.twitch.tv/videos/12345";
             var input = (TextBox)view.FindName("VodDownloadUrlTextBox");
-            var source = new SkipHotkeyPresentationSource { RootVisual = window };
+            var source = new SyntheticKeyboardInput(window);
             for (var count = 0; count < 2; count++)
             {
-                input.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, source, 0, Key.Enter)
-                { RoutedEvent = Keyboard.KeyDownEvent });
+                input.RaiseEvent(source.CreateEvent(Key.Enter, Keyboard.KeyDownEvent));
             }
             Assert.Equal(1, service.Requests.Count);
             service.EnqueueGate.SetResult();

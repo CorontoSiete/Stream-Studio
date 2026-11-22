@@ -109,15 +109,26 @@ internal static partial class VodDownloadTestCatalog
 
     private static Task PlaylistTimelineAsync()
     {
-        var content = DownloadFixture.SimplePlaylist.Replace("#EXT-X-TARGETDURATION:3", "#EXT-X-TARGETDURATION:3\n#EXT-X-MEDIA-SEQUENCE:42")
+        const string discontinuitySequence = "#EXT-X-DISCONTINUITY-SEQUENCE:7";
+        var content = DownloadFixture.SimplePlaylist.Replace("#EXT-X-TARGETDURATION:3",
+                $"#EXT-X-TARGETDURATION:3\n#EXT-X-MEDIA-SEQUENCE:42\n{discontinuitySequence}")
             .Replace("segment-a.ts", "segment-a-muted.ts").Replace("#EXTINF:3,\nsegment-b.ts", "#EXT-X-DISCONTINUITY\n#EXTINF:3,\nsegment-b.ts");
-        var parsed = OfflineHlsPlaylist.Parse(content, new Uri("https://vod-secure.twitch.tv/vod/index.m3u8"));
+        var address = new Uri("https://vod-secure.twitch.tv/vod/index.m3u8");
+        var parsed = OfflineHlsPlaylist.Parse(content, address);
         Assert.Equal(2, parsed.SegmentCount);
         Assert.Equal(TimeSpan.FromSeconds(6), parsed.Duration);
         Assert.Contains("#EXT-X-MEDIA-SEQUENCE:42", parsed.Content);
+        Assert.Contains(discontinuitySequence, parsed.Content);
         Assert.Contains("#EXT-X-DISCONTINUITY", parsed.Content);
         Assert.Contains("asset-000000-muted.ts", parsed.Content);
         Assert.DoesNotContain("https://", parsed.Content);
+        Assert.Throws<InvalidDataException>(() => OfflineHlsPlaylist.Parse(
+            content.Replace(discontinuitySequence, $"{discontinuitySequence}\n{discontinuitySequence}"), address));
+        Assert.Throws<InvalidDataException>(() => OfflineHlsPlaylist.Parse(
+            content.Replace(discontinuitySequence, $"#EXT-X-DISCONTINUITY\n{discontinuitySequence}"), address));
+        Assert.Throws<InvalidDataException>(() => OfflineHlsPlaylist.Parse(
+            content.Replace(discontinuitySequence + "\n", "").Replace("segment-a-muted.ts",
+                $"segment-a-muted.ts\n{discontinuitySequence}"), address));
         return Task.CompletedTask;
     }
 
@@ -734,7 +745,7 @@ internal static partial class VodDownloadTestCatalog
     {
         internal const string SimplePlaylist = "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:3\n#EXTINF:3,\nsegment-a.ts\n#EXTINF:3,\nsegment-b.ts\n#EXT-X-ENDLIST\n";
         internal string Root { get; } = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "StreamStudioTests", "VodDownloads-" + Guid.NewGuid().ToString("N")));
-        internal string Library => Path.Combine(Root, "offline VODs 日本語");
+        internal string Library { get; }
         internal StreamTarget Target { get; }
         internal Uri PlaylistUri { get; }
         internal DownloadHttpHandler Handler { get; } = new();
@@ -746,8 +757,9 @@ internal static partial class VodDownloadTestCatalog
         internal Func<StreamTarget, CancellationToken, Task<StreamTarget>>? KickResolver { get; set; }
         internal ITwitchSubOnlyVodResolver? TwitchFallback { get; set; }
 
-        internal DownloadFixture(PlatformKind platform)
+        internal DownloadFixture(PlatformKind platform, string libraryName = "offline VODs 日本語")
         {
+            Library = Path.Combine(Root, libraryName);
             Directory.CreateDirectory(Root);
             Target = platform == PlatformKind.Twitch ? VodDownloadUrlParser.Parse("https://www.twitch.tv/videos/12345") :
                 VodDownloadUrlParser.Parse("https://kick.com/streamer/videos/01K62MXDAY68GRSY43VZX5KVAZ");

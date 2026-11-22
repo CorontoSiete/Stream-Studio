@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.Net;
+using System.Net.Http.Headers;
 using StreamlinkVlcStudio.Core.Models;
 using StreamlinkVlcStudio.Infrastructure.Hls;
 
@@ -6,6 +8,26 @@ namespace StreamlinkVlcStudio.Infrastructure.LocalWeb;
 
 internal sealed partial class LocalWebMedia
 {
+    // Keep at most one measured playlist per playback, within a separate memory budget.
+    private const int MaximumCachedArchiveCharacters = 1024 * 1024;
+    private ArchivePlaylist? measuredArchive;
+
+    private sealed record ArchivePlaylist(Uri RequestedUri, Uri Origin, string Content, EntityTagHeaderValue Validator, double Duration)
+    {
+        internal bool IsNotModified(HttpResponseMessage response) =>
+            response.StatusCode == HttpStatusCode.NotModified &&
+            response.RequestMessage?.RequestUri?.AbsoluteUri == Origin.AbsoluteUri;
+    }
+
+    private ArchivePlaylist? FindMeasuredArchive(Uri uri)
+    {
+        var measured = Volatile.Read(ref measuredArchive);
+        return measured?.RequestedUri.AbsoluteUri == uri.AbsoluteUri ? measured : null;
+    }
+
+    private static bool CanStoreArchive(HttpResponseMessage response) =>
+        response.Headers.CacheControl?.NoStore != true && !response.Headers.Vary.Contains("*");
+
     internal async Task<double> ReadArchiveDurationAsync(string quality, CancellationToken token, bool selectVariant = false)
     {
         var uri = resources[Root];
@@ -13,14 +35,32 @@ internal sealed partial class LocalWebMedia
         for (var depth = 0; depth < 4; depth++)
         {
             string content;
+            var requestedUri = uri;
+            EntityTagHeaderValue? validator = null;
             // Measure the same pinned master that the player receives. Only its
             // selected media playlist needs to be fetched again as it grows.
             if (depth == 0 && trustedPlaylist is { } rootPlaylist) content = rootPlaylist;
             else
             {
-                using var response = await FetchAsync(uri, "", token).ConfigureAwait(false);
-                content = await ReadRemotePlaylistAsync(response, token).ConfigureAwait(false);
+                var measured = FindMeasuredArchive(uri);
+                using var response = await FetchAsync(uri, "", token, measured).ConfigureAwait(false);
                 uri = response.RequestMessage!.RequestUri!;
+                var canStore = CanStoreArchive(response);
+                if (measured is not null && !canStore)
+                    Interlocked.CompareExchange(ref measuredArchive, null, measured);
+                if (measured?.IsNotModified(response) == true)
+                {
+                    if (selectedMaster is null) return measured.Duration;
+                    if (canStore) validator = measured.Validator;
+                    content = measured.Content;
+                }
+                else
+                {
+                    content = await ReadRemotePlaylistAsync(response, token).ConfigureAwait(false);
+                    if (canStore && content.Length <= MaximumCachedArchiveCharacters &&
+                        response.Headers.ETag is { Tag: not "*" } entityTag)
+                        validator = entityTag;
+                }
             }
             RewritePlaylist(content, uri); // Validate every resource through the normal proxy policy.
             var lines = HlsPlaylistPolicy.SplitLines(content);
@@ -39,6 +79,7 @@ internal sealed partial class LocalWebMedia
                         trustedPlaylist = master.Playlist;
                     }
                 }
+                Volatile.Write(ref measuredArchive, validator is null ? null : new(requestedUri, uri, content, validator, duration));
                 return duration;
             }
             var variants = new List<(Uri Uri, int Height, double FrameRate, long Bandwidth, bool AudioOnly, int Line)>();

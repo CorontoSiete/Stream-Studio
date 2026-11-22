@@ -499,7 +499,9 @@ public sealed partial class FollowedStreamsService : IFollowedStreamsService
         string accessToken,
         CancellationToken cancellationToken)
     {
-        var userIds = broadcasterUserIds.Values
+        var userIds = streams.Where(stream => stream.ProfileImageUrl.Length == 0).Select(stream => stream.Channel)
+            .Concat(offlineChannels.Where(channel => channel.ProfileImageUrl.Length == 0).Select(channel => channel.Channel))
+            .Select(channel => broadcasterUserIds.GetValueOrDefault(channel, ""))
             .Where(userId => !string.IsNullOrWhiteSpace(userId))
             .Distinct(StringComparer.Ordinal)
             .ToArray();

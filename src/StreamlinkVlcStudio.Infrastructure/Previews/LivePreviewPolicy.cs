@@ -1,12 +1,13 @@
 using StreamlinkVlcStudio.Core.Models;
 using StreamlinkVlcStudio.Core.Security;
 using StreamlinkVlcStudio.Infrastructure.Streamlink;
-using StreamlinkVlcStudio.Infrastructure.Vlc;
 
 namespace StreamlinkVlcStudio.Infrastructure.Previews;
 
 internal static class LivePreviewPolicy
 {
+    internal const string QualityPreference = "360p,360p30,360p60,480p,480p30,480p60,best";
+
     internal static bool CanResolve(StreamTransportRequest request) =>
         CanResolve(request, StreamlinkConfigurationPolicy.AppDataDirectory) &&
         StreamlinkConfigurationPolicy.HasDefaultHttpEnvironment();
@@ -14,7 +15,7 @@ internal static class LivePreviewPolicy
     internal static bool CanResolve(StreamTransportRequest request, string appData)
     {
         if (request.Target.Kind != StreamTargetKind.Live || request.CustomArguments.Count != 0 ||
-            request.Quality != LibVlcLivePreview.QualityPreference || !File.Exists(request.StreamlinkPath) ||
+            request.Quality != QualityPreference || !File.Exists(request.StreamlinkPath) ||
             string.IsNullOrEmpty(request.Target.Channel) ||
             !request.Target.Channel.All(character => char.IsAsciiLetterOrDigit(character) || character is '_' or '-') ||
             !Uri.TryCreate(request.Target.Url, UriKind.Absolute, out var uri) ||

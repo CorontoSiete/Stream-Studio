@@ -132,6 +132,53 @@ internal static partial class CodeCleanupTestCatalog
         Assert.Equal(false, firstBody.CanRead);
     }
 
+    private static async Task TwitchRateLimitAfterRetriesAsync()
+    {
+        var requests = 0;
+        using var http = new HttpClient(new FakeHttpMessageHandler(_ =>
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.TooManyRequests);
+            response.Headers.RetryAfter = new RetryConditionHeaderValue(++requests < 3
+                ? TimeSpan.Zero : TimeSpan.FromSeconds(30));
+            return response;
+        }));
+        var coordinator = new TwitchRateLimitCoordinator();
+        var logger = new MemoryLogger();
+        const string url = "https://api.twitch.tv/helix/games/top";
+        using var first = await coordinator.SendAsync(http, url, "token", "client", logger, default);
+        Assert.Equal(HttpStatusCode.TooManyRequests, first.StatusCode);
+        Assert.Equal(3, requests);
+
+        using var cancellation = new CancellationTokenSource();
+        var pending = coordinator.SendAsync(http, url, "token", "client", logger, cancellation.Token);
+        cancellation.Cancel();
+        await Assert.ThrowsAsync<OperationCanceledException>(() => pending);
+        Assert.Equal(3, requests);
+    }
+
+    private static async Task InvalidTwitchRateLimitHeaderAsync()
+    {
+        var requests = 0;
+        using var http = new HttpClient(new FakeHttpMessageHandler(_ =>
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.OK);
+            if (++requests == 1)
+            {
+                response.Headers.Add("Ratelimit-Remaining", "-1");
+                var reset = DateTimeOffset.UtcNow.AddMinutes(1).ToUnixTimeSeconds();
+                response.Headers.Add("Ratelimit-Reset", reset.ToString(CultureInfo.InvariantCulture));
+            }
+            return response;
+        }));
+        var coordinator = new TwitchRateLimitCoordinator();
+        var logger = new MemoryLogger();
+        const string url = "https://api.twitch.tv/helix/games/top";
+        using var first = await coordinator.SendAsync(http, url, "token", "client", logger, default);
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var second = await coordinator.SendAsync(http, url, "token", "client", logger, cancellation.Token);
+        Assert.Equal(2, requests);
+    }
+
     private static async Task KickWebsiteFallbackDiagnosticsAsync(string failure)
     {
         using var http = new HttpClient(new FakeHttpMessageHandler(_ => failure switch

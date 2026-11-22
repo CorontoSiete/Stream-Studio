@@ -7,6 +7,7 @@ using StreamlinkVlcStudio.Infrastructure.Http;
 using StreamlinkVlcStudio.Infrastructure.Io;
 using StreamlinkVlcStudio.Infrastructure.Limits;
 using StreamlinkVlcStudio.Infrastructure.Replay;
+using static StreamlinkVlcStudio.Infrastructure.Hls.HlsPlaylistPolicy;
 
 namespace StreamlinkVlcStudio.Infrastructure.Vlc;
 
@@ -19,7 +20,7 @@ internal static class HlsReplayTimeline
 {
     // Below half of the 33-bit / 90 kHz timestamp period (13h 15m 21.859s).
     internal static readonly TimeSpan RebaseThreshold = TimeSpan.FromHours(12);
-    private static readonly HttpClient Client = HttpClientFactory.Create(TimeSpan.FromSeconds(15), allowAutoRedirect: false);
+    private static readonly HttpClient Client = HttpClientFactory.CreateForText(TimeSpan.FromSeconds(15), allowAutoRedirect: false);
     private static readonly Encoding StrictUtf8 = new UTF8Encoding(false, true);
 
     internal static bool IsPlaylist(Uri uri) => uri.AbsolutePath.EndsWith(".m3u8", StringComparison.OrdinalIgnoreCase);
@@ -103,15 +104,25 @@ internal static class HlsReplayTimeline
         var segments = new List<(int End, TimeSpan Time)>();
         var elapsed = TimeSpan.Zero;
         var waitingForSegment = false;
+        var encounteredDiscontinuity = false;
         var duration = TimeSpan.Zero;
-        long sequence = 0, discontinuitySequence = 0;
+        long? sequence = null, discontinuitySequence = null;
         for (var i = 0; i < lines.Length; i++)
         {
             var line = lines[i];
-            if (line.StartsWith("#EXT-X-MEDIA-SEQUENCE:", StringComparison.Ordinal))
-                sequence = long.Parse(line[22..], CultureInfo.InvariantCulture);
-            else if (line.StartsWith("#EXT-X-DISCONTINUITY-SEQUENCE:", StringComparison.Ordinal))
-                discontinuitySequence = long.Parse(line[30..], CultureInfo.InvariantCulture);
+            if (TryGetTagValue(line, MediaSequenceTag, out var mediaSequenceValue))
+            {
+                if (!TryReadSequence(mediaSequenceValue, segments.Count > 0, ref sequence))
+                    throw new InvalidDataException("Replay playlist has an invalid media sequence number.");
+            }
+            else if (TryGetTagValue(line, DiscontinuitySequenceTag, out var discontinuitySequenceValue))
+            {
+                if (!TryReadSequence(discontinuitySequenceValue, segments.Count > 0 || encounteredDiscontinuity,
+                    ref discontinuitySequence))
+                    throw new InvalidDataException("Replay playlist has an invalid discontinuity sequence number.");
+            }
+            else if (line == "#EXT-X-DISCONTINUITY")
+                encounteredDiscontinuity = true;
             else if (line.StartsWith("#EXTINF:", StringComparison.Ordinal))
             {
                 if (waitingForSegment) throw new InvalidDataException("Replay playlist has a missing media segment.");
@@ -140,17 +151,25 @@ internal static class HlsReplayTimeline
         if (selected == 0) return null;
         var first = segments[selected];
         var boundary = segments[selected - 1].End + 1;
-        discontinuitySequence = checked(discontinuitySequence + lines.Take(boundary).Count(line => line == "#EXT-X-DISCONTINUITY"));
+        var discontinuities = lines.Take(boundary).Count(line => line == "#EXT-X-DISCONTINUITY");
         var result = new StringBuilder("#EXTM3U\n");
         foreach (var line in lines.Where(IsPlaybackHeader)) result.AppendLine(line);
         result.AppendLine("#EXT-X-PLAYLIST-TYPE:VOD");
-        result.AppendLine("#EXT-X-MEDIA-SEQUENCE:" + checked(sequence + selected).ToString(CultureInfo.InvariantCulture));
-        result.AppendLine("#EXT-X-DISCONTINUITY-SEQUENCE:" + discontinuitySequence.ToString(CultureInfo.InvariantCulture));
+        AppendSequence(result, MediaSequenceTag, sequence, selected);
+        AppendSequence(result, DiscontinuitySequenceTag, discontinuitySequence, discontinuities);
         foreach (var line in lines.Skip(boundary))
             if (!IsPlaybackHeader(line) && line != "#EXT-X-ENDLIST" &&
                 !line.StartsWith("#EXT-X-PLAYLIST-TYPE:", StringComparison.Ordinal)) result.AppendLine(line);
         result.AppendLine("#EXT-X-ENDLIST");
         return (result.ToString(), first.Time);
+    }
+
+    private static void AppendSequence(StringBuilder playlist, string tag, long? sequence, int offset)
+    {
+        var start = sequence.GetValueOrDefault();
+        if (start > long.MaxValue - offset)
+            throw new InvalidDataException("Replay playlist sequence exceeds the supported range.");
+        playlist.Append(tag).Append(':').AppendLine((start + offset).ToString(CultureInfo.InvariantCulture));
     }
 
     private static bool IsPlaybackHeader(string line) =>

@@ -230,11 +230,17 @@ internal static partial class ApplicationTestCatalog
         Assert.Equal(new Uri(LivePreviewUri, "0.ts"), playlist.GetSegment(125.5)!.Uri);
         Assert.Equal(new Uri(LivePreviewUri, "1.ts"), playlist.GetSegment(130)!.Uri);
 
-        var dated = sliding.Replace("#EXTINF:4.5,", "#EXT-X-PROGRAM-DATE-TIME:2026-09-24T12:05:00Z\n#EXTINF:4.5,");
-        playlist = LiveSeekPlaylist.Parse(dated, LivePreviewUri, PlatformKind.Twitch,
-            DateTimeOffset.Parse("2026-09-24T12:00:00Z"))!;
-        Assert.Equal(300d, playlist.GetSegment(300)!.Start);
-        Assert.True(playlist.GetSegment(0) is null);
+        const string sequence = "#EXT-X-MEDIA-SEQUENCE:500";
+        const string programDateTime = "#EXT-X-PROGRAM-DATE-TIME:2026-09-24T12:05:00Z";
+        var broadcastStart = new DateTimeOffset(2026, 9, 24, 12, 0, 0, TimeSpan.Zero);
+        foreach (var tags in new[] { $"{sequence}\n{programDateTime}", $"{programDateTime}\n{sequence}" })
+        {
+            var dated = sliding.Replace(sequence, tags);
+            var datedPlaylist = LiveSeekPlaylist.Parse(dated, LivePreviewUri, PlatformKind.Twitch, broadcastStart);
+            Assert.NotNull(datedPlaylist);
+            Assert.Equal(300d, datedPlaylist!.GetSegment(300)!.Start);
+            Assert.True(datedPlaylist.GetSegment(0) is null);
+        }
 
         foreach (var invalid in new[]
         {

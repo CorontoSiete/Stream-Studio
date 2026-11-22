@@ -24,14 +24,25 @@ internal static class LivePreviewPlaylist
 
     internal static string Rewrite(string content, Uri origin, PlatformKind platform, out Uri? initializationUri)
     {
+        var output = new StringBuilder(content.Length);
+        Validate(content, origin, platform, output, out initializationUri);
+        return output.ToString();
+    }
+
+    internal static void Validate(string content, Uri origin, PlatformKind platform) =>
+        Validate(content, origin, platform, output: null, out _);
+
+    private static void Validate(string content, Uri origin, PlatformKind platform, StringBuilder? output,
+        out Uri? initializationUri)
+    {
         initializationUri = null;
         var lines = HlsPlaylistPolicy.SplitLines(content);
         if (lines.Length == 0 || lines[0] != "#EXTM3U" || HlsPlaylistPolicy.HasSkippedSegments(lines))
             throw Unsupported();
-        var output = new StringBuilder(content.Length);
         var pendingSegment = false;
         var segments = 0;
         var targetDuration = false;
+        long? sequence = null;
         foreach (var line in lines)
         {
             if (line.Any(character => char.IsControl(character) && character != '\t')) throw Unsupported();
@@ -56,7 +67,7 @@ internal static class LivePreviewPlaylist
                     initializationUri is null && segments != 0 || initializationUri is not null && initializationUri != map)
                     throw Unsupported();
                 initializationUri = map;
-                output.Append("#EXT-X-MAP:URI=\"").Append(map.AbsoluteUri).AppendLine("\"");
+                output?.Append("#EXT-X-MAP:URI=\"").Append(map.AbsoluteUri).AppendLine("\"");
                 continue;
             }
             if (line.Contains("URI=", StringComparison.Ordinal) ||
@@ -74,7 +85,11 @@ internal static class LivePreviewPlaylist
                     duration is <= 0 or > 3600 || targetDuration) throw Unsupported();
                 targetDuration = true;
             }
-            if (line.StartsWith("#EXTINF:", StringComparison.Ordinal))
+            else if (HlsPlaylistPolicy.TryGetTagValue(line, HlsPlaylistPolicy.MediaSequenceTag, out var sequenceValue))
+            {
+                if (!HlsPlaylistPolicy.TryReadSequence(sequenceValue, segments > 0, ref sequence)) throw Unsupported();
+            }
+            else if (line.StartsWith("#EXTINF:", StringComparison.Ordinal))
             {
                 if (pendingSegment || !HlsPlaylistPolicy.TryReadSegmentDuration(line.AsSpan(8), 3600, out _)) throw Unsupported();
                 pendingSegment = true;
@@ -90,12 +105,11 @@ internal static class LivePreviewPlaylist
                 if (!transportStream && !fragmentedMp4) throw Unsupported();
                 pendingSegment = false;
                 segments++;
-                output.AppendLine(segment.AbsoluteUri);
+                output?.AppendLine(segment.AbsoluteUri);
             }
-            else output.AppendLine(line);
+            else output?.AppendLine(line);
         }
         if (!targetDuration || pendingSegment || segments == 0) throw Unsupported();
-        return output.ToString();
     }
 
     private static InvalidDataException Unsupported() => new("The live playlist requires Streamlink transport.");

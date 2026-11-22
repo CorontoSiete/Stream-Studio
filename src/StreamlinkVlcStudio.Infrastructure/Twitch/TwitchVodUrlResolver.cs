@@ -14,7 +14,7 @@ namespace StreamlinkVlcStudio.Infrastructure.Twitch;
 /// </summary>
 internal sealed class TwitchVodUrlResolver
 {
-    private static readonly HttpClient SharedClient = HttpClientFactory.Create(
+    private static readonly HttpClient SharedClient = HttpClientFactory.CreateForText(
         TimeSpan.FromSeconds(8), includeUserAgent: true, allowAutoRedirect: false);
     private readonly HttpClient httpClient;
     private readonly ReplayUrlSecurityValidator validator;
