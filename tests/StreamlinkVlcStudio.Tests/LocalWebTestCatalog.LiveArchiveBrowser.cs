@@ -55,8 +55,12 @@ internal static partial class LocalWebTestCatalog
             await CaptureBrowser(core, "full-archive-" + platform.ToLowerInvariant());
             controller.Bounds = new System.Drawing.Rectangle(0, 0, 1440, 1000);
             await WaitBrowser(core, "innerWidth===1440");
-            await ClickBrowser(core, "[data-action=live]");
-            await WaitBrowser(core, "(()=>{const video=document.querySelector('video');return video.videoWidth>0 && hlsByVideo.get(video)?.config.startPosition===-1})()");
+            // Activate the Live control with the keyboard so viewport relayout cannot move it between pointer events.
+            await core.ExecuteScriptAsync("document.querySelector('#players [data-action=live]').focus()");
+            await WaitBrowser(core, "document.activeElement?.matches('#players [data-action=live]:enabled') === true");
+            await core.CallDevToolsProtocolMethodAsync("Input.dispatchKeyEvent", "{\"type\":\"keyDown\",\"key\":\"Enter\",\"code\":\"Enter\",\"windowsVirtualKeyCode\":13}");
+            await core.CallDevToolsProtocolMethodAsync("Input.dispatchKeyEvent", "{\"type\":\"keyUp\",\"key\":\"Enter\",\"code\":\"Enter\",\"windowsVirtualKeyCode\":13}");
+            await WaitBrowser(core, "(()=>{const video=document.querySelector('#players video');return video.videoWidth>0 && hlsByVideo.get(video)?.config.startPosition===-1})()");
             await ClickBrowser(core, "[data-action=play]");
             await WaitBrowser(core, "!document.querySelector('video').paused && document.querySelector('video').getVideoPlaybackQuality().totalVideoFrames>10");
             Assert.Equal("[]", await core.ExecuteScriptAsync("window.seekErrors"));
